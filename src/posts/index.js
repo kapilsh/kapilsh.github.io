@@ -12,7 +12,7 @@ import dogDetectionImage from "../../static/dog-detection-cover.jpg";
 import dogBreedClassifyImage from "../../static/dog-breed-classify.jpg";
 import vggDogBreedImage from "../../static/vgg-dog-breed.jpg";
 import convAutoencoderImage from "../../static/conv-autoencoder.jpg"
-import lstmImage from "../../static/LSTM.png"
+import lstmImage from "../../static/lstm.png"
 
 
 import MyPersonalSetup from "../components/blog/contents/MyPersonalSetup";
