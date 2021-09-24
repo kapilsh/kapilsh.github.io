@@ -3,17 +3,12 @@ import {Collapse} from 'antd';
 import {Typography} from "antd";
 import {Card} from 'antd';
 import {PythonSnippet} from "../snippets/PythonSnippet";
-import {Comment, Tooltip, Avatar} from 'antd';
-import {Code, dracula} from "react-code-blocks";
-import {BashSnippet} from "../snippets/BashSnippet";
-import Terminal from 'terminal-in-react';
+import {Comment, Avatar} from 'antd';
 import {HTMLSnippet} from "../snippets/HTMLSnippet";
-import lstmImage from "../../../../static/lstm.png";
+import lstmImage from "../../../../static/LSTM_WALL.png";
 import lstmLossResultsImage from "../../../../static/animal_farm_lstm_loss_values.png";
 import georgeOrwellImage from "../../../../static/george_orwell.jpg";
-
 import {EditFilled} from "@ant-design/icons";
-import Image5 from "../../../../static/dog-breed-classification-4.png";
 import mlProjectsSvg from "../../../../static/ml-projects.svg";
 
 
