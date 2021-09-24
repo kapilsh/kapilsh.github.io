@@ -12,8 +12,8 @@ import dogDetectionImage from "../../static/dog-detection-cover.jpg";
 import dogBreedClassifyImage from "../../static/dog-breed-classify.jpg";
 import vggDogBreedImage from "../../static/vgg-dog-breed.jpg";
 import convAutoencoderImage from "../../static/conv-autoencoder.jpg"
-import lstmImage from "../../static/lstm.png"
-
+import lstmImage from "../../static/LSTM_WALL.png"
+import systemDesignImage from "../../static/sysdesign.jpg"
 
 import MyPersonalSetup from "../components/blog/contents/MyPersonalSetup";
 import RegularizationInLinearModels from "../components/blog/contents/RegularizationInLinearModels";
@@ -29,9 +29,19 @@ import DogBreedClassification from "../components/blog/contents/DogBreedClassifi
 import VGGDogBreedClassification from "../components/blog/contents/VGGDogBreedClassification";
 import ConvolutionalAutoencoders from "../components/blog/contents/ConvolutionalAutoencoders";
 import LSTMWritesAnimalFarm from "../components/blog/contents/LSTMWritesAnimalFarm";
+import SystemDesignApproach from "../components/blog/contents/SystemDesignApproach";
 
 
 const posts = [
+    {
+        title: "System Design Interview Approach",
+        tags: ["General", "Interviews"],
+        description: "Cracking the System Design Interview",
+        image: systemDesignImage,
+        date: "Sep 23, 2021",
+        content: "In this post, I go through a systematic approach to crack system design interview",
+        component: <SystemDesignApproach/>,
+    },
     {
         title: "LSTM Writes Animal Farm",
         tags: ["Python", "Machine Learning", "Deep Learning", "RNN"],
@@ -55,7 +65,7 @@ const posts = [
         tags: ["Python", "Machine Learning", "Deep Learning", "CNN"],
         description: "Use transfer learning on VGG-16 to detect dog breeds",
         image: vggDogBreedImage,
-        date: "April 04, 2019",
+        date: "Apr 04, 2019",
         content: "This is part 2 of the dog breed classification project. In this post, I use transfer learning to get much better accuracy on dog breed classification",
         component: <VGGDogBreedClassification/>,
     },
@@ -64,7 +74,7 @@ const posts = [
         tags: ["Python", "Machine Learning", "Deep Learning", "CNN"],
         description: "Train a Convolutional Neural Network to Detect Dog Breeds",
         image: dogBreedClassifyImage,
-        date: "March 22, 2019",
+        date: "Mar 22, 2019",
         content: "In this post, I train a CNN to classify dog breeds",
         component: <DogBreedClassification/>,
     },
@@ -73,7 +83,7 @@ const posts = [
         tags: ["Python", "Machine Learning", "Deep Learning", "CNN"],
         description: "Dog Detection using pre-trained VGG-16",
         image: dogDetectionImage,
-        date: "February 19, 2019",
+        date: "Feb 19, 2019",
         content: "As a next step from previous post, I used a pre-trained VGG-16 model to detect dogs in images",
         component: <PreTrainedDogDetection/>,
     },
@@ -82,7 +92,7 @@ const posts = [
         tags: ["Python", "Machine Learning"],
         description: "Face Detection using OpenCV in Python",
         image: faceDetectionImage,
-        date: "February 16, 2019",
+        date: "Feb 16, 2019",
         content: "Playing around with opencv and face detection on human and dog images",
         component: <FaceDetection/>,
     },
@@ -91,7 +101,7 @@ const posts = [
         tags: ["Linux", "General"],
         description: "Setup of my Linux Development Environment",
         image: setupImage,
-        date: "January 12, 2019",
+        date: "Jan 12, 2019",
         content: `This is more of a personal to-do list to setup a new linux development
     environment. Hope, this helps others to setup their own.`,
         component: <MyPersonalSetup/>,
@@ -101,7 +111,7 @@ const posts = [
         tags: ["Python", "Machine Learning", "Math"],
         description: "Ridge and Lasso Regression",
         image: ridgeLassoImage,
-        date: "September 14, 2018",
+        date: "Sep 14, 2018",
         content: `Least squares estimates are often not very satisfactory due to their
     poor out-of-sample performance, especially when the model is overly
     complex with a lot of features. Regularization is a method to shrink or
@@ -116,7 +126,7 @@ const posts = [
         tags: ["Python", "Machine Learning", "Math"],
         description: "Moving from Locally Weighted Constants to Lines",
         image: localRegressionSmootherImage,
-        date: "August 31, 2018",
+        date: "Aug 31, 2018",
         content:
             "I previously wrote a post about Kernel Smoothing and how it can be used to fit a non-linear function non-parametrically. In this post, I will extend on that idea and try to mitigate the disadvantages of kernel smoothing using Local Linear Regression.",
         component: <LocalLinearRegression/>,
@@ -126,7 +136,7 @@ const posts = [
         tags: ["Python", "Machine Learning", "Math"],
         description: "Gaussian Kernel Smoothing and Optimal Bandwidth Selection",
         image: kernelSmootherImage,
-        date: "August 26, 2018",
+        date: "Aug 26, 2018",
         content:
             "Kernel Method is one of the most popular non-parametric methods to estimate probability density and regression functions. As the word Non-Parametric implies, it uses the structural information in the existing data to estimate response variable for out-of-sample data.",
         component: <KernelSmoothing/>,
@@ -146,7 +156,7 @@ const posts = [
         tags: ["C++", "Eigen", "SpdLog", "Conan"],
         description: "Matrix Inversion using Eigen C++ Library",
         image: matrixImage,
-        date: "January 28, 2018",
+        date: "Jan 28, 2018",
         content:
             "Eigen is super fast linear algebra library for C++. It provides almost all matrix / vector related operations and some extra pandas / numpy style functionality. Recently, one of my colleagues was looking for a linear algebra for C++ and I suggested using Eigen. During our conversation, we were discussing how fast are matrix inverse operation in Eigen, however the Eigen docs did not provide a satisfactory benchmarks for inversion. So, I decided to do a little test on my own.",
         component: <EigenBenchmarks/>,
@@ -156,7 +166,7 @@ const posts = [
         tags: ["Python", "Machine Learning", "Math"],
         description: "Solving Regression using Gram-Schmidt Procedure",
         image: linRegImage,
-        date: "January 07, 2018",
+        date: "Jan 07, 2018",
         content:
             "An interesting way to understand Linear Regression is Gram-Schmidt Method of successive projections to calculate the coefficients of regression. Gram-Schmidt procedure transforms the variables into a new set of orthogonal or uncorrelated variables. On applying the procedure, we should get exactly the same regression coefficients as with projection of predicted variable on the feature space.",
         component: <GramSchmidtProcedure/>,
@@ -166,7 +176,7 @@ const posts = [
         tags: ["Python", "Machine Learning"],
         description: "Geometric Interpretation of Linear Regression",
         image: regressionImage,
-        date: "March 05, 2017",
+        date: "Mar 05, 2017",
         content: "A picture is worth a thousand words. ",
         component: <GeometryOfRegression/>,
     },
