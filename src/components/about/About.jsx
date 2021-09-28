@@ -20,18 +20,13 @@ class About extends React.Component {
               description={
                 <Typography>
                   <Paragraph>
-                    Hi, I’m Kapil Sharma. I am a Chicago-based Machine Learning Engineer working in the High Frequency
-                    Trading industry. Before that, I studied graduate-level
-                    Mathematics and Quantitative Finance at Columbia University
-                    in New York City. My professional interests include High
-                    Frequency Trading, Quantitative Finance, Mathematics,
-                    Algorithms, Machine Learning, and Programming.
-                  </Paragraph>
-                  <Paragraph>
-                    When I am not coding and white-boarding equations, I love to
+                    Hi, I’m Kapil Sharma. I work at the intersection of Machine Learning and Engineering and apply my skills in Option Market Making and High Frequency
+                    Trading. When I am not coding and white-boarding equations, I love to
                     play music and watch football (aka soccer). I am a big
                     Chelsea F.C. fan. #KTBFFH I love to connect with like-minded
                     people. So, give me a shout!
+                  </Paragraph>
+                  <Paragraph>
                   </Paragraph>
                 </Typography>
               }

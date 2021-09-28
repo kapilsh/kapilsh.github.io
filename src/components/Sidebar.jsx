@@ -49,7 +49,7 @@ class Sidebar extends React.Component {
           </Menu.Item>
           <Menu.Item>
             <BoxPlotOutlined />
-            <span>{"Options"}</span>
+            <span>{"Options Playground"}</span>
             <Link to={"/options"} />
           </Menu.Item>
           <Divider />

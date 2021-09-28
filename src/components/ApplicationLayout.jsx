@@ -10,7 +10,7 @@ import {Link} from "react-router-dom";
 const {Sider} = Layout;
 
 const PostTag = ({text}) => (
-    <Tag color={"#1890ff"}>
+    <Tag style={{"marginTop": 5, "marginBottom": 5}} color={"#1890ff"}>
         <Space/>
         <span>#{text.split(" ").join("").toLowerCase()}</span>
         <Space/>

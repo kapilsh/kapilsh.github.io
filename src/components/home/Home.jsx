@@ -8,7 +8,7 @@ import { Link } from "react-router-dom";
 const { Title, Paragraph } = Typography;
 
 const PostTag = ({ text }) => (
-  <Tag color={"#1890ff"}>
+  <Tag style={{"marginTop": 5, "marginBottom": 5}} color={"#1890ff"}>
     <Space />
     <TagOutlined />
     <span>{text}</span>
