@@ -33,15 +33,16 @@ import SystemDesignApproach from "../components/blog/contents/SystemDesignApproa
 
 
 const posts = [
-    {
-        title: "System Design Interview Approach",
-        tags: ["General", "Interviews"],
-        description: "Cracking the System Design Interview",
-        image: systemDesignImage,
-        date: "Sep 23, 2021",
-        content: "In this post, I go through a systematic approach to crack system design interview",
-        component: <SystemDesignApproach/>,
-    },
+    // {
+    //     title: "System Design Interview Approach",
+    //     tags: ["General", "Interviews"],
+    //     description: "Cracking the System Design Interview",
+    //     image: systemDesignImage,
+    //     date: "Sep 23, 2021",
+    //     content: "In this post, I go through a systematic approach to crack system design interview",
+    //     component: <SystemDesignApproach/>,
+    //     hide: true,
+    // },
     {
         title: "LSTM Writes Animal Farm",
         tags: ["Python", "Machine Learning", "Deep Learning", "RNN"],
