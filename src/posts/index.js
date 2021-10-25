@@ -13,7 +13,6 @@ import dogBreedClassifyImage from "../../static/dog-breed-classify.jpg";
 import vggDogBreedImage from "../../static/vgg-dog-breed.jpg";
 import convAutoencoderImage from "../../static/conv-autoencoder.jpg"
 import lstmImage from "../../static/LSTM_WALL.png"
-import systemDesignImage from "../../static/sysdesign.jpg"
 
 import MyPersonalSetup from "../components/blog/contents/MyPersonalSetup";
 import RegularizationInLinearModels from "../components/blog/contents/RegularizationInLinearModels";
