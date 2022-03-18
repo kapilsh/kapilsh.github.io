@@ -10,7 +10,7 @@
     "predeploy": "npm run build",
     "deploy": "gh-pages -d dist"
   },
-  "homepage": "http://kapilsh.github.io/personal-website",
+  "homepage": "http://kapilsh.github.io",
   "author": "Kapil Sharma",
   "license": "MIT",
   "devDependencies": {
