@@ -53,7 +53,7 @@
     "mime": ">=1.4.1",
     "mobx": "^5.15.4",
     "mobx-react": "^6.2.2",
-    "moment": "^2.27.0",
+    "moment": "^2.29.2",
     "node-sass": "^4.14.1",
     "normal-distribution": "0.0.9",
     "react": "^16.13.1",
