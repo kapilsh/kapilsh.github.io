@@ -45,7 +45,7 @@
     "@ant-design/icons": "^4.2.1",
     "antd": "^4.3.5",
     "hyvor-talk-react": "^1.0.1",
-    "axios": "^0.21.1",
+    "axios": "^0.21.2",
     "mathjs": "^7.1.0",
     "mime": ">=1.4.1",
     "mobx": "^5.15.4",
