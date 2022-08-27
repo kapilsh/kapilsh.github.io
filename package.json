@@ -30,7 +30,7 @@
     "mini-css-extract-plugin": "^0.9.0",
     "postcss-loader": "^3.0.0",
     "resolve-url-loader": "^3.1.1",
-    "sass-loader": "^8.0.2",
+    "sass-loader": "^10.3.1",
     "style-loader": "^1.2.1",
     "svg-url-loader": "^7.1.1",
     "uglify-es-webpack-plugin": "^0.10.0",
@@ -43,18 +43,14 @@
   "keywords": [],
   "dependencies": {
     "@ant-design/icons": "^4.2.1",
-    "@bokeh/bokehjs": "^2.1.1",
-    "@nteract/display-area": "^5.0.4-alpha.0",
-    "@nteract/presentational-components": "^3.4.9",
     "antd": "^4.3.5",
-    "axios": "^0.21.1",
     "hyvor-talk-react": "^1.0.1",
+    "axios": "^0.21.1",
     "mathjs": "^7.1.0",
     "mime": ">=1.4.1",
     "mobx": "^5.15.4",
     "mobx-react": "^6.2.2",
-    "moment": "^2.27.0",
-    "node-sass": "^4.14.1",
+    "node-sass": "^7.0.1",
     "normal-distribution": "0.0.9",
     "react": "^16.13.1",
     "react-code-blocks": "0.0.7",
@@ -65,7 +61,6 @@
     "react-player": "^2.5.0",
     "react-router": "^5.2.0",
     "react-router-dom": "^5.2.0",
-    "recharts": "^2.0.9",
-    "terminal-in-react": "^4.3.1"
+    "recharts": "^2.0.9"
   }
 }
