@@ -13,6 +13,7 @@ import dogBreedClassifyImage from "../../static/dog-breed-classify.jpg";
 import vggDogBreedImage from "../../static/vgg-dog-breed.jpg";
 import convAutoencoderImage from "../../static/conv-autoencoder.jpg"
 import lstmImage from "../../static/LSTM_WALL.png"
+import microservicesImage from "../../static/microservices.jpg"
 
 import MyPersonalSetup from "../components/blog/contents/MyPersonalSetup";
 import RegularizationInLinearModels from "../components/blog/contents/RegularizationInLinearModels";
@@ -32,6 +33,15 @@ import SystemDesignApproach from "../components/blog/contents/SystemDesignApproa
 
 
 const posts = [
+    {
+        title: "System Design Interview Process",
+        tags: ["Interview", "System Desing"],
+        description: "How to approach system design interview",
+        image: microservicesImage,
+        date: "Sep 17, 2021",
+        content: "How to approach system design interview",
+        component: <SystemDesignApproach/>,
+    },
     {
         title: "LSTM Writes Animal Farm",
         tags: ["Python", "Machine Learning", "Deep Learning", "RNN"],
