@@ -14,6 +14,7 @@ import vggDogBreedImage from "../../static/vgg-dog-breed.jpg";
 import convAutoencoderImage from "../../static/conv-autoencoder.jpg"
 import lstmImage from "../../static/LSTM_WALL.png"
 import microservicesImage from "../../static/microservices.jpg"
+import h100Image from "../../static/nvidia_h100.png"
 
 import MyPersonalSetup from "../components/blog/contents/MyPersonalSetup";
 import RegularizationInLinearModels from "../components/blog/contents/RegularizationInLinearModels";
@@ -30,9 +31,19 @@ import VGGDogBreedClassification from "../components/blog/contents/VGGDogBreedCl
 import ConvolutionalAutoencoders from "../components/blog/contents/ConvolutionalAutoencoders";
 import LSTMWritesAnimalFarm from "../components/blog/contents/LSTMWritesAnimalFarm";
 import SystemDesignApproach from "../components/blog/contents/SystemDesignApproach";
+import LearningCuda from "../components/blog/contents/LearningCuda";
 
 
 const posts = [
+    {
+        title: "Learning Cuda Worklog (1 of N)",
+        tags: ["CUDA", "AI", "Deep Learning", "RNN"],
+        description: "Documenting my CUDA learning journey",
+        image: h100Image,
+        date: "Mar 28, 2024",
+        content: "Logs for my CUDA learning journey",
+        component: <LearningCuda/>,
+    },
     {
         title: "System Design Interview Process",
         tags: ["Interview", "System Desing"],
