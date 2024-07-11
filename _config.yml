@@ -16,10 +16,10 @@ timezone: America/New_York
 
 title: Kapil Sharma # the main title
 
-tagline: GPU GO Brrr # it will display as the sub-title
+tagline: Making GPUs Go Brrr # it will display as the sub-title
 
 description: >- # used by seo meta and the atom feed
-  GPU GO Brrr
+  This is the website/technical blog of Kapil Sharma. I work at Meta on the Pytorch team.
 
 # Fill in the protocol & hostname for your site.
 # e.g. 'https://username.github.io', note that it does not end with a '/'.
