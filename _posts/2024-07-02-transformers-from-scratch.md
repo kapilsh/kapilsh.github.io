@@ -4,7 +4,7 @@ description: >-
   Another article in the wild on writing transformers from scratch
 date: 2024-07-02
 categories: [Blog, Tutorial]
-tags: [AI, Transformers, Pytorch]
+tags: [AI, Transformers, Pytorch, Machine Learning]
 pin: true
 author: ks
 ---
@@ -23,13 +23,13 @@ from torch.utils.data import DataLoader, TensorDataset
 from transformers import AutoTokenizer, AutoModel
 ```
 
-# Attention is all you need
+## Attention is all you need
 
 Below is one of the most snapshoted diagram in all of Machine Learning. Without this, any new blog post is incomplete. So, here it is: 
 
 ![transformers](/assets/c82eda57-1ae2-4540-b29d-5d7190535a30.png){: width="500" }
 
-# Parameters and descriptions
+## Parameters and descriptions
 
 Now comes the important stuff. What are the main parameters that the Transformers use? I describe some of them below.
 
@@ -61,7 +61,7 @@ queries and keys of dimension d_k, and values of dimension d_v
 - **Dropout**: Dropout rate after attention layer
 - **Feed Forward Hidden size**: Hidden dimension for feed forward layer (effectively an MLP)
 
-# Encoder
+## Encoder
 
 ### Encoder Overview
 
@@ -71,16 +71,16 @@ Best resource I found that illustrates the internals of Transformer architecture
 
 Below is the pseudo-code for how Encoder layer processes inputs and passes them from one layer to another 
 
-- Input -> Sparse Embedding
-- X = Sparse Embedding + Position Embedding
-- Calculate A_out = MultiHeadAttn(X)
-- A_out = Dropout(A_out)
-- L_out = LayerNorm(A_out + X)
-- F_out = FeedForwardNN(L_out)
-- F_out = Dropout(F_out)
-- out = LayerNorm(F_out + L_out)
+- **Input -> Token Embedding:** Embedding layer that converts tokens to embeddings
+- **X = Token Embedding + Position Embedding**: Add position embeddings to token embeddings - this completes the input layer
+- **Calculate A_out = MultiHeadAttn(X)**: Calculate multi-head attention output
+- **A_out = Dropout(A_out)**: Apply dropout to the multi-head attention output
+- **L_out = LayerNorm(A_out + X)**: Add residual connection from input to the multi-head attention output and apply layer normalization
+- **F_out = FeedForwardNN(L_out)**: Pass the output from the multi-head attention through a feed forward network
+- **F_out = Dropout(F_out)**: Apply dropout to the feed forward network output
+- **out = LayerNorm(F_out + L_out)**: Add residual connection from the multi-head attention output to the feed forward network output and apply layer normalization
 
-# Exploration
+## Exploration
 
 For exploration, I will use 1984 book text. I have used this one of my previous posts as well to generate new chapters using LSTM (haha I know). For tokenizing, I will use the GPT2 tokenizer.
 
@@ -137,7 +137,7 @@ batch
 
 
 
-# Position Encoding
+## Position Encoding
 
 Quoting from the original paper, positional encoding are just functions over the sequence and embedding dimensions. 
 
@@ -205,7 +205,7 @@ print(position_embeddings)
 ```
 
 
-# Input Layer
+## Input Layer
 
 We now define the input layer i.e. the layer where sequences are converted to embeddings and then combined (added to) with position embeddings.
 
@@ -248,8 +248,9 @@ print(attention_input.size())
 # torch.Size([4, 10, 6])
 ```
 
-# Multi Head Attention
+## Multi Head Attention
 
+Now comes the fun part i.e. attention. We will work 2 heads for demonstration purposes. `head_dimension` is calculated as `embedding_dimension // num_heads` and should be divisible by `num_heads`.
 ```python
 num_heads = 2
 head_dimension = embedding_dimension // num_heads
@@ -257,6 +258,7 @@ if embedding_dimension % num_heads != 0:
     raise ValueError("embedding_dimension should be divisible by num_heads")
 ```
 
+Now, we need to split the input into Q, K, and V. We can do this by passing the input through a linear layer that outputs 3 times the embedding dimension. 
 
 ```python
 # split up input into Q, K, V
@@ -265,18 +267,9 @@ with torch.no_grad():
     qkv_layer.weight.fill_(2)
 
 qkv = qkv_layer(attention_input)
+print(qkv.size())
+# torch.Size([4, 10, 18])
 ```
-
-
-```python
-qkv.size()
-```
-
-
-
-
-    torch.Size([4, 10, 18])
-
 
 
 
