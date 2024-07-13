@@ -127,7 +127,8 @@ model_inputs
 ```
 
 ```python
-batch = model_inputs[:4, :]
+batch_size = 4
+batch = model_inputs[:batch_size, :]
 batch
 
 # output
@@ -411,7 +412,7 @@ Finally, we pass the output through a linear layer to get the final output from 
 ```python
 # final linear layer in the attention
 attn_linear_layer = nn.Linear(embedding_dimension, embedding_dimension)
-attn_out = attn_linear_layer(values_out)
+attn_out = attn_linear_layer(values)
 print("output from attention has size", attn_out.size())
 # output from attention has size torch.Size([4, 10, 6])
 ```
