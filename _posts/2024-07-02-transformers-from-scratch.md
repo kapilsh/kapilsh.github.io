@@ -12,7 +12,7 @@ author: ks
 
 So, there are plenty of "Transformers from Scratch" articles and videos out there in the wild and I would be lying if I said I did not look at any of them before writing my own. So why this?
 
-My motivation to share was purely just for demonstration as to how I wrote my own small module for transformers "from scratch".
+My motivation to share was purely just for demonstration as to how I wrote my own small module for transformers "from scratch". This was useful exercise for me to understand the internals of the transformer architecture and build the necessary foundation for more complex LLM models.
 
 To start with, let's import the libraries and modules we will use.
 
@@ -22,6 +22,7 @@ from torch import nn
 import math
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import AutoTokenizer, AutoModel
+from torch.nn import functional as F
 ```
 
 ## Attention is all you need
@@ -38,22 +39,24 @@ Now comes the important stuff. What are the main parameters that the Transformer
 - **Sequence Length (S)**: Length of the sentence or sequence fed into the tranformer
 - **Embedding Size (E)**: Size of the embedding for each node in the sequence above
 
-S X E dimension for one sequence (S = $d_{model}$ in the paper)
+$S \times E$ dimension for one sequence ($S = d_{model}$ in the paper)
 
-B X S X E for a batch size of B
+$B \times S \times E$ for a batch size of B
 
 From paper:
 
 > To facilitate these residual connections, all sub-layers in the model, as well as the embedding
-layers, produce outputs of dimension dmodel = 512.
+layers, produce outputs of dimension $d_{model} = 512$.
+{: .prompt-info }
 
 - **Number of Heads**: Number of heads in the attention layer - output from embedding layer is split into these heads
-- **Head dimension**: Can be calculated from embedding dimension and number of heads: `embedding_size // num_heads` (same as d_k in the paper)
+- **Head dimension**: Can be calculated from embedding dimension and number of heads: `embedding_size // num_heads` (same as $d_k$ in the paper)
 
 From paper:
 
 > We call our particular attention "Scaled Dot-Product Attention" (Figure 2). The input consists of
-queries and keys of dimension d_k, and values of dimension d_v
+queries and keys of dimension $d_k$, and values of dimension $d_v$
+{: .prompt-info }
 
 ### Scaled Dot Product Attention
 
@@ -68,7 +71,7 @@ queries and keys of dimension d_k, and values of dimension d_v
 
 ### Encoder Overview
 
-Best resource I found that illustrates the internals of Transformer architecture is [Jay Alammar's Blog Post - The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/). Below is the encoder internals from the post.
+One of the resources I found that illustrates the internals of Transformer architecture is [Jay Alammar's Blog Post - The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/). Below is the encoder internals from the post.
 
 ![Screenshot 2024-06-06 at 5.27.39 PM.png](/assets/015a8f26-68c3-4c34-8f18-1f75353fc899.png)
 
@@ -85,7 +88,7 @@ Below is the pseudo-code for how Encoder layer processes inputs and passes them 
 
 ## Exploration
 
-For exploration, I will use 1984 book text. I have used this one of my previous posts as well to generate new chapters using LSTM (haha I know). For tokenizing, I will use the GPT2 tokenizer.
+For exploration, I will use [1984 book text](https://raw.githubusercontent.com/kapilsh/ml-projects/master/transformers/data/1984.txt). I have used this [one of my previous posts](../lstm-writes-animal-farm/) as well to generate new chapters using LSTM (old times). For tokenizing, I will use the GPT2 tokenizer.
 
 ```python
 
@@ -125,6 +128,8 @@ model_inputs
 #        [ 3128,   355, 32215,  ..., 10970, 23578,   198]], dtype=torch.int32)
 
 ```
+
+Let us generate a sample batch we will use for exploration.
 
 ```python
 batch_size = 4
@@ -842,6 +847,3 @@ To finish up, here is a really cool graphic that shows a list of major transform
 - [BERT: Bidirectional Encoder Representations from Transformers](https://arxiv.org/pdf/1810.04805)
 - [GPT2 paper](https://arxiv.org/pdf/1901.05207)
 - [The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/)
-
-
-
