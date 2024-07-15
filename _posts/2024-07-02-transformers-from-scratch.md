@@ -524,7 +524,7 @@ Now we will start digging into the decoder side. For the most part, decoder part
 
 ![decoder.png](/assets/decoder.png){: width="400" }
 
-Here's the pseudo code for the decoder layer:
+Here's the pseudo-code for the decoder layer:
 
 - **Input -> Sparse Embedding:** Embedding layer that converts tokens to embeddings
 - **X = Sparse Embedding + Position Embedding (Masked):** Add position embeddings to token embeddings - this completes the input layer
@@ -538,13 +538,310 @@ Here's the pseudo code for the decoder layer:
 - **F_out = Dropout(F_out):** Apply dropout to the feed forward network output
 - **out = LayerNorm(F_out + LC_out):** Add residual connection from the multi-head attention output to the feed forward network output and apply layer normalization
 
+### Special Tokens
+
+Since, decoder processes inputs shifted by 1 and accounts for the start of text as being it's own token, we need to update our tokenizer to add this "start of text" token now.
+
+Based on the [GPT2 paper](https://arxiv.org/pdf/1901.05207), it was only trained with the endoftext token. So, we will use endoftext special token itself for the start of text token. There was a [helpful discussion](https://github.com/huggingface/transformers/issues/429#issue-427290740) on Github regarding this.
+
+Here's an example of how we will use the `<|endoftext|>` token.
+
+
+```python
+text = "<|endoftext|> machine learning using PyTorch"
+encoded_ids = tokenizer.encode(text)
+print(encoded_ids)
+for id in encoded_ids:
+    print(
+        f"""{id:<7} = {"'" + tokenizer.convert_ids_to_tokens(id) + "":<10}'""")
+```
+
+    [50256, 4572, 4673, 1262, 9485, 15884, 354]
+    50256   = '<|endoftext|>'
+    4572    = 'Ġmachine '
+    4673    = 'Ġlearning'
+    1262    = 'Ġusing   '
+    9485    = 'ĠPy      '
+    15884   = 'Tor      '
+    354     = 'ch       '
+
+
+Let's add the `<|endoftext|>` token to the original encoded inputs to generate the decoder input
+
+
+```python
+print("encoder input: ", encoded_input["input_ids"][:, :10])
+print("decoder_input: ", torch.cat(
+    (torch.Tensor([[tokenizer.convert_tokens_to_ids("<|endoftext|>")]]), 
+     encoded_input["input_ids"]), 
+    dim=-1)[:, :10])
+```
+
+```shell
+encoder input:  tensor([[14126,   352,   628,   198,   198,  1026,   373,   257,  6016,  4692]])
+decoder_input:  tensor([[50256., 14126.,   352.,   628.,   198.,   198.,  1026.,   373.,   257.,
+          6016.]])
+```
+
+Now, we can get a decoder input batch.
+
+```python
+batch_size = 4
+
+decoder_input = torch.cat((torch.Tensor([[tokenizer.convert_tokens_to_ids("<|endoftext|>")]]),  encoded_input["input_ids"]), dim=-1).to(torch.int32)
+model_inputs = decoder_input.ravel().unfold(0, sequence_length, 1).to(torch.int32)
+decoder_batch = model_inputs[:4, :]
+print(decoder_batch)
+```
+```shell
+tensor([[50256, 14126,   352,   628,   198,   198,  1026,   373,   257,  6016],
+        [14126,   352,   628,   198,   198,  1026,   373,   257,  6016,  4692],
+        [  352,   628,   198,   198,  1026,   373,   257,  6016,  4692,  1110],
+        [  628,   198,   198,  1026,   373,   257,  6016,  4692,  1110,   287]],
+       dtype=torch.int32)
+```
+
+
+Awesome, now let's feed this input through the decoder layers
+
+## Decoder Input Layer
+
+
+```python
+decoder_input_layer = InputLayer(num_embeddings=len(tokenizer.get_vocab()), sequence_length=sequence_length, embedding_dimension=embedding_dimension)
+decoder_attention_input = decoder_input_layer(decoder_batch)
+print("decoder attention input size:", decoder_attention_input.size())
+print(decoder_attention_input[:2, :2]) # let's print a small portion of the embeddings
+```
+```
+decoder attention input size: torch.Size([4, 10, 6])
+tensor([[[-0.1335, -0.0668, -0.7628,  0.2519,  1.1015,  1.2907],
+         [ 1.4312, -0.1118,  1.6050, -0.2935, -0.0866,  1.5548]],
+
+        [[ 0.5897,  0.3479,  1.5586, -0.2924, -0.0887,  1.5548],
+         [ 1.7546, -0.2418,  2.1068,  0.6056, -1.0535, -0.3810]]],
+       grad_fn=<SliceBackward0>)
+```
+
+
+## Decoder Self Attention Layer
+
+Based on our exploration in encoder section, we can define a proper module for `ScaledDotProductAttention` and `MultHeadAttention`. Let's do that first.
+
+
+```python
+class ScaledDotProductAttention(nn.Module):
+    def __init__(self, sequence_length: int, d_k: int, masked: bool) -> None:
+        super(ScaledDotProductAttention, self).__init__()
+        self.d_k = d_k
+        if masked:
+            mask = torch.full((sequence_length, sequence_length),
+                              -torch.inf)
+            self.mask = torch.triu(mask, diagonal=1)
+        else:
+            self.mask = torch.zeros((sequence_length, sequence_length))
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
+        scores += self.mask
+        attention = F.softmax(scores, dim=-1)
+        return torch.matmul(attention, v), attention
+```
+
+
+```python
+class MultiHeadAttention(nn.Module):
+    def __init__(self, embedding_dimension: int, sequence_length: int,
+                 num_heads: int, masked: bool = False) -> None:
+        super(MultiHeadAttention, self).__init__()
+        self.head_dimension = embedding_dimension // num_heads
+        self.num_heads = num_heads
+        self.q_linear = nn.Linear(embedding_dimension, embedding_dimension)
+        self.k_linear = nn.Linear(embedding_dimension, embedding_dimension)
+        self.v_linear = nn.Linear(embedding_dimension, embedding_dimension)
+        self.out = nn.Linear(embedding_dimension, embedding_dimension)
+        self.attention_layer = ScaledDotProductAttention(
+            sequence_length=sequence_length,
+            d_k=self.head_dimension,
+            masked=masked
+        )
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+        # q, k, v have shape (batch_size, sequence_length, embedding_dimension)
+        # next we apply the linear layer and then split the output into
+        # num_heads
+        batch_size = q.size(0)
+        # second dimension is the sequence length
+        output_shape = (batch_size, -1, self.num_heads, self.head_dimension)
+        # we transpose the output to
+        # (batch_size, num_heads, sequence_length, head_dimension)
+        # this allows us to use num_heads as a batch dimension
+        q = self.q_linear(q).view(*output_shape).transpose(1, 2)
+        k = self.k_linear(k).view(*output_shape).transpose(1, 2)
+        v = self.v_linear(v).view(*output_shape).transpose(1, 2)
+        # we apply the scaled dot product attention
+        x, attention = self.attention_layer(q, k, v)
+        # we transpose the output back to
+        # (batch_size, sequence_length, embedding_dimension)
+        x = x.transpose(1, 2).contiguous().view(
+            batch_size, -1, self.head_dimension * self.num_heads)
+        return self.out(x), attention
+```
+
+Now, we can use these to first calculate the Causal Self Attention Block.
+
+![Masked Multi Head Attention Block](/assets/masked_MHA.png){: width="200" }
+
+We will combine the steps where attention output is fed into LayerNorm to get input to the cross attention block.
+
+
+```python
+def calculate_causal_mha_layer(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    causal_mha = MultiHeadAttention(embedding_dimension=embedding_dimension, sequence_length=sequence_length, num_heads=num_heads, masked=True)
+    scores, _ = causal_mha(q, k, v) # we ignore the attention weights
+    # we add a dropout layer
+    dropout = nn.Dropout(dropout_prob)
+    scores = dropout(scores)
+    # calculate the layer norm
+    layer_norm = nn.LayerNorm(embedding_dimension)
+    return layer_norm(scores + q)
+
+
+causal_mha_out = calculate_causal_mha_layer(decoder_attention_input, decoder_attention_input, decoder_attention_input)
+print("causal mha out size:", causal_mha_out.size())
+
+# causal mha out size: torch.Size([4, 10, 6])
+```
+
+## Decoder Cross Attention Layer
+
+Now that we have fed the inputs through the self attention layer, we can calculate the Cross Attention with the encoder output.
+
+![Masked Cross Attention](/assets/cross_attn.png)
+
+
+```python
+def calculate_cross_attention_layer(self_attention_output: torch.Tensor, encoder_output: torch.Tensor) -> torch.Tensor:
+    cross_attention = MultiHeadAttention(embedding_dimension=embedding_dimension, sequence_length=sequence_length, num_heads=num_heads, masked=False)
+    # we replace the Q with the encoder output, K and V are the self_attention_output in the decoder
+    scores, _ = cross_attention(q=encoder_output, k=self_attention_output, v=self_attention_output) # we ignore the attention weights
+    # we add a dropout layer
+    dropout = nn.Dropout(dropout_prob)
+    scores = dropout(scores)
+    # calculate the layer norm
+    layer_norm = nn.LayerNorm(embedding_dimension)
+    return layer_norm(scores + self_attention_output)
+
+encoder_output = ffn_layer_norm_out
+cross_attention_output = calculate_cross_attention_layer(causal_mha_out, encoder_output)
+print("cross attention output size:", cross_attention_output.size())
+print(cross_attention_output[:2, :2])
+```
+
+```
+cross attention output size: torch.Size([4, 10, 6])
+tensor([[[-0.9629, -0.7597, -1.2258,  0.8206,  1.2307,  0.8972],
+         [ 0.4771, -1.0049,  1.6433, -1.0474, -0.7278,  0.6597]],
+
+        [[-0.9022,  0.1326,  1.3445, -1.3122, -0.4581,  1.1954],
+         [ 0.5531, -0.0851,  1.6785,  0.2169, -1.0609, -1.3026]]],
+       grad_fn=<SliceBackward0>)
+```
+
+
+# Decoder Feed Forward Layer
+
+Now, we can calculate the feed forward layer just like the encoder part of the network.
+
+
+```python
+def calculate_ffn_layer(cross_attention_output: torch.Tensor) -> torch.Tensor:
+    ffn = FeedForwardNetwork(embedding_dimension=embedding_dimension, hidden_dimension=ffn_hidden_dimension, drop_prop=dropout_prob)
+    ffn_out = ffn(cross_attention_output)
+    # no dropout since it is already applied in the FeedForwardNetwork
+    ffn_layer_norm = nn.LayerNorm(embedding_dimension)
+    return ffn_layer_norm(ffn_out + cross_attention_output) # cross_attention_output is the residual connection
+
+ffn_output = calculate_ffn_layer(cross_attention_output)
+print("ffn output size:", ffn_output.size())
+print(ffn_output[:2, :2])
+```
+```
+ffn output size: torch.Size([4, 10, 6])
+tensor([[[-0.8360, -0.9143, -1.1446,  0.8524,  1.4350,  0.6075],
+         [ 0.7893, -0.9337,  1.4718, -1.2387, -0.6771,  0.5883]],
+
+        [[-0.2053,  0.2958,  1.1531, -1.7495, -0.5692,  1.0750],
+         [ 0.6976, -0.0073,  1.5595,  0.2070, -1.1275, -1.3293]]],
+       grad_fn=<SliceBackward0>)
+```
+
+
+## Output Probabilities
+
+Final layer of the network calculates the probabilities for the output tokens from the network. In this layer, we pass the normalized output from FeedForward layer to Linear + Softmax.
+
+![Output Layer](/assets/output_layer.png)
+
+
+```python
+def calculate_output_probabilities(ffn_output: torch.Tensor) -> torch.Tensor:
+    # output dimension for linear layer is the vocab size
+    output_linear = nn.Linear(embedding_dimension, len(tokenizer.get_vocab())) 
+    return F.softmax(output_linear(ffn_output), dim=-1) # final output probabilities
+
+output_probabilities = calculate_output_probabilities(ffn_output)
+print("output probabilities size:", output_probabilities.size())
+
+# output probabilities size: torch.Size([4, 10, 50257])
+```
+
+We finally have the seq2seq probabilities. We can now calculate the loss and backpropagate to train the network.
+
+We only tested our transformer implementation with a single layer of attention. In practice, transformers have multiple layers of attention. We can stack multiple layers of the encoder and decoder to get better performance. Original transformer paper used 6 layers of attention in both encoder and decoder.
+
+## Decoder Summary
+
+In the decoder section, we have described the different layers and operations involved in the decoder of a transformer neural network. We have discussed the self-attention layer, cross-attention layer, feed-forward layer, and the output probabilities layer. We have also provided code examples and explanations for each layer.
+
+- The self-attention layer calculates the **causal** attention weights for each token in the input sequence based on its relationship with other tokens. 
+- The cross-attention layer performs attention over the encoder output to incorporate information from the input sequence. 
+- The feed-forward layer applies a non-linear transformation to the output of the cross-attention layer. 
+- Finally, the output probabilities layer calculates the probabilities for each token in the vocabulary.
+
+The decoder plays a crucial role in tasks such as language translation, text generation, and sequence-to-sequence modeling.
+
+> **What are the top decoder only models?**
+>
+> Most of the well known models are decoder only models:
+> - GPT
+> - LLAMA
+> - Gemini
+> - List goes on...
+{: .prompt-tip }
+
+# Summary
+
+We have discussed and implemented both the encoder and decoder parts of the transformers architecture from scratch. We have analyzed how the input tokens flow through the original transformers architecture and explained the different layers and operations involved in each part.
+
+For the encoder, we have described the self-attention layer and feed-forward layer. We have provided code examples and explanations for each layer, including the calculation of attention weights, layer normalization, etc.
+
+Similarly, for the decoder, we have discussed the causal self-attention layer, cross-attention layer, feed-forward layer, and the output probabilities layer. We have explained how the decoder incorporates information from the encoder output and generates output probabilities based on the input sequence.
+
+This was generally a very fruitful exercise for me. This serves as a foundational exercise to understand all major transformer models.
+
+To finish up, here is a really cool graphic that shows a list of major transformers based models from Sebastian Raschka's substacl post - [Understanding Encoder And Decoder LLMs](https://magazine.sebastianraschka.com/p/understanding-encoder-and-decoder). Once you understand the original transformers architecture, you can easily understand the evolution of transformers-based models and their architectures.
+
+![Transformers Evolution](/assets/transformer_evolution.png)
+
 ## Sources
 
-- [The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/)
 - [Attention is all you need](https://arxiv.org/abs/1706.03762)
 - [Layer Normalization](https://paperswithcode.com/method/layer-normalization)
 - [Pytorch LayerNorm](https://pytorch.org/docs/stable/generated/torch.nn.LayerNorm.html)
 - [BERT: Bidirectional Encoder Representations from Transformers](https://arxiv.org/pdf/1810.04805)
+- [GPT2 paper](https://arxiv.org/pdf/1901.05207)
+- [The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/)
 
 
 
