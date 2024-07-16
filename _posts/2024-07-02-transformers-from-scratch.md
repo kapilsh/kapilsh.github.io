@@ -4,7 +4,7 @@ description: >-
   Another article in the wild on writing transformers from scratch
 date: 2024-07-02
 categories: [Blog, Tutorial]
-tags: [AI, Transformers, Pytorch, Machine Learning]
+tags: [AI, Transformers, Pytorch, Machine Learning, LLM]
 pin: true
 math: true
 author: ks
