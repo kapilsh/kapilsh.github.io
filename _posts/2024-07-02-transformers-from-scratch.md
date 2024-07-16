@@ -845,6 +845,10 @@ To finish up, here is a really cool graphic that shows a list of major transform
 
 ![Transformers Evolution](/assets/transformer_evolution.png)
 
+## Github
+
+The code for this post is available on [Github](https://github.com/kapilsh/ml-projects/tree/master/transformers)
+
 ## Sources
 
 - [Attention is all you need](https://arxiv.org/abs/1706.03762)
