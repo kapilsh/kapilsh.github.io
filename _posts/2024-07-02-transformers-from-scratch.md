@@ -151,6 +151,7 @@ batch
 Quoting from the original paper, positional encoding are just functions over the sequence and embedding dimensions. 
 
 > NOTE: GPT2 onwards, positional encoding is usually added as learnable embedding instead. 
+{: .prompt-tip }
 
 ![Screenshot 2024-06-19 at 6.22.53 AM.png](/assets/35a50179-5b16-4056-a785-47c506c2c28b.png)
 
@@ -212,6 +213,8 @@ print(position_embeddings)
 #        [ 0.9894, -0.1455,  0.3629,  0.9318,  0.0172,  0.9999],
 #        [ 0.4121, -0.9111,  0.4057,  0.9140,  0.0194,  0.9998]])
 ```
+
+![Position Embeddings](/assets/pos_embed.svg)
 
 
 ## Input Layer
@@ -521,7 +524,10 @@ print(ffn_layer_norm_out.size())
 # torch.Size([4, 10, 6])
 ```
 
-At this point, we get the final output from the encoder layer. This in itself is a complete architecture used in encoder only networks. Most widely known encoder only model is [BERT: Bidirectional Encoder Representations from Transformers](https://arxiv.org/pdf/1810.04805) that was released by Google.
+At this point, we get the final output from the encoder layer. This in itself is a complete architecture used in encoder only networks. 
+
+> Most widely known encoder only model is [BERT: Bidirectional Encoder Representations from Transformers](https://arxiv.org/pdf/1810.04805) that was released by Google.
+{: .prompt-tip }
 
 ## Decoder
 
