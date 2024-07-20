@@ -1,7 +1,7 @@
 ---
 title: Exploring GPT2
 description: >-
-  Writing GPT2 from scratch and assigning weights from pre-trained huggingface model
+  Writing GPT2 from scratch and assigning weights from pre-trained Huggingface model
 date: 2024-07-18
 categories: [Blog, DevLog]
 tags: [AI, Transformers, Pytorch, Machine Learning, LLM]
@@ -10,7 +10,7 @@ math: true
 author: ks
 ---
 
-In this post, I will exploring the [GPT-2 model from Huggingface (HF)](https://huggingface.co/openai-community/gpt2). This is inspired by [Andrej Karpathy's recent YT video](https://www.youtube.com/watch?v=l8pRSuU81PU&t=2593s). However, I will try to write the GPT-2 model from scratch first without matching the structure defined by HF model and try to make names a bit more descriptive.
+In this post, I will explore the [GPT-2 model from Huggingface (HF)](https://huggingface.co/openai-community/gpt2). This is inspired by [Andrej Karpathy's recent YT video](https://www.youtube.com/watch?v=l8pRSuU81PU&t=2593s). However, I will try to write the GPT-2 model from scratch first without matching the structure defined by HF model and try to make names a bit more descriptive.
 
 In addition, we would try to match the Huggingface training model with dropouts at appropriate points in the network.
 
@@ -109,7 +109,7 @@ lm_head.weight torch.Size([50257, 768])
 In the above architecture, we can identify different layers as:
 
 - `wte` and `wpe` are the token and position embeddings, respectively
-- `h.<N>` represents attention blocks. Each attention block has 4 sublayers
+- `h.<N>` represents attention blocks. Each attention block has 4 sub-layers
   - `ln_1`: LayerNorm 1 (i.e. pre attention). Note that GPT2 changed the order of LayerNorm in the decoder layer to move it before attention and MLP
   - `attn`: attention layer
   - `ln_2`: LayerNorm 2 (i.e. pre MLP)
@@ -173,7 +173,7 @@ We can see that the model consists of:
 
 ### GPT2 Model Config
 
-Let's start defining the model layer by layer. Initially, we will create a model config that has all the hyper parameters for the model.
+Initially, we will create a model config that has all the hyperparameters for the model.
 
 ```python
 @dataclass
@@ -210,6 +210,9 @@ class GPT2(nn.Module):
         self.positional_ids = torch.arange(
             config.context_window_size).unsqueeze(0).to(device)
         self.embedding_dropout = nn.Dropout(config.dropout_embeddings)
+        # =====
+        # TODO: Implement GPT2Layer Module
+        # =====
         self.layers = nn.ModuleList(
             [GPT2Layer(config) for _ in range(config.num_layers)])
         self.layer_norm = nn.LayerNorm(config.embedding_dimension)
@@ -236,7 +239,7 @@ The GPT2 model consists of token embeddings, positional embeddings, multiple GPT
 - Applies layer normalization to the final embeddings.
 - Passes the normalized embeddings through the output layer to get logits.
 
-We still need to define the GPT2Layer. Let's do that now
+We still need to define the GPT2Layer. Let's do that now.
 
 ### GPT2 Layer
 
@@ -245,8 +248,14 @@ class GPT2Layer(nn.Module):
     def __init__(self, config: GPT2Config):
         super().__init__()
         self.layer_norm1 = nn.LayerNorm(config.embedding_dimension)
+        # =====
+        # TODO: Implement CausalMultiHeadAttention Module
+        # =====
         self.attention = CausalMultiHeadAttention(config)
         self.layer_norm2 = nn.LayerNorm(config.embedding_dimension)
+        # =====
+        # TODO: Implement MLP Module
+        # =====
         self.mlp = MLP(config)
 
     def forward(self, embeddings: torch.Tensor):
@@ -262,10 +271,10 @@ Let's zoom into the GPT2Layer module.
 - Input embeddings are passed through a layer normalization layer, then through the self-attention mechanism.
 - Output of the self-attention mechanism is added to the input embeddings to form the attention_output as a residual connection
 - The attention_output is then passed through another layer normalization layer and a multi-layer perceptron (MLP)
-- Output from mlp is added to the attention_output to form the mlp_output as anther residual connection
+- Output from mlp is added to the attention_output to form the mlp_output as another residual connection
 - The mlp_output is then fed into the next GPT2Layer (or the final layer norm in the case of the last layer)
 
-Let's define the MLP module now:
+Next, we need to implemented `CausalMultiHeadAttention` and `MLP` modules. Let's define the MLP module first:
 
 ```python
 class MLP(nn.Module):
@@ -283,13 +292,17 @@ class MLP(nn.Module):
         return self.dropout(self.fc2(self.activation(self.fc1(x))))
 ```
 
-> NOTE: We use the approximated gelu to match the outputs perfectly with the huggingface model
+> NOTE: We use the approximated gelu to match the outputs perfectly with the Huggingface model.
+{: .prompt-tip}
 
 This is pretty straight-forward. It is a 2 layer MLP with a GELU activation in between. For more details on GELU, go to original paper - [GAUSSIAN ERROR LINEAR UNITS](https://arxiv.org/pdf/1606.08415v5).
 
 Now, let's implement the final piece - `CausalMultiHeadAttention`. For attention calculation, we will use the flash attention implementation provided by pytorch.
 
 ## Causal Multi Head Attention 
+
+> **Why Causal?** In the context of language modeling (Text Generation) using decoder-only transformers, we want to ensure that the model does not look into the future. This is achieved by masking the attention weights to ensure that the model only attends to the previous tokens in the sequence.
+{: .prompt-tip}
 
 ```python
 class CausalMultiHeadAttention(nn.Module):
@@ -336,6 +349,17 @@ In the above code, we define the CausalMultiHeadAttention module. This module pe
 - Attention weights then go through a linear layer. 
   - Note the residual dropout is applied to the output of the attention layer.
 
+> **What does scaled_dot_product_attention do?**
+> 
+> Spelled out in code, the scaled dot product attention is fused version of
+> 1. `qkv = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)`
+> 2. `weights = F.softmax(qkv, dim=-1)`
+> 3. `weights = F.dropout(weights, p=dropout_p, training=self.training)`
+> 4. `output = torch.matmul(weights, v)`
+>
+> **TIP: Read [Flash Attention](https://arxiv.org/pdf/2205.14135)**
+{: .prompt-tip}
+
 ## Testing the Model 
 
 At this point, we should be at least be able to call the GPT2 model and get some output. 
@@ -347,12 +371,12 @@ gpt2_model = GPT2(GPT2Config())
 gpt2_out = gpt2_model(encoded_input['input_ids'])
 print(gpt2_out.size())
 
-@ torch.Size([1, 10, 50257])
+# torch.Size([1, 10, 50257])
 ```
 
 **Nice! so we are able to call the model e2e.**
 
-Now starts the fun part. We should now be able to take the weights from the huggingface model and apply them to the model we just defined.
+Now starts the fun part. We should now be able to take the weights from the Huggingface model and apply them to the model we just defined.
 
 Let's first print all the parameter keys and dimensions and match it against the Huggingface model:
 
@@ -400,7 +424,7 @@ output_layer.weight torch.Size([50257, 768]) <> lm_head.weight torch.Size([50257
 
 ## Loading pre-trained weights
 
-We can see that number of parameters and dimensions match. In some cases, we notice that the dimensions are transposed as [Andrej mentioned in his youtube video](https://www.youtube.com/watch?v=l8pRSuU81PU&t=2593s) as well.
+We can see that number of parameters and dimensions match. In some cases, we notice that the dimensions are transposed as [Andrej mentioned in his YouTube video](https://www.youtube.com/watch?v=l8pRSuU81PU&t=2593s) as well.
 
 > HF model uses `nn.Conv1d` for qkv projection while we use `nn.Linear`. Hence, we need to transpose some of these arguments.
 {: .prompt-tip}
@@ -471,22 +495,19 @@ print(gpt2_out.size())
 We should be able to test the 2 models for output now. We can feed both the models with a random input and check the final output at the end.
 
 ```python
-    hf_model = GPT2LMHeadModel.from_pretrained('gpt2', resume_download=None)
-    hf_model.eval()
+hf_model = GPT2LMHeadModel.from_pretrained('gpt2', resume_download=None)
+hf_model.eval()
 
-    gpt2_model = GPT2.from_pretrained()
-    gpt2_model.eval()
+gpt2_model = GPT2.from_pretrained()
+gpt2_model.eval()
 
-    torch.random.manual_seed(42)
-    model_input = torch.randint(0, 50257, (1, 30))
-    gpt2_output = gpt2_model(model_input)
-    hf_output = hf_model(model_input)
+torch.random.manual_seed(42)
+model_input = torch.randint(0, 50257, (1, 30))
+gpt2_output = gpt2_model(model_input)
+hf_output = hf_model(model_input)
 
-    assert torch.allclose(hf_output.logits, gpt2_output, atol=1e-4)
+assert torch.allclose(hf_output.logits, gpt2_output, atol=1e-4)
 ```
-
-Awesome!! The outputs match within the allowed tolerance. Let's look at the outputs:
-
 
 ```python
 hf_output.logits
@@ -526,6 +547,8 @@ tensor([[[ -33.4287,  -33.3094,  -37.3657,  ...,  -41.1595,  -40.2192,
            -59.5627]]], grad_fn=<UnsafeViewBackward0>)
 ```
 
+Awesome!! The outputs match within the allowed tolerance. Let's look at the outputs:
+
 ## Testing Training Step
 
 In the previous section, we only tested the eval step. A number of dropouts do not run when we run the model in eval model. Let's switch both models to training mode to see whether they match.
@@ -553,7 +576,7 @@ hf_output = hf_model(model_input)
 assert torch.allclose(hf_output.logits, gpt2_output, atol=1e-4)
 ```
 
-I added both of the above checks for equivalnce as unit tests for [gpt module we defined](https://github.com/kapilsh/ml-projects/blob/master/transformers/gpt.py).
+I added both of the above checks for equivalence as unit tests for [gpt module we defined](https://github.com/kapilsh/ml-projects/blob/master/transformers/gpt.py).
 
 
 ```shell
@@ -574,6 +597,6 @@ test_gpt.py::test_model_correctness_train PASSED                                
 ## Summary
 We have successfully implemented the GPT2 model from scratch and loaded the weights from the Huggingface model. We have tested the model for both eval and training modes and verified that the outputs match the Huggingface model.
 
-## Code and Github
+## Code and GitHub
 
-All the code for the GPT2 model is available in my [transformers repository](https://www.github.com/kapilsh/ml-projects/transformers).
+All the code for the GPT2 model is available in my [transformers' repository](https://www.github.com/kapilsh/ml-projects/transformers).
