@@ -108,13 +108,13 @@ lm_head.weight torch.Size([50257, 768])
 
 In the above architecture, we can identify different layers as:
 
-- wte and wpe are the token and position embeddings, respectively
-- h.<N> represents attention blocks. Each attention block has 4 sublayers
-  -  ln_1: LayerNorm 1 (i.e. pre attention). Note that GPT2 changed the order of LayerNorm in the decoder layer to move it before attention and MLP
-  - attn: attention layer
-  - ln_2: LayerNorm 2 (i.e. pre MLP)
-  - mlp: Multi Layer Perceptron in each decoder block
-- ln_f is the final LayerNorm that is added after all the decoder attention blocks
+- `wte` and `wpe` are the token and position embeddings, respectively
+- `h.<N>` represents attention blocks. Each attention block has 4 sublayers
+  - `ln_1`: LayerNorm 1 (i.e. pre attention). Note that GPT2 changed the order of LayerNorm in the decoder layer to move it before attention and MLP
+  - `attn`: attention layer
+  - `ln_2`: LayerNorm 2 (i.e. pre MLP)
+  - `mlp`: Multi Layer Perceptron in each decoder block
+- `ln_f` is the final LayerNorm that is added after all the decoder attention blocks
 
 Extract from GPT-2 paper that highlights the changes:
 
