@@ -5,7 +5,7 @@ description: >-
 date: 2024-07-19
 categories: [Blog, Tutorial]
 tags: [AI, Transformers, Pytorch, Machine Learning, LLM]
-pin: true
+pin: false
 math: true
 author: ks
 ---
@@ -16,29 +16,29 @@ If you are looking for more, Huggingface has a [great blog post](https://hugging
 
 Okay let's go. Here's a step-by-step outline of the process:
 
-1. Obtain the Logits: These are the raw scores output by the Transformer model before applying any probability function. Typically, the shape of the logits is [batch_size, sequence_length, vocab_size].
+1. **Obtain the Logits:** These are the raw scores output by the Transformer model before applying any probability function. Typically, the shape of the logits is `[batch_size, sequence_length, vocab_size]`.
 
-2. Apply a Softmax Function: Convert logits to probabilities. Softmax is typically used to convert the logits into probabilities for each token in the vocabulary.
+2. **Apply a Softmax Function:** Convert logits to probabilities. Softmax is typically used to convert the logits into probabilities for each token in the vocabulary.
+
 ```python
 import torch.nn.functional as F
 probabilities = F.softmax(logits, dim=-1)
 ```
 
-3. Sample or Argmax: Convert probabilities to actual token indices. There are different strategies to do this:
+3. **Sample or Argmax:** Convert probabilities to actual token indices. There are different strategies to do this:
 
-  - Greedy Decoding (Argmax): Choose the token with the highest probability.
+  - **Greedy Decoding (Argmax):** Choose the token with the highest probability.
 
 ```python
 predicted_indices = torch.argmax(probabilities, dim=-1)
 ```
 
-  - Sampling: Sample from the probability distribution.
+  - **Sampling:** Sample from the probability distribution.
 
 ```python
 predicted_indices = torch.multinomial(probabilities, num_samples=1).squeeze()
 ```
-4. Convert Token Indices to Text: Use a tokenizer to convert the token indices back to text.
-
+4. **Convert Token Indices to Text:** Use a tokenizer to convert the token indices back to text.
 
 ```python
 # Assuming you have a tokenizer that can convert indices back to tokens
@@ -69,7 +69,7 @@ generated_text = tokenizer.decode(predicted_indices[0], skip_special_tokens=True
 print(generated_text)
 ```
 
-I previously wrote a post on writing GPT2 from scratch. We can use that model to generate some text. 
+I [previously wrote a post](../exploring-gpt2/) on creating GPT2 model from scratch. We can use that model to generate some text. 
 
 ```python
 gpt2_model = GPT2.from_pretrained()
@@ -97,15 +97,17 @@ Generated text: ' , I'm not little expert. and '
 
 That looks coherent enough!
 
-## Notes:
-- Temperature Scaling: You might want to scale the logits before applying softmax to control the randomness of the predictions. Lower temperature makes the model more confident (less random), while a higher temperature makes it less confident (more random).
+## Notes on other Strategies:
+- **Temperature Scaling:** You might want to scale the logits before applying softmax to control the randomness of the predictions. Lower temperature makes the model more confident (less random), while a higher temperature makes it less confident (more random).
 ```python
 temperature = 1.0
 scaled_logits = logits / temperature
 probabilities = F.softmax(scaled_logits, dim=-1)
 ```
 
-- Top-k and Top-p Sampling: These are advanced sampling methods that can help to produce more coherent and diverse text by limiting the sampling pool to the top-k or top-p tokens.
+- **Top-k and Top-p Sampling:** These are advanced sampling methods that can help to produce more coherent and diverse text by limiting the sampling pool to the top-k or top-p tokens.
 
-- Beam Search: This is another decoding method that keeps track of multiple hypotheses (beams) during the generation process and selects the most likely sequence overall.
+- **Beam Search:** This is another decoding method that keeps track of multiple hypotheses (beams) during the generation process and selects the most likely sequence overall.
 
+## Sources
+- [Huggingface Blog](https://huggingface.co/blog/how-to-generate)
