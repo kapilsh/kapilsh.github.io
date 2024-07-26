@@ -939,3 +939,25 @@ def fused_add_mul_activation_kernel(x_ptr, bias_ptr, in_ptr,
 
 ### Let's check the perf of this kernel wrt torch.script, eager torch
 
+We will use the triton benchmark tool to compare the performance of the fused kernel against the eager and torch-scripted version. As part of this exercise, we will look at the FLOPs roof line model to understand the performance of the kernel.
+
+#### Results from the benchmark
+
+```
+   batch_size  weight_size      triton       torch  torch_scripted
+0         4.0          4.0    0.059406    0.020833        0.046875
+1        16.0          8.0    0.457143    0.171429        0.475248
+2        64.0         16.0    3.000000    1.333333        3.000000
+3       256.0         32.0   24.000000   10.484642       24.000000
+4      1024.0         64.0  132.485175   69.228170      153.600004
+5      4096.0        128.0  558.545450  291.271104      558.545450
+6     16384.0        256.0  819.626913  500.115745      833.084721
+7     65536.0        512.0  916.320403  306.960193      899.807760
+8    262144.0       1024.0  927.003376  306.093989      927.943371
+```
+
+![Roof line graph](/assets/roof_line_graph.png)
+
+## Conclusion
+
+In the final section of the talk, we discussed mega-fused kernels and tradeoffs of performance with reusability. There were other discussions on torch.compile with dynamic shape. I will recommend listening to the talk fully to get the most out of this post.  
