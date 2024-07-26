@@ -294,8 +294,9 @@ if input_tensor.is_cuda:
 ...
 ```
 
-<img src="/assets/perf_screenshots/pytorch_profile_initial_index_hash.png" width="800"/>
-*Pytorch Profiler trace (initial)*
+#### Pytorch Profiler trace (initial)
+
+![Perf Screenshot](/assets/perf_screenshots/pytorch_profile_initial_index_hash.png)
 
 ---
 
@@ -305,9 +306,9 @@ if input_tensor.is_cuda:
 tensorboard --logdir tb_logs --bind_all
 ```
 
+#### Initial distribution of ops - summary from tensorboard
 
-<img src="/assets/perf_screenshots/summary_initial_index_hash.png" width="800"/>
-*Initial distribution of ops - summary from tensorboard*
+![Initial distribution of ops - summary from tensorboard](/assets/perf_screenshots/summary_initial_index_hash.png)
 
 ---
 
@@ -327,9 +328,9 @@ tensorboard --logdir tb_logs --bind_all
 CUDA_LAUNCH_BLOCKING=1 python model_train.py --config ./model_hyperparameters_small.json
 ```
 
-<img src="/assets/perf_screenshots/summary_initial_cuda_launch_blocking.png" width="800"/>
+#### New distribution of ops after `CUDA_LAUNCH_BLOCKING=1`
 
-*New distribution of ops after `CUDA_LAUNCH_BLOCKING=1` - summary from tensorboard*
+![New distribution of ops after CUDA_LAUNCH_BLOCKING=1](/assets/perf_screenshots/summary_initial_cuda_launch_blocking.png)
 
 ---
 
@@ -352,9 +353,8 @@ self.mapping = [torch.tensor(metadata[f"SPARSE_{i}"]["tokenizer_values"], device
 tokenizers = tokenizer_values.view(1, -1)
 ```
 
-<img src="/assets/perf_screenshots/improve_index_hash.png" width="800"/>
-
-*Profile after improvements*
+#### Profile after improvements
+![Profile after improvements](/assets/perf_screenshots/improve_index_hash.png)
 
 
 ### What's next
@@ -374,9 +374,8 @@ def modulus_hash(tensor: torch.Tensor, cardinality: torch.Tensor):
 ```
 
 
-<img src="/assets/perf_screenshots/optimized_modulus_hash.png" width="800"/>
-
-*Pytorch Profiler trace for optimized modulus hash*
+#### Pytorch Profiler trace for optimized modulus hash
+![Pytorch Profiler trace for optimized modulus hash](/assets/perf_screenshots/optimized_modulus_hash.png)
 
 > Hashing is not the bottleneck anymore
 {: .prompt-info}
@@ -395,25 +394,25 @@ CUDA_LAUNCH_BLOCKING=1 python model_train.py
 
 #### Pre `torch.compile`
 
-<img src="/assets/perf_screenshots/pre_torch_compile_initial.png" width="800"/>
-
+![Pre torch.compile](/assets/perf_screenshots/pre_torch_compile_initial.png)
 
 #### Post `torch.compile`
 
-<img src="/assets/perf_screenshots/post_torch_compile_initial.png" width="800"/>
+![Post torch.compile](/assets/perf_screenshots/post_torch_compile_initial.png)
 
 ---
 
 ### Chrome Trace after `torch.compile`
-<img src="/assets/perf_screenshots/pytorch_profile_torch_compile.png" width="800"/>
 
-*Pytorch Profile Trace after `torch.compile`
+#### Pytorch Profile Trace after `torch.compile`
+
+![Pytorch Profile Trace after torch.compile](/assets/perf_screenshots/pytorch_profile_torch_compile.png)
 
 ### Let's look deeper into what's going on
 
-<img src="/assets/perf_screenshots/torch_compile_triton_kernels.png" width="800"/>
+#### Custom triton kernel scheduled on the cuda stream
 
-*Custom triton kernel scheduled on the cuda stream*
+![Custom triton kernel scheduled on the cuda stream](/assets/perf_screenshots/torch_compile_triton_kernels.png)
 
 
 ### Increase complexity
@@ -431,9 +430,7 @@ CUDA_LAUNCH_BLOCKING=1 python model_train.py
 
 ### Eager view
 
-<img src="/assets/perf_screenshots/full_model_eager_view.png" width="800"/>
-
-*Full Eager Model - Pytorch Profiler trace*
+![Eager View - Pytorch Profiler trace](/assets/perf_screenshots/full_model_eager_view.png)
 
 - Sparse Arch is now not the biggest piece of the pie
 - PredictionLayer is the highest
@@ -441,9 +438,7 @@ CUDA_LAUNCH_BLOCKING=1 python model_train.py
 
 ### `torch.compile` view
 
-<img src="/assets/perf_screenshots/full_model_torch_compiled.png" width="800"/>
-
-*Full `torch.compile` Model - Pytorch Profiler trace*
+![Full `torch.compile` Model - Pytorch Profiler trace](/assets/perf_screenshots/full_model_torch_compiled.png)
 
 ## Generate triton code
 
@@ -752,9 +747,9 @@ tensor([[2., 2., 2.,  ..., 2., 2., 2.],
 
 ### LoRA (LOW-RANK ADAPTATION)
 
-<img src="/assets/data/lora.png" width="400"/>
+![LoRA](/assets/data/lora.png){: width="400"}
 
-Source: https://arxiv.org/pdf/2106.09685
+Source: [LoRA Paper](https://arxiv.org/pdf/2106.09685)
 
 - Simple low rank reparametization of weight matrices
 - Singular value decomposition
