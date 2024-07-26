@@ -3,20 +3,26 @@ title: CUDA Mode - Fusing Kernels Talk
 description: >-
   Performance focussed talk on using torch.compile to generate fused kernels and learning triton along the way
 date: 2024-05-30
-categories: [Blog, Talk]
+categories: [Blog, Talk, DevLog]
 tags: [Python, Machine Learning, AI, RecSys, Performance, Pytorch]
 pin: true
+math: true
 author: ks
 ---
 
-## Talk and Abstract
+## Talk
 
 With focus on performance to get the most out of hardware, fusing of kernels has been a popular technique. At times, researchers/practitioners will re-write their code in native cuda or cpu kernels to get optimal performance, but projects such as torch.compile aim to make this simpler. Talk will focus on generating fused kernels and how to leverage torch.compile to be able to do that. We will work on creating fused kernels (triton and cuda) with the help of `torch.compile`. Here is the link to the talk:
 
 {% include embed/youtube.html id='m6BSREnQ84U' %}
 
+## Overview
 
-## How is the talk structured
+This blog post wont describe the talk in detail but will provide a high level structure of the talk. Do not expect a lot of explanations in the post - listen to the talk to follow along.
+
+The talk is structured as follows:
+
+### How is the talk structured
 
 - Dive into DLRM (open source deep rec sys model)
 - Build it from scrarch
@@ -29,18 +35,17 @@ With focus on performance to get the most out of hardware, fusing of kernels has
 
 ### Code and other artifacts
 
-- Lecture code: https://github.com/kapilsh/cuda-mode-lecture
-- How to open chrome trace: chrome://tracing
-- DLRM Blog Post: https://ai.meta.com/blog/dlrm-an-advanced-open-source-deep-learning-recommendation-model/
-- DLRM Paper: https://arxiv.org/pdf/1906.00091
-- DLRM github repo: https://github.com/facebookresearch/dlrm
-- Criteo Dataset: https://ailab.criteo.com/download-criteo-1tb-click-logs-dataset/
+- [Lecture code](https://github.com/kapilsh/cuda-mode-lecture)
+- How to open chrome trace: `chrome://tracing`
+- [DLRM Blog Post](https://ai.meta.com/blog/dlrm-an-advanced-open-source-deep-learning-recommendation-model/)
+- [DLRM Paper](https://arxiv.org/pdf/1906.00091)
+- [DLRM github repo](https://github.com/facebookresearch/dlrm)
+- [Criteo Dataset](https://ailab.criteo.com/download-criteo-1tb-click-logs-dataset/)
 - [Pytorch Profiler with Tensorboard](https://pytorch.org/tutorials/intermediate/tensorboard_profiler_tutorial.html?source=post_page-----2cb7e0fef30e--------------------------------)
 - [TORCH_LOGS with torch.compile](https://pytorch.org/tutorials/recipes/torch_logs.html#beta-using-torch-logs-python-api-with-torch-compile)
-- LoRA Paper: https://arxiv.org/abs/2106.09685
-- LoRA from scratch: https://lightning.ai/lightning-ai/studios/code-lora-from-scratch
-- Netron: https://netron.app/
-- GPUs go brrr https://horace.io/brrr_intro.html
+- [LoRA Paper](https://arxiv.org/abs/2106.09685)
+- [LoRA from scratch](https://lightning.ai/lightning-ai/studios/code-lora-from-scratch)
+- [GPUs go brrr](https://horace.io/brrr_intro.html)
 
 
 ### DLRM (Deep Learning Recommendation Model)
@@ -63,7 +68,7 @@ With focus on performance to get the most out of hardware, fusing of kernels has
 - S Sparse Features
 - E Embedding Dimension on average
 
-Interaction: O((D * S * E) ^ 2)
+Interaction: $O((D \cdot S \cdot E) ^ 2)$
 
 ### Criteo Dataset
 
@@ -72,8 +77,11 @@ Interaction: O((D * S * E) ^ 2)
 - 26 anonymized categorical features
 - Corresponding Kaggle competition: https://www.kaggle.com/c/criteo-display-ad-challenge
 
-# Exploring DLRM
+## Exploring DLRM
 
+Next, we explore the DLRM model and build it from scratch. We will go through the model architecture and build the model in PyTorch. We will also go through the Criteo dataset and run a batch through our model.
+
+### Data Loader
 
 ```python
 import json
@@ -90,16 +98,10 @@ from torch.utils.data import DataLoader
 
 from criteo_dataset import CriteoParquetDataset
 from model import DenseArch, read_metadata, SparseArch, DenseSparseInteractionLayer, PredictionLayer, Parameters, DLRM
-```
 
-
-```python
 file_path = "/assets/data/sample_criteo_data.parquet"
 metadata_path = "/assets/data/sample_criteo_metadata.json"
-```
 
-
-```python
 logger.info("Reading the parquet file {}...".format(file_path))
 logger.info("Reading the metadata file {}...".format(metadata_path))
 
@@ -109,53 +111,41 @@ labels, dense, sparse = next(iter(data_loader))
 logger.info("Labels size: {}".format(labels.size()))
 logger.info("Dense size: {}".format(dense.size()))
 logger.info("Sparse size: {}".format(sparse.size()))
+
+print(dense)
+
+print(sparse)
 ```
 
-    2024-05-11 14:08:50.248 | INFO     | __main__:<module>:1 - Reading the parquet file /assets/data/sample_criteo_data.parquet...
-    2024-05-11 14:08:50.248 | INFO     | __main__:<module>:2 - Reading the metadata file /assets/data/sample_criteo_metadata.json...
-    2024-05-11 14:08:51.393 | INFO     | __main__:<module>:7 - Labels size: torch.Size([2])
-    2024-05-11 14:08:51.394 | INFO     | __main__:<module>:8 - Dense size: torch.Size([2, 13])
-    2024-05-11 14:08:51.394 | INFO     | __main__:<module>:9 - Sparse size: torch.Size([2, 26])
+```
+2024-05-11 14:08:50.248 | INFO     | __main__:<module>:1 - Reading the parquet file /assets/data/sample_criteo_data.parquet...
+2024-05-11 14:08:50.248 | INFO     | __main__:<module>:2 - Reading the metadata file /assets/data/sample_criteo_metadata.json...
+2024-05-11 14:08:51.393 | INFO     | __main__:<module>:7 - Labels size: torch.Size([2])
+2024-05-11 14:08:51.394 | INFO     | __main__:<module>:8 - Dense size: torch.Size([2, 13])
+2024-05-11 14:08:51.394 | INFO     | __main__:<module>:9 - Sparse size: torch.Size([2, 26])
 
-
-
-```python
-dense
+tensor([[5.0000e+00, 1.1000e+02, 0.0000e+00, 1.6000e+01, 0.0000e+00, 1.0000e+00,
+         0.0000e+00, 1.4000e+01, 7.0000e+00, 1.0000e+00, 0.0000e+00, 3.0600e+02,
+         0.0000e+00],
+        [3.2000e+01, 3.0000e+00, 5.0000e+00, 0.0000e+00, 1.0000e+00, 0.0000e+00,
+         0.0000e+00, 6.1000e+01, 5.0000e+00, 0.0000e+00, 1.0000e+00, 3.1570e+03,
+         5.0000e+00]])
+         
+tensor([[1651969401, 3793706328, 2951365679, 2489089999,  951068488, 1875733963,
+          897624609,  679512323, 1189011366,  771915201,  209470001, 2509774111,
+           12976055, 3192841527, 2316006604, 1289502458, 3523761834, 3088518074,
+         2501034507, 3280875304,  351689309,  632402057, 3619814411, 2091868316,
+          809724924, 3977271069],
+        [3857972621, 2695561126, 1873417685, 3666490401, 1020698403, 1875733963,
+         2870406529, 1128426537,  502653268, 2112471209, 1716706404, 2582335015,
+           12976055, 3192841527, 4089183897, 1289502458, 3523761834, 2716538129,
+         2501034507, 4273985635, 2737978529, 3370249814,  391309800, 1966410890,
+         2568167914, 3075991895]])
 ```
 
+### Dense Layer
 
-
-
-    tensor([[5.0000e+00, 1.1000e+02, 0.0000e+00, 1.6000e+01, 0.0000e+00, 1.0000e+00,
-             0.0000e+00, 1.4000e+01, 7.0000e+00, 1.0000e+00, 0.0000e+00, 3.0600e+02,
-             0.0000e+00],
-            [3.2000e+01, 3.0000e+00, 5.0000e+00, 0.0000e+00, 1.0000e+00, 0.0000e+00,
-             0.0000e+00, 6.1000e+01, 5.0000e+00, 0.0000e+00, 1.0000e+00, 3.1570e+03,
-             5.0000e+00]])
-
-
-
-
-```python
-sparse
-```
-
-
-
-
-    tensor([[1651969401, 3793706328, 2951365679, 2489089999,  951068488, 1875733963,
-              897624609,  679512323, 1189011366,  771915201,  209470001, 2509774111,
-               12976055, 3192841527, 2316006604, 1289502458, 3523761834, 3088518074,
-             2501034507, 3280875304,  351689309,  632402057, 3619814411, 2091868316,
-              809724924, 3977271069],
-            [3857972621, 2695561126, 1873417685, 3666490401, 1020698403, 1875733963,
-             2870406529, 1128426537,  502653268, 2112471209, 1716706404, 2582335015,
-               12976055, 3192841527, 4089183897, 1289502458, 3523761834, 2716538129,
-             2501034507, 4273985635, 2737978529, 3370249814,  391309800, 1966410890,
-             2568167914, 3075991895]])
-
-
-
+Dense features are passed through a dense MLP layer.
 
 ```python
 dense_mlp_out_size = 16
@@ -168,22 +158,21 @@ logger.info("Dense out size: {}".format(dense_out.size()))
 dense_out
 ```
 
-    2024-05-11 14:08:51.416 | INFO     | __main__:<module>:7 - Dense out size: torch.Size([2, 16])
+```
+2024-05-11 14:08:51.416 | INFO     | __main__:<module>:7 - Dense out size: torch.Size([2, 16])
 
+tensor([[  11.6451,    3.0189,  -48.5918,  -32.3807,  -55.1242,  -52.7222,
+           14.9740,    4.7447,  -41.9140,   33.3978,   18.6538,    2.1335,
+           25.8962,   18.2281,  -29.6636,   -3.0227],
+        [ 146.8453,   13.4556, -391.1624, -245.9999, -422.9316, -344.2513,
+          188.1155,   73.1228, -326.0069,  204.1690,  256.8700,   -5.2064,
+          201.7352,   31.4574, -243.0708,  -97.3927]],
+       grad_fn=<AddmmBackward0>)
+```
 
+### Sparse Layer
 
-
-
-    tensor([[  11.6451,    3.0189,  -48.5918,  -32.3807,  -55.1242,  -52.7222,
-               14.9740,    4.7447,  -41.9140,   33.3978,   18.6538,    2.1335,
-               25.8962,   18.2281,  -29.6636,   -3.0227],
-            [ 146.8453,   13.4556, -391.1624, -245.9999, -422.9316, -344.2513,
-              188.1155,   73.1228, -326.0069,  204.1690,  256.8700,   -5.2064,
-              201.7352,   31.4574, -243.0708,  -97.3927]],
-           grad_fn=<AddmmBackward0>)
-
-
-
+Sparse features are passed through embedding layers.
 
 ```python
 metadata = read_metadata(metadata_path)
@@ -200,45 +189,45 @@ for v in sparse_out:
 sparse_out[0]
 ```
 
-    2024-05-11 14:08:53.235 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.236 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.236 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.237 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.237 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.237 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.238 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.238 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.239 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.240 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.240 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.240 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.241 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.241 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.242 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.242 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.242 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.243 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.243 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.243 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.244 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.244 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.245 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.245 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.245 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
-    2024-05-11 14:08:53.246 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+```
+2024-05-11 14:08:53.235 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.236 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.236 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.237 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.237 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.237 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.238 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.238 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.239 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.240 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.240 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.240 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.241 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.241 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.242 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.242 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.242 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.243 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.243 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.243 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.244 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.244 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.245 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.245 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.245 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
+2024-05-11 14:08:53.246 | INFO     | __main__:<module>:11 - Sparse out size: torch.Size([2, 16])
 
+tensor([[-2.0452,  0.7938, -0.0607, -1.4266,  0.2772,  0.9912, -0.3738,  0.4863,
+          0.6430,  0.3728, -0.6082, -1.2793, -0.7943,  0.5326,  0.8906,  0.1647],
+        [-0.5692,  0.4912,  1.3526, -1.4923, -1.5862, -0.2653, -0.0764, -0.3848,
+          0.1008,  1.2955, -1.6488,  1.4038, -1.6606, -2.0017, -0.7786,  0.1461]],
+       grad_fn=<EmbeddingBackward0>)
 
+```
 
+### Interaction Layer
 
-
-    tensor([[-2.0452,  0.7938, -0.0607, -1.4266,  0.2772,  0.9912, -0.3738,  0.4863,
-              0.6430,  0.3728, -0.6082, -1.2793, -0.7943,  0.5326,  0.8906,  0.1647],
-            [-0.5692,  0.4912,  1.3526, -1.4923, -1.5862, -0.2653, -0.0764, -0.3848,
-              0.1008,  1.2955, -1.6488,  1.4038, -1.6606, -2.0017, -0.7786,  0.1461]],
-           grad_fn=<EmbeddingBackward0>)
-
-
-
+Dense and sparse features are combined in the interaction layer.
 
 ```python
 dense_sparse_interaction_layer = DenseSparseInteractionLayer()
@@ -246,20 +235,18 @@ ds_out = dense_sparse_interaction_layer(dense_out, sparse_out)
 logger.info("Dense sparse interaction out size: {}".format(ds_out.size()))
 ds_out
 ```
+```
+2024-05-11 14:08:53.253 | INFO     | __main__:<module>:3 - Dense sparse interaction out size: torch.Size([2, 186624])
 
-    2024-05-11 14:08:53.253 | INFO     | __main__:<module>:3 - Dense sparse interaction out size: torch.Size([2, 186624])
+tensor([[ 1.3561e+02,  3.5155e+01, -5.6586e+02,  ...,  7.5871e-01,
+         -1.5478e-01,  5.0601e-01],
+        [ 2.1564e+04,  1.9759e+03, -5.7440e+04,  ..., -7.6579e-02,
+          2.4089e-01,  5.5938e-01]], grad_fn=<ViewBackward0>)
+```
 
+### Prediction Layer
 
-
-
-
-    tensor([[ 1.3561e+02,  3.5155e+01, -5.6586e+02,  ...,  7.5871e-01,
-             -1.5478e-01,  5.0601e-01],
-            [ 2.1564e+04,  1.9759e+03, -5.7440e+04,  ..., -7.6579e-02,
-              2.4089e-01,  5.5938e-01]], grad_fn=<ViewBackward0>)
-
-
-
+In prediction layer, we take the output from the interaction layer and pass it through a dense MLP layer and a sigmoid activation function to get the final prediction.
 
 ```python
 prediction_layer = PredictionLayer(dense_out_size=dense_mlp_out_size,
@@ -275,21 +262,25 @@ logger.info("Prediction out value: {}".format(pred_out))
             [1.0000]], grad_fn=<SigmoidBackward0>)
 
 
-# Model Graph
-
 ## Model Graph
+
+## ONNX Model Export
 
 ![Model Graph](/assets/data/model_graph.png)
 
-# Profiling
+## Profiling
 
 ### Initial Setup: Simple 2 layered MLP used for each triangle
 
 ### Baseline
 
-> python model_train.py --config ./model_hyperparameters_small.json
+```shell
+python model_train.py --config ./model_hyperparameters_small.json
+```
 
 ### Initial Distribution - Naive Implementation of index_hash
+
+
 
 ```
 ...
@@ -310,7 +301,9 @@ if input_tensor.is_cuda:
 
 ### Using tensorboard for high level info
 
-> tensorboard --logdir tb_logs --bind_all
+```shell
+tensorboard --logdir tb_logs --bind_all
+```
 
 
 <img src="/assets/perf_screenshots/summary_initial_index_hash.png" width="800"/>
@@ -330,7 +323,9 @@ if input_tensor.is_cuda:
 
 ### After passing `CUDA_LAUNCH_BLOCKING=1`
 
-> CUDA_LAUNCH_BLOCKING=1 python model_train.py --config ./model_hyperparameters_small.json
+```shell
+CUDA_LAUNCH_BLOCKING=1 python model_train.py --config ./model_hyperparameters_small.json
+```
 
 <img src="/assets/perf_screenshots/summary_initial_cuda_launch_blocking.png" width="800"/>
 
@@ -343,7 +338,8 @@ model_hyperparameters_initial.1714869603606159866.pt.trace.json
 ![Initial Index Hash Profile](/assets/perf_screenshots/index_hash_profile_1.png)
 *Profile initial index hash implementation*
 
-
+> `_forward_index_hash` is taking a lot of time
+{: .prompt-warning}
 
 ### Improvements
 
@@ -355,9 +351,6 @@ self.mapping = [torch.tensor(metadata[f"SPARSE_{i}"]["tokenizer_values"], device
 # in forward - dont use reshape if you can avoid
 tokenizers = tokenizer_values.view(1, -1)
 ```
-
-Ref Trace: model_hyperparameters_initial.1714870277384855181.pt.trace.json
-
 
 <img src="/assets/perf_screenshots/improve_index_hash.png" width="800"/>
 
@@ -375,7 +368,7 @@ Ref Trace: model_hyperparameters_initial.1714870277384855181.pt.trace.json
 
 ### Using Modulus Hash
 
-```
+```python
 def modulus_hash(tensor: torch.Tensor, cardinality: torch.Tensor):
     return (tensor + 1) % cardinality
 ```
@@ -385,26 +378,27 @@ def modulus_hash(tensor: torch.Tensor, cardinality: torch.Tensor):
 
 *Pytorch Profiler trace for optimized modulus hash*
 
-
-# torch.compile
+> Hashing is not the bottleneck anymore
+{: .prompt-info}
 
 ##  torch.compile DLRM
 
-> TORCH_COMPILE_DEBUG_DIR=/home/ksharma/logs TORCH_LOGS=recompiles,+dynamo,inductor,guards,graph_breaks python model.py
-
-> CUDA_LAUNCH_BLOCKING=1 python model_train.py
+```shell
+TORCH_COMPILE_DEBUG_DIR=/home/ksharma/logs TORCH_LOGS=recompiles,+dynamo,inductor,guards,graph_breaks python model.py
+CUDA_LAUNCH_BLOCKING=1 python model_train.py
+```
 
 - GPU utilization goes up
 - memory footprint goes down
 
-## Memory Footprint
+### Memory Footprint
 
-### Pre `torch.compile`
+#### Pre `torch.compile`
 
 <img src="/assets/perf_screenshots/pre_torch_compile_initial.png" width="800"/>
 
 
-### Post `torch.compile`
+#### Post `torch.compile`
 
 <img src="/assets/perf_screenshots/post_torch_compile_initial.png" width="800"/>
 
@@ -424,11 +418,10 @@ def modulus_hash(tensor: torch.Tensor, cardinality: torch.Tensor):
 
 ### Increase complexity
 
-Source: https://ai.meta.com/blog/dlrm-an-advanced-open-source-deep-learning-recommendation-model/
-
-```shell
-python dlrm_s_pytorch.py --arch-sparse-feature-size=16 --arch-mlp-bot="13-512-256-64-16" --arch-mlp-top="512-256-1" --data-generation=dataset --data-set=kaggle --processed-data-file=./input/kaggle_processed.npz --loss-function=bce --round-targets=True --learning-rate=0.1 --mini-batch-size=128 --print-freq=1024 --print-time
-```
+> Source: [DLRM BLog](https://ai.meta.com/blog/dlrm-an-advanced-open-source-deep-learning-recommendation-model/)
+> 
+> `python dlrm_s_pytorch.py --arch-sparse-feature-size=16 --arch-mlp-bot="13-512-256-64-16" --arch-mlp-top="512-256-1" --data-generation=dataset --data-set=kaggle --processed-data-file=./input/kaggle_processed.npz --loss-function=bce --round-targets=True --learning-rate=0.1 --mini-batch-size=128 --print-freq=1024 --print-time`
+{: .prompt-info}
 
 ### Let's change the model architecture
 
@@ -452,13 +445,15 @@ python dlrm_s_pytorch.py --arch-sparse-feature-size=16 --arch-mlp-bot="13-512-25
 
 *Full `torch.compile` Model - Pytorch Profiler trace*
 
-# torch.compile -> triton code generation
-
-How do we see what is going on with the triton kernels
-
 ## Generate triton code
 
-> `TORCH_LOGS=output_code CUDA_LAUNCH_BLOCKING=1 python model_train.py --config ./model_hyperparameters_main.json --use_torch_compile`
+How do we see what is going on with the triton kernels?
+
+To generate triton code for compiled model, we can use the following command:
+
+```shell
+TORCH_LOGS=output_code CUDA_LAUNCH_BLOCKING=1 python model_train.py --config ./model_hyperparameters_main.json --use_torch_compile
+```
 
 ## Inspect
 
@@ -475,7 +470,7 @@ How do we see what is going on with the triton kernels
 
 ## Write our own
 
-### Kernel
+### Annotated Triton Kernel
 
 ```python
 @triton.jit
@@ -511,7 +506,6 @@ def pointwise_add_relu_fusion_512(in_out_ptr0, in_ptr0, XBLOCK : tl.constexpr):
 ```
 
 ### Test
-
 
 ```python
 import triton
@@ -550,20 +544,22 @@ print(X)
 torch.testing.assert_close(X, eager_result, rtol=1e-4, atol=1e-4)
 ```
 
-    tensor([[1., 1., 1.],
-            [1., 1., 1.],
-            [1., 1., 1.]], device='cuda:0')
-    tensor([1., 1., 1.], device='cuda:0')
-    tensor([[2., 2., 2.],
-            [2., 2., 2.],
-            [2., 2., 2.]], device='cuda:0')
-    tensor([[2., 2., 2.,  ..., 2., 2., 2.],
-            [2., 2., 2.,  ..., 2., 2., 2.],
-            [2., 2., 2.,  ..., 2., 2., 2.],
-            ...,
-            [2., 2., 2.,  ..., 2., 2., 2.],
-            [2., 2., 2.,  ..., 2., 2., 2.],
-            [2., 2., 2.,  ..., 2., 2., 2.]], device='cuda:0')
+```
+tensor([[1., 1., 1.],
+        [1., 1., 1.],
+        [1., 1., 1.]], device='cuda:0')
+tensor([1., 1., 1.], device='cuda:0')
+tensor([[2., 2., 2.],
+        [2., 2., 2.],
+        [2., 2., 2.]], device='cuda:0')
+tensor([[2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        ...,
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.]], device='cuda:0')
+```
 
 
 ## Cuda Kernel
@@ -602,149 +598,105 @@ __global__ void pointwise_add_relu_fusion_512(float* in_out_ptr0, const float* i
 ### Let's run the generated CUDA kernel
 
 > NOTE: To run torch native, you can download it as below or add conda environment to $CMAKE_PREFIX_PATH
+{: .prompt-info}
 
-```
+```shell
 wget https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.2.1%2Bcu121.zip # Download torch native lib
 ```
 
 ### Build the cmake project
 
 
-```python
-! mkdir -p kernels/cmake-build-debug && cd kernels/cmake-build-debug && cmake .. -G Ninja && ninja
+```shell
+mkdir -p kernels/cmake-build-debug && cd kernels/cmake-build-debug && cmake .. -G Ninja && ninja
+```
+```
+-- CMake version: 3.22.1
+-- Caffe2: CUDA detected: 12.1
+-- Caffe2: CUDA nvcc is: /home/ksharma/anaconda3/envs/cuda-learn/bin/nvcc
+-- Caffe2: CUDA toolkit directory: /home/ksharma/anaconda3/envs/cuda-learn
+-- Caffe2: Header version is: 12.1
+-- /home/ksharma/anaconda3/envs/cuda-learn/lib/libnvrtc.so shorthash is c993a6f1
+-- USE_CUDNN is set to 0. Compiling without cuDNN support
+-- USE_CUSPARSELT is set to 0. Compiling without cuSPARSELt support
+-- Autodetected CUDA architecture(s):  7.5
+-- Added CUDA NVCC flags for: -gencode;arch=compute_75,code=sm_75
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/ksharma/dev/git/cuda-mode-lecture/kernels/cmake-build-debug
+...
+
 ```
 
-    -- CMake version: 3.22.1
-    -- Caffe2: CUDA detected: 12.1
-    -- Caffe2: CUDA nvcc is: /home/ksharma/anaconda3/envs/cuda-learn/bin/nvcc
-    -- Caffe2: CUDA toolkit directory: /home/ksharma/anaconda3/envs/cuda-learn
-    -- Caffe2: Header version is: 12.1
-    -- /home/ksharma/anaconda3/envs/cuda-learn/lib/libnvrtc.so shorthash is c993a6f1
-    -- USE_CUDNN is set to 0. Compiling without cuDNN support
-    -- USE_CUSPARSELT is set to 0. Compiling without cuSPARSELt support
-    -- Autodetected CUDA architecture(s):  7.5
-    -- Added CUDA NVCC flags for: -gencode;arch=compute_75,code=sm_75
-    -- Configuring done
-    -- Generating done
-    -- Build files have been written to: /home/ksharma/dev/git/cuda-mode-lecture/kernels/cmake-build-debug
-    ninja: no work to do.
 
 
-
-```python
-!./kernels/cmake-build-debug/dlrm_kernels_test
+```shell
+./kernels/cmake-build-debug/dlrm_kernels_test
 ```
-
-    Tensor x:
-    -0.9247 -0.4253 -2.6438  0.1452 -0.1209 -0.5797 -0.6229 -0.3284 -1.0745 -0.3631
-    -1.6711  2.2655  0.3117 -0.1842  1.2866  1.1820 -0.1271  1.2169  1.4353  1.0605
-    -0.4941 -1.4244 -0.7244 -1.2973  0.0697 -0.0074  1.8969  0.6878 -0.0779 -0.8373
-     1.3506 -0.2879 -0.5965 -0.3283 -0.9086 -0.8059 -0.7407 -0.0504  0.5435  1.5150
-     0.0141  0.4532  1.6349  0.7124 -0.1806  1.0252 -1.4622 -0.7554 -0.1836  0.3824
-     0.3918 -0.0830  0.8971 -1.1123  0.1116  0.4863 -0.5499 -0.3231 -0.5469  0.9049
-     0.2837  0.1210  0.4730 -1.0823 -0.0334 -0.9734  0.9559 -1.1795 -1.0064  0.1160
-     0.6852 -0.4124 -0.6738 -0.5404  0.6898 -1.5517  0.3805 -0.0436  0.3597 -0.5043
-    [ CUDAFloatType{8,10} ]
-    Tensor y:
-     0.1808
-    -0.5523
-     0.9238
-    -0.7350
-     1.3800
-     0.8676
-     0.1297
-    -0.9406
-     0.8109
-     0.8821
-    [ CUDAFloatType{10} ]
-    Expected:
-     0.0000  0.0000  0.0000  0.0000  1.2591  0.2879  0.0000  0.0000  0.0000  0.5189
-     0.0000  1.7132  1.2355  0.0000  2.6666  2.0496  0.0026  0.2763  2.2462  1.9425
-     0.0000  0.0000  0.1994  0.0000  1.4497  0.8602  2.0266  0.0000  0.7330  0.0448
-     1.5315  0.0000  0.3273  0.0000  0.4714  0.0617  0.0000  0.0000  1.3544  2.3971
-     0.1949  0.0000  2.5587  0.0000  1.1994  1.8929  0.0000  0.0000  0.6273  1.2644
-     0.5726  0.0000  1.8209  0.0000  1.4916  1.3539  0.0000  0.0000  0.2640  1.7869
-     0.4645  0.0000  1.3968  0.0000  1.3465  0.0000  1.0856  0.0000  0.0000  0.9980
-     0.8660  0.0000  0.2500  0.0000  2.0698  0.0000  0.5102  0.0000  1.1706  0.3778
-    [ CUDAFloatType{8,10} ]
-    Result:
-     0.0000  0.0000  0.0000  0.0000  1.2591  0.2879  0.0000  0.0000  0.0000  0.5189
-     0.0000  1.7132  1.2355  0.0000  2.6666  2.0496  0.0026  0.2763  2.2462  1.9425
-     0.0000  0.0000  0.1994  0.0000  1.4497  0.8602  2.0266  0.0000  0.7330  0.0448
-     1.5315  0.0000  0.3273  0.0000  0.4714  0.0617  0.0000  0.0000  1.3544  2.3971
-     0.1949  0.0000  2.5587  0.0000  1.1994  1.8929  0.0000  0.0000  0.6273  1.2644
-     0.5726  0.0000  1.8209  0.0000  1.4916  1.3539  0.0000  0.0000  0.2640  1.7869
-     0.4645  0.0000  1.3968  0.0000  1.3465  0.0000  1.0856  0.0000  0.0000  0.9980
-     0.8660  0.0000  0.2500  0.0000  2.0698  0.0000  0.5102  0.0000  1.1706  0.3778
-    [ CUDAFloatType{8,10} ]
-    All Match: true
+```
+Tensor x:
+-0.9247 -0.4253 -2.6438  0.1452 -0.1209 -0.5797 -0.6229 -0.3284 -1.0745 -0.3631
+-1.6711  2.2655  0.3117 -0.1842  1.2866  1.1820 -0.1271  1.2169  1.4353  1.0605
+-0.4941 -1.4244 -0.7244 -1.2973  0.0697 -0.0074  1.8969  0.6878 -0.0779 -0.8373
+ 1.3506 -0.2879 -0.5965 -0.3283 -0.9086 -0.8059 -0.7407 -0.0504  0.5435  1.5150
+ 0.0141  0.4532  1.6349  0.7124 -0.1806  1.0252 -1.4622 -0.7554 -0.1836  0.3824
+ 0.3918 -0.0830  0.8971 -1.1123  0.1116  0.4863 -0.5499 -0.3231 -0.5469  0.9049
+ 0.2837  0.1210  0.4730 -1.0823 -0.0334 -0.9734  0.9559 -1.1795 -1.0064  0.1160
+ 0.6852 -0.4124 -0.6738 -0.5404  0.6898 -1.5517  0.3805 -0.0436  0.3597 -0.5043
+[ CUDAFloatType{8,10} ]
+Tensor y:
+ 0.1808
+-0.5523
+ 0.9238
+-0.7350
+ 1.3800
+ 0.8676
+ 0.1297
+-0.9406
+ 0.8109
+ 0.8821
+[ CUDAFloatType{10} ]
+Expected:
+ 0.0000  0.0000  0.0000  0.0000  1.2591  0.2879  0.0000  0.0000  0.0000  0.5189
+ 0.0000  1.7132  1.2355  0.0000  2.6666  2.0496  0.0026  0.2763  2.2462  1.9425
+ 0.0000  0.0000  0.1994  0.0000  1.4497  0.8602  2.0266  0.0000  0.7330  0.0448
+ 1.5315  0.0000  0.3273  0.0000  0.4714  0.0617  0.0000  0.0000  1.3544  2.3971
+ 0.1949  0.0000  2.5587  0.0000  1.1994  1.8929  0.0000  0.0000  0.6273  1.2644
+ 0.5726  0.0000  1.8209  0.0000  1.4916  1.3539  0.0000  0.0000  0.2640  1.7869
+ 0.4645  0.0000  1.3968  0.0000  1.3465  0.0000  1.0856  0.0000  0.0000  0.9980
+ 0.8660  0.0000  0.2500  0.0000  2.0698  0.0000  0.5102  0.0000  1.1706  0.3778
+[ CUDAFloatType{8,10} ]
+Result:
+ 0.0000  0.0000  0.0000  0.0000  1.2591  0.2879  0.0000  0.0000  0.0000  0.5189
+ 0.0000  1.7132  1.2355  0.0000  2.6666  2.0496  0.0026  0.2763  2.2462  1.9425
+ 0.0000  0.0000  0.1994  0.0000  1.4497  0.8602  2.0266  0.0000  0.7330  0.0448
+ 1.5315  0.0000  0.3273  0.0000  0.4714  0.0617  0.0000  0.0000  1.3544  2.3971
+ 0.1949  0.0000  2.5587  0.0000  1.1994  1.8929  0.0000  0.0000  0.6273  1.2644
+ 0.5726  0.0000  1.8209  0.0000  1.4916  1.3539  0.0000  0.0000  0.2640  1.7869
+ 0.4645  0.0000  1.3968  0.0000  1.3465  0.0000  1.0856  0.0000  0.0000  0.9980
+ 0.8660  0.0000  0.2500  0.0000  2.0698  0.0000  0.5102  0.0000  1.1706  0.3778
+[ CUDAFloatType{8,10} ]
+All Match: true
+```
 
 
 ### (OR) Run it locally with pytorch utils
 
 
 ```python
+import torch
+from torch.utils.cpp_extension import load_inline
+
+
 cuda_code_file = "./kernels/src/pointwise_add_relu_fused.cu"
 header_code_file = "./kernels/src/pointwise_add_relu_fused.cuh"
 
 with open(cuda_code_file) as f:
     cuda_code = "".join([f for f in f.readlines() if not f.startswith("#include")])
-    print(cuda_code)
-
-print("----")
 
 with open(header_code_file) as f:
     header_code = "".join([f for f in f.readlines() if not f.startswith("#include")])
-    print(header_code)
-```
 
-
-
-    __global__ void add_relu_fusion_kernel(float* in_out_ptr0, const float* in_ptr0, const int xnumel ,const int XBLOCK) {
-        const int tid = threadIdx.x;
-        const int xoffset = blockIdx.x * XBLOCK;
-        const int xindex = xoffset + tid;
-        const bool xmask = xindex < xnumel;
-    
-        if (xmask) {
-            int x2 = xindex;
-            int x0 = xindex % XBLOCK;
-            float tmp0 = in_out_ptr0[x2];
-            float tmp1 = in_ptr0[x0];
-            float tmp2 = tmp0 + tmp1;
-            float tmp3 = max(0.0f, tmp2); // ReLU operation
-    
-            in_out_ptr0[x2] = tmp3;
-        }
-    }
-    
-    torch::Tensor add_relu_fusion(torch::Tensor in_out, const torch::Tensor& in) {
-        auto sizes = in_out.sizes();
-        auto XBLOCK = sizes[1];
-        auto numel = in_out.numel();
-        dim3 threadsPerBlock(XBLOCK);
-        dim3 numBlocks((numel + XBLOCK - 1) / XBLOCK);
-        add_relu_fusion_kernel<<<numBlocks, threadsPerBlock>>>(in_out.data_ptr<float>(), in.data_ptr<float>(), numel, XBLOCK);
-        cudaDeviceSynchronize();
-        return std::move(in_out);
-    }
-    ----
-    
-    torch::Tensor add_relu_fusion(torch::Tensor in_out, const torch::Tensor& in);
-
-
-
-```python
-!mkdir ./build
-```
-
-    mkdir: cannot create directory ‘./build’: File exists
-
-
-
-```python
-import torch
-from torch.utils.cpp_extension import load_inline
 
 cuda_extension = load_inline(
     name='kernel_extension',
@@ -758,38 +710,22 @@ cuda_extension = load_inline(
 )
 ```
 
-    Detected CUDA files, patching ldflags
-    Emitting ninja build file ./build/build.ninja...
-    Building extension module kernel_extension...
-    Allowing ninja to set a default number of workers... (overridable by setting the environment variable MAX_JOBS=N)
+```
+Detected CUDA files, patching ldflags
+Emitting ninja build file ./build/build.ninja...
+Building extension module kernel_extension...
+Allowing ninja to set a default number of workers... (overridable by setting the environment variable MAX_JOBS=N)
 
 
-    [1/3] c++ -MMD -MF main.o.d -DTORCH_EXTENSION_NAME=kernel_extension -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/TH -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/THC -isystem /home/ksharma/anaconda3/envs/cuda-learn/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/include/python3.11 -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC -std=c++17 -c /home/ksharma/dev/git/cuda-mode-lecture/build/main.cpp -o main.o 
-    [2/3] /home/ksharma/anaconda3/envs/cuda-learn/bin/nvcc --generate-dependencies-with-compile --dependency-output cuda.cuda.o.d -DTORCH_EXTENSION_NAME=kernel_extension -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/TH -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/THC -isystem /home/ksharma/anaconda3/envs/cuda-learn/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/include/python3.11 -D_GLIBCXX_USE_CXX11_ABI=0 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_75,code=sm_75 --compiler-options '-fPIC' -O2 -std=c++17 -c /home/ksharma/dev/git/cuda-mode-lecture/build/cuda.cu -o cuda.cuda.o 
-    [3/3] c++ main.o cuda.cuda.o -shared -L/home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/home/ksharma/anaconda3/envs/cuda-learn/lib -lcudart -o kernel_extension.so
+[1/3] c++ -MMD -MF main.o.d -DTORCH_EXTENSION_NAME=kernel_extension -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/TH -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/THC -isystem /home/ksharma/anaconda3/envs/cuda-learn/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/include/python3.11 -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC -std=c++17 -c /home/ksharma/dev/git/cuda-mode-lecture/build/main.cpp -o main.o 
+[2/3] /home/ksharma/anaconda3/envs/cuda-learn/bin/nvcc --generate-dependencies-with-compile --dependency-output cuda.cuda.o.d -DTORCH_EXTENSION_NAME=kernel_extension -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/TH -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/THC -isystem /home/ksharma/anaconda3/envs/cuda-learn/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/include/python3.11 -D_GLIBCXX_USE_CXX11_ABI=0 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_75,code=sm_75 --compiler-options '-fPIC' -O2 -std=c++17 -c /home/ksharma/dev/git/cuda-mode-lecture/build/cuda.cu -o cuda.cuda.o 
+[3/3] c++ main.o cuda.cuda.o -shared -L/home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/home/ksharma/anaconda3/envs/cuda-learn/lib -lcudart -o kernel_extension.so
 
 
-    Loading extension module kernel_extension...
-
-
-
-```python
-dir(cuda_extension)
+Loading extension module kernel_extension...
 ```
 
-
-
-
-    ['__doc__',
-     '__file__',
-     '__loader__',
-     '__name__',
-     '__package__',
-     '__spec__',
-     'add_relu_fusion']
-
-
-
+Let's run the generated extension
 
 ```python
 torch.cuda.set_device(0)  # no-op to ensure context
@@ -800,19 +736,19 @@ print(X)
 torch.testing.assert_close(X, eager_result, rtol=1e-4, atol=1e-4)
 ```
 
-    tensor([[2., 2., 2.,  ..., 2., 2., 2.],
-            [2., 2., 2.,  ..., 2., 2., 2.],
-            [2., 2., 2.,  ..., 2., 2., 2.],
-            ...,
-            [2., 2., 2.,  ..., 2., 2., 2.],
-            [2., 2., 2.,  ..., 2., 2., 2.],
-            [2., 2., 2.,  ..., 2., 2., 2.]], device='cuda:0')
+```
+tensor([[2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        ...,
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.]], device='cuda:0')
+```
 
 
-# `torch.compile` is your triton learning companion
 
-
-## Example: LoRA Fused Kernels
+## `torch.compile` is your triton learning companion : LoRA Fused Kernels
 
 ### LoRA (LOW-RANK ADAPTATION)
 
@@ -825,53 +761,51 @@ Source: https://arxiv.org/pdf/2106.09685
 
 ## Fused Kernels
 
-> `TORCH_LOGS=output_code CUDA_LAUNCH_BLOCKING=1 python lora_on_simple_mlp.py `
-
-
-```python
-from lora_on_simple_mlp import *
-from kernels.triton_fused_add_mul_relu import * 
+```
+TORCH_LOGS=output_code CUDA_LAUNCH_BLOCKING=1 python lora_on_simple_mlp.py
 ```
 
 ### [TRITON] Fused Mul Add Relu
 
-
 ```python
-print(triton.__version__)
+from lora_on_simple_mlp import *
+from kernels.triton_fused_add_mul_relu import * 
+
 in_out_tensor, in_tensor, bias = get_inputs(add_manual_seed=True)
 expected_output = torch.maximum(in_out_tensor + 0.5 * in_tensor + bias, torch.tensor(0., device='cuda'))
 print("Input", in_out_tensor)
 print("Expected Output", expected_output)
 ```
 
-    2.2.0
-    Input tensor([[-0.9247, -0.4253, -2.6438,  0.1452, -0.1209, -0.5797, -0.6229, -0.3284],
-            [-1.0745, -0.3631, -1.6711,  2.2655,  0.3117, -0.1842,  1.2866,  1.1820],
-            [-0.1271,  1.2169,  1.4353,  1.0605, -0.4941, -1.4244, -0.7244, -1.2973],
-            [ 0.0697, -0.0074,  1.8969,  0.6878, -0.0779, -0.8373,  1.3506, -0.2879],
-            [-0.5965, -0.3283, -0.9086, -0.8059, -0.7407, -0.0504,  0.5435,  1.5150],
-            [ 0.0141,  0.4532,  1.6349,  0.7124, -0.1806,  1.0252, -1.4622, -0.7554],
-            [-0.1836,  0.3824,  0.3918, -0.0830,  0.8971, -1.1123,  0.1116,  0.4863],
-            [-0.5499, -0.3231, -0.5469,  0.9049,  0.2837,  0.1210,  0.4730, -1.0823]],
-           device='cuda:0')
-    Expected Output tensor([[1.7098e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 6.7049e-01, 0.0000e+00,
-             3.4424e-01, 1.1223e-02],
-            [1.8750e+00, 0.0000e+00, 0.0000e+00, 2.2105e+00, 6.6808e-01, 0.0000e+00,
-             1.8445e+00, 1.9246e+00],
-            [2.2614e+00, 1.3964e+00, 5.1802e-01, 2.0114e+00, 0.0000e+00, 0.0000e+00,
-             2.7715e-01, 0.0000e+00],
-            [2.4750e+00, 0.0000e+00, 1.9079e+00, 5.4869e-01, 3.7923e-01, 0.0000e+00,
-             3.1791e+00, 6.6843e-01],
-            [1.8234e+00, 0.0000e+00, 1.1147e-01, 0.0000e+00, 0.0000e+00, 0.0000e+00,
-             2.4250e+00, 3.2593e+00],
-            [2.2903e+00, 0.0000e+00, 1.1721e+00, 6.9331e-01, 1.0583e+00, 6.7518e-01,
-             0.0000e+00, 2.6185e-01],
-            [1.5804e+00, 0.0000e+00, 9.0740e-01, 1.6670e-01, 5.5230e-02, 0.0000e+00,
-             1.5325e+00, 3.5984e-01],
-            [1.5554e+00, 0.0000e+00, 0.0000e+00, 9.4380e-01, 2.9795e-03, 7.4125e-02,
-             1.6286e+00, 0.0000e+00]], device='cuda:0')
+```
+Input tensor([[-0.9247, -0.4253, -2.6438,  0.1452, -0.1209, -0.5797, -0.6229, -0.3284],
+        [-1.0745, -0.3631, -1.6711,  2.2655,  0.3117, -0.1842,  1.2866,  1.1820],
+        [-0.1271,  1.2169,  1.4353,  1.0605, -0.4941, -1.4244, -0.7244, -1.2973],
+        [ 0.0697, -0.0074,  1.8969,  0.6878, -0.0779, -0.8373,  1.3506, -0.2879],
+        [-0.5965, -0.3283, -0.9086, -0.8059, -0.7407, -0.0504,  0.5435,  1.5150],
+        [ 0.0141,  0.4532,  1.6349,  0.7124, -0.1806,  1.0252, -1.4622, -0.7554],
+        [-0.1836,  0.3824,  0.3918, -0.0830,  0.8971, -1.1123,  0.1116,  0.4863],
+        [-0.5499, -0.3231, -0.5469,  0.9049,  0.2837,  0.1210,  0.4730, -1.0823]],
+       device='cuda:0')
+Expected Output tensor([[1.7098e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 6.7049e-01, 0.0000e+00,
+         3.4424e-01, 1.1223e-02],
+        [1.8750e+00, 0.0000e+00, 0.0000e+00, 2.2105e+00, 6.6808e-01, 0.0000e+00,
+         1.8445e+00, 1.9246e+00],
+        [2.2614e+00, 1.3964e+00, 5.1802e-01, 2.0114e+00, 0.0000e+00, 0.0000e+00,
+         2.7715e-01, 0.0000e+00],
+        [2.4750e+00, 0.0000e+00, 1.9079e+00, 5.4869e-01, 3.7923e-01, 0.0000e+00,
+         3.1791e+00, 6.6843e-01],
+        [1.8234e+00, 0.0000e+00, 1.1147e-01, 0.0000e+00, 0.0000e+00, 0.0000e+00,
+         2.4250e+00, 3.2593e+00],
+        [2.2903e+00, 0.0000e+00, 1.1721e+00, 6.9331e-01, 1.0583e+00, 6.7518e-01,
+         0.0000e+00, 2.6185e-01],
+        [1.5804e+00, 0.0000e+00, 9.0740e-01, 1.6670e-01, 5.5230e-02, 0.0000e+00,
+         1.5325e+00, 3.5984e-01],
+        [1.5554e+00, 0.0000e+00, 0.0000e+00, 9.4380e-01, 2.9795e-03, 7.4125e-02,
+         1.6286e+00, 0.0000e+00]], device='cuda:0')
+```
 
-
+Let's run sample inputs through the fused kernel and compare against the expected output
 
 ```python
 BLOCK_SIZE = 8
@@ -881,27 +815,11 @@ fused_add_mul_relu[grid](in_out_tensor,
                          in_tensor, 
                          in_out_tensor.numel(), 
                          BLOCK_SIZE=BLOCK_SIZE)
-print("Output 1", in_out_tensor)
 torch.testing.assert_close(in_out_tensor, expected_output, rtol=1e-4, atol=1e-4)
 ```
 
-    Output 1 tensor([[1.7098e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 6.7049e-01, 0.0000e+00,
-             3.4424e-01, 1.1223e-02],
-            [1.8750e+00, 0.0000e+00, 0.0000e+00, 2.2105e+00, 6.6808e-01, 0.0000e+00,
-             1.8445e+00, 1.9246e+00],
-            [2.2614e+00, 1.3964e+00, 5.1802e-01, 2.0114e+00, 0.0000e+00, 0.0000e+00,
-             2.7715e-01, 0.0000e+00],
-            [2.4750e+00, 0.0000e+00, 1.9079e+00, 5.4869e-01, 3.7923e-01, 0.0000e+00,
-             3.1791e+00, 6.6843e-01],
-            [1.8234e+00, 0.0000e+00, 1.1147e-01, 0.0000e+00, 0.0000e+00, 0.0000e+00,
-             2.4250e+00, 3.2593e+00],
-            [2.2903e+00, 0.0000e+00, 1.1721e+00, 6.9331e-01, 1.0583e+00, 6.7518e-01,
-             0.0000e+00, 2.6185e-01],
-            [1.5804e+00, 0.0000e+00, 9.0740e-01, 1.6670e-01, 5.5230e-02, 0.0000e+00,
-             1.5325e+00, 3.5984e-01],
-            [1.5554e+00, 0.0000e+00, 0.0000e+00, 9.4380e-01, 2.9795e-03, 7.4125e-02,
-             1.6286e+00, 0.0000e+00]], device='cuda:0')
 
+Let's test the cleaner version of the kernel
 
 
 ```python
@@ -914,152 +832,59 @@ fused_add_mul_relu_cleaner[grid](in_out_tensor,
                                  in_out_tensor.numel(), 
                                  multiplier=0.5,
                                  BLOCK_SIZE=BLOCK_SIZE)
-print("Output 2", in_out_tensor)
 torch.testing.assert_close(in_out_tensor, expected_output, rtol=1e-4, atol=1e-4)
 ```
-
-    Output 2 tensor([[1.7098e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 6.7049e-01, 0.0000e+00,
-             3.4424e-01, 1.1223e-02],
-            [1.8750e+00, 0.0000e+00, 0.0000e+00, 2.2105e+00, 6.6808e-01, 0.0000e+00,
-             1.8445e+00, 1.9246e+00],
-            [2.2614e+00, 1.3964e+00, 5.1802e-01, 2.0114e+00, 0.0000e+00, 0.0000e+00,
-             2.7715e-01, 0.0000e+00],
-            [2.4750e+00, 0.0000e+00, 1.9079e+00, 5.4869e-01, 3.7923e-01, 0.0000e+00,
-             3.1791e+00, 6.6843e-01],
-            [1.8234e+00, 0.0000e+00, 1.1147e-01, 0.0000e+00, 0.0000e+00, 0.0000e+00,
-             2.4250e+00, 3.2593e+00],
-            [2.2903e+00, 0.0000e+00, 1.1721e+00, 6.9331e-01, 1.0583e+00, 6.7518e-01,
-             0.0000e+00, 2.6185e-01],
-            [1.5804e+00, 0.0000e+00, 9.0740e-01, 1.6670e-01, 5.5230e-02, 0.0000e+00,
-             1.5325e+00, 3.5984e-01],
-            [1.5554e+00, 0.0000e+00, 0.0000e+00, 9.4380e-01, 2.9795e-03, 7.4125e-02,
-             1.6286e+00, 0.0000e+00]], device='cuda:0')
 
 
 ### [CUDA] Fused Mul Add Relu
 
+As previously, we can generate the cuda kernel for the fused mul add relu kernel using ChatGPT
 
-```python
-cuda_code_file = "./kernels/src/fused_kernels_lora_on_mlp.cu"
-header_code_file = "./kernels/src/fused_kernels_lora_on_mlp.cuh"
+```cuda
+__global__ void fused_add_mul_relu_kernel(float *dense_in_out_ptr,
+                                          const float *scalar_ptr,
+                                          const float *dense_ptr,
+                                          const int num_weights,
+                                          const int xnumel,
+                                          const double multiplier) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < xnumel) {
+        int scalar_index = index % num_weights;
+        float tmp0 = dense_in_out_ptr[index];
+        float tmp1 = scalar_ptr[scalar_index];
+        float tmp3 = dense_ptr[index];
+        float ma_result = max(0.0f, multiplier * tmp3 + tmp0 + tmp1);
+        dense_in_out_ptr[index] = ma_result;
+    }
+}
 
-with open(cuda_code_file) as f:
-    cuda_code = "".join([f for f in f.readlines() if not f.startswith("#include")])
-    print(cuda_code)
+torch::Tensor fused_add_mul_relu(torch::Tensor in_out,
+                                 const torch::Tensor &bias,
+                                 const torch::Tensor &in,
+                                 const double multiplier) {
+    auto numel = in_out.numel();
+    auto sizes = in_out.sizes();
+    const int XBLOCK = sizes[0];
+    dim3 threadsPerBlock(sizes[1]);
+    dim3 numBlocks((numel + XBLOCK - 1) / XBLOCK);
+    fused_add_mul_relu_kernel<<<numBlocks, threadsPerBlock>>>(
+            in_out.data_ptr<float>(),
+            bias.data_ptr<float>(),
+            in.data_ptr<float>(),
+            sizes[1],
+            numel,
+            multiplier);
+    cudaDeviceSynchronize();
+    return std::move(in_out);
+}
 
-print("----")
-
-with open(header_code_file) as f:
-    header_code = "".join([f for f in f.readlines() if not f.startswith("#include")])
-    print(header_code)
+torch::Tensor fused_add_mul_relu(torch::Tensor in_out,
+                                 const torch::Tensor &bias,
+                                 const torch::Tensor &in,
+                                 const double multiplier);
 ```
 
-
-
-    __global__ void fused_add_mul_relu_kernel(float *dense_in_out_ptr,
-                                              const float *scalar_ptr,
-                                              const float *dense_ptr,
-                                              const int num_weights,
-                                              const int xnumel,
-                                              const double multiplier) {
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        if (index < xnumel) {
-            int scalar_index = index % num_weights;
-            float tmp0 = dense_in_out_ptr[index];
-            float tmp1 = scalar_ptr[scalar_index];
-            float tmp3 = dense_ptr[index];
-            float ma_result = max(0.0f, multiplier * tmp3 + tmp0 + tmp1);
-            dense_in_out_ptr[index] = ma_result;
-        }
-    }
-    
-    torch::Tensor fused_add_mul_relu(torch::Tensor in_out,
-                                     const torch::Tensor &bias,
-                                     const torch::Tensor &in,
-                                     const double multiplier) {
-        auto numel = in_out.numel();
-        auto sizes = in_out.sizes();
-        const int XBLOCK = sizes[0];
-        dim3 threadsPerBlock(sizes[1]);
-        dim3 numBlocks((numel + XBLOCK - 1) / XBLOCK);
-        fused_add_mul_relu_kernel<<<numBlocks, threadsPerBlock>>>(
-                in_out.data_ptr<float>(),
-                bias.data_ptr<float>(),
-                in.data_ptr<float>(),
-                sizes[1],
-                numel,
-                multiplier);
-        cudaDeviceSynchronize();
-        return std::move(in_out);
-    }
-    ----
-    
-    torch::Tensor fused_add_mul_relu(torch::Tensor in_out,
-                                     const torch::Tensor &bias,
-                                     const torch::Tensor &in,
-                                     const double multiplier);
-
-
-
-```python
-! ./kernels/cmake-build-debug/fused_kernels_lora_test
-```
-
-    Tensor x:
-    -0.9247 -0.4253 -2.6438  0.1452 -0.1209 -0.5797 -0.6229 -0.3284 -1.0745 -0.3631
-    -1.6711  2.2655  0.3117 -0.1842  1.2866  1.1820 -0.1271  1.2169  1.4353  1.0605
-    -0.4941 -1.4244 -0.7244 -1.2973  0.0697 -0.0074  1.8969  0.6878 -0.0779 -0.8373
-     1.3506 -0.2879 -0.5965 -0.3283 -0.9086 -0.8059 -0.7407 -0.0504  0.5435  1.5150
-     0.0141  0.4532  1.6349  0.7124 -0.1806  1.0252 -1.4622 -0.7554 -0.1836  0.3824
-     0.3918 -0.0830  0.8971 -1.1123  0.1116  0.4863 -0.5499 -0.3231 -0.5469  0.9049
-     0.2837  0.1210  0.4730 -1.0823 -0.0334 -0.9734  0.9559 -1.1795 -1.0064  0.1160
-     0.6852 -0.4124 -0.6738 -0.5404  0.6898 -1.5517  0.3805 -0.0436  0.3597 -0.5043
-    [ CUDAFloatType{8,10} ]
-    Tensor bias:
-     0.1808
-    -0.5523
-     0.9238
-    -0.7350
-     1.3800
-     0.8676
-     0.1297
-    -0.9406
-     0.8109
-     0.8821
-    [ CUDAFloatType{10} ]
-    Tensor y:
-     2.5441 -0.7163 -0.4934  0.1267  0.1014 -0.4035  0.9023  0.8099 -0.6884  0.1372
-     1.0377  0.0925 -0.3752 -0.0908  2.0639 -1.8164 -0.2719  0.2811 -1.0399  0.7765
-     0.8814  0.0444 -1.4870  1.1334  1.3268 -1.2616  0.9501 -0.6558  0.9098 -0.6290
-    -0.6587  2.0811  1.4151 -0.3091 -0.2055  2.0562 -0.0490 -0.6361 -0.5359 -0.1310
-    -0.2945  1.2275  1.0549  0.3576  1.6378 -0.2310  0.7883 -0.0807 -0.3924  1.2673
-     1.0420 -0.4945 -1.1637  1.5740  0.7116  0.6104  1.2852 -0.6533  1.1171 -1.0067
-     1.2912  1.6028  0.1332  1.0703 -1.1161 -0.8396 -3.6680  0.8189  0.1255 -0.7691
-     0.1552 -0.8782 -0.4734  0.9690 -1.9985  0.1030  0.8580  0.7625 -1.2587 -0.8183
-    [ CUDAFloatType{8,10} ]
-    Expected:
-     5.1076  0.0000  0.0000  0.0000  1.4922  0.0000  1.5820  0.5938  0.0000  0.8346
-     0.8966  1.9261  0.3726  0.0000  7.4136  0.0000  0.0000  0.9228  0.0000  3.7285
-     1.7140  0.0000  0.0000  0.5746  4.5014  0.0000  4.2118  0.0000  2.8254  0.0000
-     0.0165  3.9464  3.5820  0.0000  0.0000  4.7910  0.0000  0.0000  0.1218  2.0957
-     0.0000  2.7243  4.9850  0.7998  4.9664  1.3615  0.4806  0.0000  0.0000  4.1793
-     2.9691  0.0000  0.0000  1.7729  3.1283  2.7577  2.5356  0.0000  2.8334  0.0000
-     3.4343  3.2553  1.7032  0.6444  0.0000  0.0000  0.0000  0.0000  0.0932  0.0000
-     1.2229  0.0000  0.0000  0.9534  0.0000  0.0000  2.4837  0.7694  0.0000  0.0000
-    [ CUDAFloatType{8,10} ]
-    Result:
-     5.1076  0.0000  0.0000  0.0000  1.4922  0.0000  1.5820  0.5938  0.0000  0.8346
-     0.8966  1.9261  0.3726  0.0000  7.4136  0.0000  0.0000  0.9228  0.0000  3.7285
-     1.7140  0.0000  0.0000  0.5746  4.5014  0.0000  4.2118  0.0000  2.8254  0.0000
-     0.0165  3.9464  3.5820  0.0000  0.0000  4.7910  0.0000  0.0000  0.1218  2.0957
-     0.0000  2.7243  4.9850  0.7998  4.9664  1.3615  0.4806  0.0000  0.0000  4.1793
-     2.9691  0.0000  0.0000  1.7729  3.1283  2.7577  2.5356  0.0000  2.8334  0.0000
-     3.4343  3.2553  1.7032  0.6444  0.0000  0.0000  0.0000  0.0000  0.0932  0.0000
-     1.2229  0.0000  0.0000  0.9534  0.0000  0.0000  2.4837  0.7694  0.0000  0.0000
-    [ CUDAFloatType{8,10} ]
-    All Match: true
-
-
+We can test the generated cuda kernel using load_inline utility in PyTorch
 
 ```python
 cuda_extension = load_inline(
@@ -1072,25 +897,7 @@ cuda_extension = load_inline(
     extra_cuda_cflags=["-O2"],
     build_directory='./build',
 )
-```
 
-    The input conditions for extension module kernel_extension have changed. Bumping to version 1 and re-building as kernel_extension_v1...
-    Detected CUDA files, patching ldflags
-    Emitting ninja build file ./build/build.ninja...
-    Building extension module kernel_extension_v1...
-    Allowing ninja to set a default number of workers... (overridable by setting the environment variable MAX_JOBS=N)
-
-
-    [1/3] c++ -MMD -MF main.o.d -DTORCH_EXTENSION_NAME=kernel_extension_v1 -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/TH -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/THC -isystem /home/ksharma/anaconda3/envs/cuda-learn/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/include/python3.11 -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC -std=c++17 -c /home/ksharma/dev/git/cuda-mode-lecture/build/main.cpp -o main.o 
-    [2/3] /home/ksharma/anaconda3/envs/cuda-learn/bin/nvcc --generate-dependencies-with-compile --dependency-output cuda.cuda.o.d -DTORCH_EXTENSION_NAME=kernel_extension_v1 -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\"_gcc\" -DPYBIND11_STDLIB=\"_libstdcpp\" -DPYBIND11_BUILD_ABI=\"_cxxabi1011\" -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/TH -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/THC -isystem /home/ksharma/anaconda3/envs/cuda-learn/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/include/python3.11 -D_GLIBCXX_USE_CXX11_ABI=0 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_75,code=sm_75 --compiler-options '-fPIC' -O2 -std=c++17 -c /home/ksharma/dev/git/cuda-mode-lecture/build/cuda.cu -o cuda.cuda.o 
-    [3/3] c++ main.o cuda.cuda.o -shared -L/home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/home/ksharma/anaconda3/envs/cuda-learn/lib -lcudart -o kernel_extension_v1.so
-
-
-    Loading extension module kernel_extension_v1...
-
-
-
-```python
 in_out_tensor, in_tensor, bias = get_inputs(add_manual_seed=True)
 num_weights = bias.numel()
 result = cuda_extension.fused_add_mul_relu(in_out_tensor, bias, in_tensor, 0.5)
@@ -1099,9 +906,13 @@ torch.testing.assert_close(result, expected_output, rtol=1e-4, atol=1e-4)
 
 ## Combine the kernels
 
+Can we use conditionals inside a triton kernel? Sure we can!
+
 ### Fused add mul sigmoid/relu/etc
 
-```
+Now, the kernel should be able to support an arbitrary activation function
+
+```python
 @triton.jit
 def fused_add_mul_activation_kernel(x_ptr, bias_ptr, in_ptr,
                                     num_weights: tl.constexpr,
@@ -1128,7 +939,3 @@ def fused_add_mul_activation_kernel(x_ptr, bias_ptr, in_ptr,
 
 ### Let's check the perf of this kernel wrt torch.script, eager torch
 
-
-```python
-
-```
