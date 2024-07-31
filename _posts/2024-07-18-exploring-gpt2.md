@@ -1,5 +1,5 @@
 ---
-title: Exploring GPT2
+title: Exploring GPT2 (Part 1)
 description: >-
   Writing GPT2 from scratch and assigning weights from pre-trained Huggingface model
 date: 2024-07-18
