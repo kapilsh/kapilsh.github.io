@@ -402,7 +402,7 @@ module attributes {"triton_gpu.compute-capability" = 89 : i32, "triton_gpu.num-c
 
 ```
 
-The IR is more specific now and has details like compute capability, number of CTAs, warps, threads per warp, etc. Looking at this IR, it does seem to be NVIDIA agnostic but I am not sure about it. Although, it does have some NVIDIA specific details like `triton_gpu.compute-capability`.
+The IR is more specific now and has details like compute capability, number of CTAs, warps, threads per warp, etc. Looking at this IR, it does seem to be NVIDIA agnostic mostly but seems to have some NVIDIA specific details like `triton_gpu.compute-capability`.
 
 ### LLVM IR
 
@@ -604,13 +604,15 @@ $L__pubTypes_end0:
 	.section	.debug_loc	{	}
 ```
 
+I don't know if non-compiler engineers need to get into PTX details or know how to read it. But it's good to know that Triton can generate PTX code if needed for performance tuning.
+
 ### CUBIN
 
 Finally, if you want to get the CUBIN, you can check `compiled_kernel.asm["cubin"]`. This will give you the binary code that can be run on the GPU.
 
 ### CUBIN - ELF
 
-If you feel the need to read the cubin in a more human-readable format, you can use readelf linux utility to read the cubin file.
+If you feel the need to read the cubin in a more human-readable format, you can use `readelf` linux utility to read the cubin file.
 
 ```python
 with open("/tmp/cubin_data.o", "wb") as f:
@@ -650,6 +652,8 @@ Section Headers:
 ...
 ...truncated
 ```
+
+We can see that the ELF header has details about type of binary, machine, entry point, etc. However, I am not sure how useful it is to be able to read CUBIN. 
 
 ### SASS
 
@@ -718,7 +722,7 @@ This was a deep dive into Triton internals. We saw how Triton can be used to com
 
 ## Sources
 
-Here are some of the sources I referred to while writing this blog post:
+Here are some of the sources I referred to while writing this post:
 
 - [Triton Paper](https://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf)
 - [Triton](https://triton-lang.org/)
