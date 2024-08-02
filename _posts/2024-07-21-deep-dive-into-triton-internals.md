@@ -106,8 +106,9 @@ Couple of relevant slides that covers high-level compilation process
 After reading through code, unit tests and watching these talks, here is my general summary on how the process works end to end.
 
 - Triton takes the Python code written in its DSL and parses it. This code typically involves specifying tensor operations, kernels, and other high-level abstractions.
-- The parsed Python code is translated into an intermediate representation. This IR is designed to capture the high-level structure of the computation while being amenable to various optimizations.
+- The parsed Python code is translated into an intermediate representation. This IR is designed to capture the high-level structure of the computation while being amenable to various optimizations. 
 - Various optimization passes are applied to the IR. These optimizations can include loop unrolling, memory access optimizations, constant folding, CSE, etc to improve the efficiency of the generated code.
+- Progressive IR generation is done via MLIR dialects - Triton, TritonGPU, TritonNVIDIAGPU.  
 - The optimized Triton IR is then lowered to LLVM IR. Triton leverages LLVM to perform further optimizations and to facilitate the generation of machine code.
 - The LLVM IR is then used to generate CUDA code. This involves translating the LLVM IR to PTX code, which is the intermediate representation used by NVIDIA's CUDA compiler (nvcc).
 - The generated PTX code is then compiled Just-In-Time (JIT) into a CUDA binary (CUBIN). This compilation is done using NVIDIA's JIT compiler, which converts the PTX code into machine code that can be executed on the GPU.
@@ -116,11 +117,27 @@ After reading through code, unit tests and watching these talks, here is my gene
 
 ![Triton to LLVM](/assets/triton-to-llvm-ir.png)
 
+### Optimization Passes
+
+#### MLIR general optimizations
+• CSE, DCE, Inlining, …
+
+#### TritonGPU specific optimizations
+- Pipeline
+- Prefetch
+- Matmul accelerate
+- Coalesce
+- Remove layout
+
+#### TritonNVIDIAGPU specific optimizations
+• TMA Materialization
+• TMA Multicast
+• Async Dot
+• Warp Specialization
+
 ## Python AST -> Triton IR, PTX, CUBIN
 
 Next, we look into how to get the Triton IR, PTX, and CUBIN from Python code.
-
-```python
 
 
 ## Sources
@@ -130,4 +147,6 @@ Next, we look into how to get the Triton IR, PTX, and CUBIN from Python code.
 - [Triton Source Code](https://github.com/triton-lang/triton/blob/aa3ac0a146def686877685b4fb8897db64789c7a/python/test/unit/tools/test_aot.py#L427)
 - [MLIR](https://mlir.llvm.org/)
 - [Semi Analysis Blog](https://www.semianalysis.com/p/nvidiaopenaitritonpytorch)
-
+- [Technical Overview of Triton and Pytorch 2.0](https://www.jokeren.tech/slides/Triton_bsc.pdf)
+- [Lei Mao BLog](https://leimao.github.io/)
+- [Triton MLIR Dialects](https://github.com/triton-lang/triton/tree/b0f8332c7dedb6ce3a2cf365e53391775d4e4a2e/include/triton/Dialect)
