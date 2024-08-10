@@ -14,6 +14,14 @@ In the [previous post](../deep-dive-into-triton-internals/), we explored the Tri
 
 We covered in the previous post that you can generate the code for the kernel by using triton compiler directly. Follow the instructions in [triton repo](https://github.com/triton-lang/triton) to fork and install triton from source. 
 
+> Triton's internals might change in the future. The git hash for the version that I am working on is:
+> 
+> ```shell
+> git rev-parse origin/master
+> # b35bd67059a3e2bf7f6407ca0f098eb6f796d56f
+> ```
+{: .prompt-tip}
+
 Here's the command again to compile one of the tutorial examples:
 
 ```shell
