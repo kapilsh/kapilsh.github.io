@@ -416,7 +416,7 @@ In fact, all the passes are defined in the [`pythpn/src/passes.cc`](https://gith
 > For rest of the triton compiler passes, refer [`pythpn/src/passes.cc`](https://github.com/triton-lang/triton/blob/9e955f1454095725dbb7bed96c8112092c02929e/python/src/passes.cc#L83-L90)
 {: .prompt-tip}
 
-Finally, the C++ compiler backend is exposed to python through pybind11 bindings. The bindings are defined in [`python/src/main.cc`](init_triton_passes)
+Finally, the C++ compiler backend is exposed to python through pybind11 bindings. The bindings are defined in [`python/src/main.cc`](https://github.com/triton-lang/triton/blob/9e955f1454095725dbb7bed96c8112092c02929e/python/src/main.cc#L46-L55)
 
 ## Compiler Passes
 
