@@ -10,7 +10,7 @@ math: true
 author: ks
 ---
 
-In the [previous post](../deep-dive-into-triton-internals/), we explored the Triton compiler internals and code generation pipeline under the hood. In this post, we will explore further with debugger to understand what happens when `triton.compile` is called in the frontend. We will initially use python debugger to peak into the python compiler layer and then look at the native layer in C/C++.
+In the [previous post](../deep-dive-into-triton-internals/), we explored the Triton compiler internals and code generation pipeline under the hood. In this post, we will explore further to understand what happens when `triton.compile` is called in the frontend. We will initially use python debugger to peak into the python compiler layer and then look at the native layer in C/C++.
 
 ## Git Hash
 
