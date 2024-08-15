@@ -1,5 +1,5 @@
 ---
-title: Deep Dive into Triton Internals
+title: Deep Dive into Triton Internals (Part 1)
 description: >-
   Missing tutorial on how triton program gets converted to cuda kernels under the hood
 date: 2024-08-01
@@ -11,6 +11,10 @@ author: ks
 ---
 
 Recently, I have been exploring [Triton](https://triton-lang.org/), a high-level language for GPU programming. Triton is designed to make it easier to write high-performance GPU code by providing a high-level abstraction that can be compiled to efficient CUDA code. In this post, I will dive into the internals of Triton and explore how Triton programs are compiled to CUDA kernels under the hood. The information on this is fairly sparse and I hope to provide a good summary of overall triton compilation process. 
+
+This is part 1 of the deep dive. Read [part 2 here](../deep-dive-into-triton-internals-2).
+
+
 
 ## Cuda Compilation
 

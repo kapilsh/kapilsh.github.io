@@ -474,7 +474,7 @@ It is unclear to me what this pass does. However, I was able to trace down mlir-
 
 ### Other passes
 
-There are a number of other passes that are applies and reader is encouraged to explore them further on their own.
+There are a number of other passes that are applied and reader is encouraged to explore them further on their own.
 
 ## Final Thoughts
 
