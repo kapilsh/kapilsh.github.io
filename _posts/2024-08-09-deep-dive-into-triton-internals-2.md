@@ -59,7 +59,21 @@ src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signat
 
 We can inspect what is inside ASTSource by setting a breakpoint:
 
-![Triton ipdb git diff](/assets/triton_ipdb_git_diff.png)
+```diff
+$ git --no-pager diff
+diff --git a/python/triton/tools/compile.py b/python/triton/tools/compile.py
+index 872332b0..b2fe5abf 100644
+--- a/python/triton/tools/compile.py
++++ b/python/triton/tools/compile.py
+@@ -108,6 +108,7 @@ if __name__ == "__main__":
+     for i in equal_to_1:
+         constants.update({i: 1})
+     src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
++    import ipdb; ipdb.set_trace()
+     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
+     ccinfo = triton.compile(src, options=opts)
+     arg_names = []
+```
 
 ```shell
 -> % python3 python/triton/tools/compile.py \
@@ -269,7 +283,32 @@ i.e. all the C++ code that powers python frontend can be found in [python/src](h
 
 Let's test this out. We can put a `stdout` in the C++ code to see if it gets printed. 
 
-![Triton std::cout inside ir.cc](/assets/triton_cpp_print_1.png)
+```diff
+$ git --no-pager diff
+diff --git a/python/src/ir.cc b/python/src/ir.cc
+index 46095dcc..ec78a7fd 100644
+--- a/python/src/ir.cc
++++ b/python/src/ir.cc
+@@ -1,6 +1,7 @@
+ ﻿#include <pybind11/functional.h>
+ #include <pybind11/pybind11.h>
+ #include <pybind11/stl.h>
++#include <iostream>
+ 
+ #include "mlir/Bytecode/BytecodeWriter.h"
+ #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
+@@ -219,6 +220,9 @@ void init_triton_ir(py::module &&m) {
+       .def(py::init<llvm::SourceMgr &, MLIRContext *>());
+ 
+   m.def("load_dialects", [](MLIRContext &context) {
++    std::cout << "==========================================" << std::endl;
++    std::cout << "Loading dialects" << std::endl;
++    std::cout << "==========================================" << std::endl;
+     DialectRegistry registry;
+     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
+                     math::MathDialect, arith::ArithDialect, index::IndexDialect,
+
+```
 
 > NOTE: Any changes to C++ code will require recompiling the triton python package: `pip install -e python # inside the triton repo`. [More Info](https://github.com/triton-lang/triton?tab=readme-ov-file#install-from-source)
 {: .prompt-info}
@@ -362,7 +401,22 @@ def make_ttir(mod, metadata, opt):
 
 Looking into [`ir.pass_manager`](https://github.com/triton-lang/triton/blob/6a9a0a6474afa20498f3b8ae9a8bbb872cad458b/python/src/ir.cc#L1579), we see that it returns the [MLIR `PassManager`](https://mlir.llvm.org/doxygen/classmlir_1_1PassManager.html#details). This is where we start entering the MLIR layer. Let's edit this code to always print MLIR IR dump (which is controlled by `MLIR_ENABLE_DUMP` env variable). In addition, let's also print the diagnostics always.
 
-![Triton Print MLIR Always](/assets/triton_mlir_print_always.png){: width="600"}
+```diff
+$ git --no-pager diff
+diff --git a/python/src/ir.cc b/python/src/ir.cc
+index 46095dcc..b4f1aa22 100644
+--- a/python/src/ir.cc
++++ b/python/src/ir.cc
+@@ -1584,6 +1584,8 @@ void init_triton_ir(py::module &&m) {
+              bool haveDiagnostics =
+                  ::triton::tools::getBoolEnv("MLIR_ENABLE_DIAGNOSTICS");
+              bool haveDump = ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
++             haveDiagnostics = true;
++             haveDump = true;
+              std::string funcToDump;
+              if (!haveDump) {
+                funcToDump = triton::tools::getStrEnv("MLIR_ENABLE_DUMP");
+```
 
 Again, we need to rebuild `pip install -e python` to see the changes. It prints a lot of output but here is small snippet where MLIR is printed at `SymbolDCE` amd `ConvertTritonToTritonGPU` stage:
 
