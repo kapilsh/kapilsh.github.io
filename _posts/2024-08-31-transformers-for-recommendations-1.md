@@ -922,10 +922,426 @@ for image_row in movie_image_files:
 ![Movie Recommendation 14](/assets/movielens-ntp/Movielens_RecSys_60_14.png)
 ![Movie Recommendation 15](/assets/movielens-ntp/Movielens_RecSys_60_15.png)
 
-Based on my limited movie watching experience, I can see some good recommendations in the above list. 
+### Analysis
 
-We can see that model learns to recommend movies based on the user's previous movie watching history for example sci-fi movies are followed by sci-fi movies.
+Based on my limited movie watching experience, I can see some good recommendations in the above list. We can see that model learns to recommend movies based on the user's previous movie watching history. 
 
+For example,
+- Sci-fi movies are followed by sci-fi movies
+- Animated movies are followed by animated movies
+- Action movies are followed by action movies
+
+In some case, we also see that the movies recommended are also present in the previous context. We will tackle this later but it is good sign since model is able to identify user interests.
+
+For a proper model quality analysis, we will look into metrics next.
+
+## Metrics
+
+In reality, we will recommend a few movies to the user and not just one. In addition, if we are using this model as a retrieval model, we would get a few recommendations to feed it to the (re)-ranker. 
+
+> NOTE: The discussion around retrieval and re-ranking are beyond the scope of this post. We will focus on the model quality metrics here. May be, some day I will do a proper post on multi-stage ranking pipelines but today is not that day. ¯\\\_(ツ)\_/¯
+{: .prompt-info}
+
+Next, we will look at the quality of the model predictions. There are several different categories of metrics that we can look at.
+
+### Prediction Quality
+
+To assess whether the model is making accurate predictions, the common metrics that are used include:
+
+- Precision @ K
+- Recall @ K
+- F-score
+
+### Ranking Quality
+
+To assess the quality of ranked results, common metrics include:
+
+- MRR (Mean Reciprocal Rank)
+- MAP (Mean Average Precision)
+- Hit Rate @ K
+- NDCG (Normalized Discounted Cumulative Gain)
+
+### Behavioral
+
+To further improve user experience, few metrics that go beyond just model accuracy include:
+
+- Diversity
+- Novelty
+- Serendipity
+- Popularity Bias
+
+> Since, we are doing single prediction at a time, some of the prediction quality metrics end up being equivalent to ranking quality metrics. We will focus on the ranking quality metrics here.
+{: .prompt-info}
+
+
+### Baseline Model
+
+To compare our current model, we need a baseline prediction model. As a baseline, we can suggest just the most popular movies to the user i.e. show the movies with highest average ratings that the user hasn't seen. We can also add restrictions around movies that have been rated the most such that averages are statistically significant.
+
+```python
+ratings = pd.read_csv(
+    "./data/ml-1m/ratings.dat",
+    sep="::",
+    names=["user_id", "movie_id", "rating", "unix_timestamp"],
+    encoding="ISO-8859-1",
+    engine="python",
+    dtype={
+        "user_id": np.int32,
+        "movie_id": np.int32,
+        "rating": np.float16,
+        "unix_timestamp": np.int32,
+    },
+)
+rating_counts = ratings["movie_id"].value_counts().reset_index()
+rating_counts.columns = ["movie_id", "rating_count"]
+
+# Get the most frequently rated movies
+min_ratings_threshold = rating_counts["rating_count"].quantile(0.95)
+
+# Filter movies based on the minimum number of ratings
+popular_movies = ratings.merge(rating_counts, on="movie_id")
+popular_movies = popular_movies[popular_movies["rating_count"] >= min_ratings_threshold]
+
+# Calculate the average rating for each movie
+average_ratings = popular_movies.groupby("movie_id")["rating"].mean().reset_index()
+
+# Get the top 5 rated movies
+top_5_movies = list(
+    average_ratings.sort_values("rating", ascending=False).head(5).movie_id.values
+)
+top_5_movies
+# [318, 858, 50, 527, 1198]
+```
+
+Let's visualize them
+
+```python
+fig, axs = plt.subplots(1, len(top_5_movies), figsize=(15, 5))
+for i, (ax, image_id) in enumerate(zip(axs.flat, top_5_movies)):
+    img = f"/mnt/metaverse-nas/movielens/mlp-20m/MLP-20M/{image_id}.jpg"
+    if os.path.exists(img):
+        ax.imshow(imread(img))
+    ax.set_aspect("equal")
+    ax.set_title(os.path.basename(img).split(".")[0])
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+plt.subplots_adjust(wspace=0, hspace=0)
+plt.show()
+```
+
+![Top 5 Movies](/assets/movielens-ntp/Movielens_RecSys_64_0.png)
+
+Pretty expected list imo! In the next section, we will calculate the Ranking Quality metrics to see relative performance of our transformer model vs the popular movie heuristics.
+
+We will assume that the model will return K items (movies) based on a score for a few values of K - let's say K = 3, 5, 10. We will measure the ranking quality of these K items based on the relevant items returned.
+
+Let's first test our code on a small batch.
+
+```python
+k_values = [3, 5, 10]
+batch_size = 4
+sequence_length = 5
+valid_dataset = MovieLensSequenceDataset(
+    movies_file="./data/ml-1m/movies.dat",
+    users_file="./data/ml-1m/users.dat",
+    ratings_file="./data/ml-1m/ratings.dat",
+    sequence_length=sequence_length,
+    window_size=1,
+    is_validation=True,
+)
+valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=True)
+torch.random.manual_seed(3128)
+valid_batch = next(iter(valid_dataloader))
+(
+    movie_id_tokens,
+    rating_id_tokens,
+    user_id_tokens,
+    output_movie_id_tokens,
+    output_rating_id_tokens,
+) = valid_batch
+print(movie_id_tokens)
+print(output_movie_id_tokens)
+```
+
+```
+2024-09-01 08:04:59.132 | INFO     | data:__init__:89 - Creating MovieLensSequenceDataset with validation set: %s
+2024-09-01 08:04:59.132 | INFO     | data:read_movielens_data:12 - Reading data from files
+2024-09-01 08:05:00.844 | INFO     | data:_add_tokens:140 - Adding tokens to data
+2024-09-01 08:05:00.882 | INFO     | data:_generate_sequences:159 - Generating sequences
+2024-09-01 08:05:01.544 | INFO     | data:__init__:110 - Train data length: 883799
+2024-09-01 08:05:01.544 | INFO     | data:__init__:111 - Validation data length: 98290
+tensor([[1360, 2314, 2313, 3621, 1192],
+        [3682, 3441, 1539,  263,  520],
+        [1227, 1264,  901, 1247, 3366],
+        [1353, 1178,  257, 1220, 1250]], dtype=torch.int32)
+tensor([1271, 3724, 1232, 1196], dtype=torch.int32)
+```
+
+For getting the movie predictions from our model, we have added a new function. 
+
+> NOTE: Remember we had some duplicates (pre-watched movies) in the predictions. We will remove them before calculating the metrics i.e. we will consider logits for only those movies that are not in the context window.
+{: .prompt-info}
+
+```python
+
+def get_model_predictions(
+    model: nn.Module,
+    movie_id_tokens: torch.Tensor,
+    user_id_tokens: torch.Tensor,
+    n: int,
+):
+    with torch.no_grad():
+        # batch x num_tokens
+        output = model(movie_id_tokens, user_id_tokens)
+
+    # get top k predictions
+    # we work with the top n + movie_id_tokens.shape[-1] to ensure
+    # that we do not recommended the movies that the user has already seen
+    _, top_tokens = output.topk(n + movie_id_tokens.shape[-1], dim=-1)
+
+    for row in range(top_tokens.shape[0]):
+        merged, counts = torch.cat((top_tokens[row], movie_id_tokens[row])).unique(
+            return_counts=True
+        )
+        intersection = merged[torch.where(counts.gt(1))]
+        top_tokens[row, :n] = top_tokens[row][
+            torch.isin(top_tokens[row], intersection, invert=True)
+        ][:n]
+    return top_tokens[:, :n]
+
+```
+
+To generate the relevancy of the output, we have another function:
+
+```python
+def calculate_relevance(predictions, targets):
+    return (predictions == targets.unsqueeze(1)).float()
+```
+
+Now, let's calculate the metrics for this small batch:
+
+```python
+
+for k in k_values:
+    baseline_reciprocal_rank = torch.zeros(batch_size)
+    model_reciprocal_rank = torch.zeros(batch_size)
+    popular_movies_df = get_popular_movies(
+        ratings_file="./data/ml-1m/ratings.dat", n=k + sequence_length
+    )
+    baseline_predictions = get_popular_movie_predictions(
+        popular_movies_df, movie_id_tokens, n=k, batch_size=batch_size
+    )
+    model_predictions = get_model_predictions(
+        trained_model, movie_id_tokens, user_id_tokens, n=k
+    )
+
+    baseline_relevance = calculate_relevance(
+        baseline_predictions.predictions, output_movie_id_tokens
+    )
+    model_relevance = calculate_relevance(
+        model_predictions.predictions, output_movie_id_tokens
+    )
+
+    baseline_relevant_index = torch.where(baseline_relevance == 1)
+    model_relevant_index = torch.where(model_relevance == 1)
+
+    # calculate the metrics
+    baseline_reciprocal_rank[baseline_relevant_index[0]] = 1 / (
+        baseline_relevant_index[1].float() + 1
+    )
+    model_reciprocal_rank[model_relevant_index[0]] = 1 / (
+        model_relevant_index[1].float() + 1
+    )
+    print(f"Reciprocal Rank @ {k}: Baseline: {baseline_reciprocal_rank.mean()}")
+    print(f"Reciprocal Rank @ {k}: Model: {model_reciprocal_rank.mean()}")
+
+    # Calculate the mean average precision
+    # since there could only be one relevant item in the predictions
+    # precision = relevance_for_row.sum() / k
+    baseline_map = baseline_relevance.sum(dim=1) / k
+    model_map = model_relevance.sum(dim=1) / k
+
+    print(f"Mean Average Precision @ {k}: Baseline: {baseline_map.mean()}")
+    print(f"Mean Average Precision @ {k}: Model: {model_map.mean()}")
+
+    # Calculate the NDCG
+    baseline_ndcg = ndcg_score(baseline_relevance, baseline_predictions.scores, k=k)
+    model_ndcg = ndcg_score(model_relevance, model_predictions.scores, k=k)
+
+    print(f"NDCG @ {k}: Baseline: {baseline_ndcg}")
+    print(f"NDCG @ {k}: Model: {model_ndcg}")
+
+    print("---------------------------------------------------")
+```
+
+Here are the predicted tokens for `k = 10`. `k = 3, 5` are just a subset of this.
+
+```python
+print(output_movie_id_tokens)
+print(baseline_predictions.predictions)
+print(model_predictions.predictions)
+print(baseline_relevance)
+print(model_relevance)
+```
+
+```
+tensor([1182, 2847,  352,  551], dtype=torch.int32)
+tensor([[ 318,  858,   50,  527, 1198,  260,  750,  912, 2762, 1193],
+        [ 318,  858,   50,  527, 1198,  260,  750,  912, 2762, 1193],
+        [ 318,  858,   50,  527, 1198,  260,  750,  912, 2762, 1193],
+        [ 318,  858,   50,  527, 1198,  260,  750,  912, 2762, 1193]],
+       dtype=torch.int32)
+tensor([[1931,  588, 2849, 1892, 1899, 2105, 3141, 1226, 1204, 2728],
+        [1353, 2386, 2847, 1375, 1335, 2571, 1543, 1539,  476, 1607],
+        [1720, 2677, 1934,  699, 2055,  139, 2075,   10, 1942, 3186],
+        [1539,  476, 1111,  373, 1255, 2916, 1931, 1355,  724, 2284]])
+tensor([[0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
+        [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
+        [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
+        [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]])
+tensor([[0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
+        [0., 0., 1., 0., 0., 0., 0., 0., 0., 0.],
+        [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
+        [0., 0., 0., 0., 0., 0., 0., 0., 0., 0.]])
+```
+
+Based on the above, the results seem reasonable!
+
+```
+Reciprocal Rank @ 3: Baseline: 0.0
+Reciprocal Rank @ 3: Model: 0.125
+Mean Average Precision @ 3: Baseline: 0.0
+Mean Average Precision @ 3: Model: 0.0833333358168602
+NDCG @ 3: Baseline: 0.0
+NDCG @ 3: Model: 0.15773243839286433
+---------------------------------------------------
+Reciprocal Rank @ 5: Baseline: 0.0
+Reciprocal Rank @ 5: Model: 0.125
+Mean Average Precision @ 5: Baseline: 0.0
+Mean Average Precision @ 5: Model: 0.05000000074505806
+NDCG @ 5: Baseline: 0.0
+NDCG @ 5: Model: 0.15773243839286433
+---------------------------------------------------
+Reciprocal Rank @ 10: Baseline: 0.0
+Reciprocal Rank @ 10: Model: 0.1840277761220932
+Mean Average Precision @ 10: Baseline: 0.0
+Mean Average Precision @ 10: Model: 0.07500000298023224
+NDCG @ 10: Baseline: 0.0
+NDCG @ 10: Model: 0.31185615650529175
+---------------------------------------------------
+```
+
+Great! Let's add a function for this and generate for the full validation set. You can find this function in [`eval.py`](https://github.com/kapilsh/recformer/blob/main/movielens-ntp/eval.py).
+
+```python
+batch_size = 512
+sequence_length = 5
+valid_dataset = MovieLensSequenceDataset(
+    movies_file="./data/ml-1m/movies.dat",
+    users_file="./data/ml-1m/users.dat",
+    ratings_file="./data/ml-1m/ratings.dat",
+    sequence_length=sequence_length,
+    window_size=1,
+    is_validation=True,
+)
+# shuffle doesnt matter for calculating metrics
+valid_dataloader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
+
+
+metrics = {}
+
+for k in k_values:
+    # we would torch.cat these later
+    baseline_relevances = []
+    model_relevances = []
+    baseline_scores = []
+    model_scores = []
+
+    popular_movies_df = get_popular_movies(
+        ratings_file="./data/ml-1m/ratings.dat", n=k + sequence_length
+    )
+    for batch in valid_dataloader:
+        (
+            movie_id_tokens,
+            rating_id_tokens,
+            user_id_tokens,
+            output_movie_id_tokens,
+            output_rating_id_tokens,
+        ) = batch
+        baseline_predictions = get_popular_movie_predictions(
+            popular_movies_df, movie_id_tokens, n=k, batch_size=movie_id_tokens.shape[0]
+        )
+        model_predictions = get_model_predictions(
+            trained_model, movie_id_tokens, user_id_tokens, n=k
+        )
+        baseline_relevance = calculate_relevance(
+            baseline_predictions.predictions, output_movie_id_tokens
+        )
+        model_relevance = calculate_relevance(
+            model_predictions.predictions, output_movie_id_tokens
+        )
+        baseline_relevances.append(baseline_relevance)
+        model_relevances.append(model_relevance)
+        baseline_scores.append(baseline_predictions.scores)
+        model_scores.append(model_predictions.scores)
+
+    baseline_relevances_tensor = torch.cat(baseline_relevances)
+    model_relevances_tensor = torch.cat(model_relevances)
+    baseline_scores_tensor = torch.cat(baseline_scores)
+    model_scores_tensor = torch.cat(model_scores)
+
+    # Calculate the metrics
+    baseline_metrics = calculate_metrics(
+        baseline_relevances_tensor, baseline_scores_tensor
+    )
+    model_metrics = calculate_metrics(model_relevances_tensor, model_scores_tensor)
+
+    metrics[k] = (baseline_metrics, model_metrics)
+```
+
+```python
+metrics_df = pd.DataFrame(
+    [
+        {
+            "k": k,
+            "baseline_mrr": v[0].MRR,
+            "model_mrr": v[1].MRR,
+            "baseline_map": v[0].MAP,
+            "model_map": v[1].MAP,
+            "baseline_ndcg": v[0].NDCG,
+            "model_ndcg": v[1].NDCG,
+        }
+        for k, v in metrics.items()
+    ]
+)
+print(metrics_df.to_markdown())
+```
+
+|    |   k |   baseline_mrr |   model_mrr |   baseline_map |   model_map |   baseline_ndcg |   model_ndcg |
+|---:|----:|---------------:|------------:|---------------:|------------:|----------------:|-------------:|
+|  0 |   3 |    0.000148018 |   0.0790383 |    0.000183747 |    0.120252 |     0.000157374 |    0.0895683 |
+|  1 |   5 |    0.000253162 |   0.0915386 |    0.000622697 |    0.175549 |     0.000342393 |    0.112223  |
+|  2 |  10 |    0.000517913 |   0.10491   |    0.00278682  |    0.277059 |     0.00101894  |    0.144872  |
+
+### Results
+
+From the results, we can see that our model is orders of magnitude better than just suggesting the top k movies by ratings - ranging 100x to 500x depending on the metric and k.
+
+## Next steps
+
+There are several ways to improve the model further. For example,
+
+- We have only used the movie ids to make these predictions. We have not used any of the dense features or textual information for the model. We can improve the model by adding dense layers to feed these features.
+- We have not accounted for repetitions in the predictions. We can handle that by penalizing token predictions that are repeated.
+- We can use the ratings to re-weight loss values to account for the quantification of "liking the movie". 
+- Improve model training and eval performance by using `torch.compile`
+- And several other ways
+
+But, this post is already getting too big so these follow up will need to wait for another day.
+
+## Conclusion
+
+In this post, we have built a transformer model for next token prediction for movie recommendations. We have trained the model and evaluated the model using ranking quality metrics. We have seen that the model is significantly better than the baseline model.
 
 ## Sources
 
