@@ -1,7 +1,7 @@
 ---
-title: Transformers for Recommendations
+title: Transformers for Recommender Systems
 description: >-
-  Exploring a simple transformer model for sequence modelling in recommendation systems 
+  Exploring a simple transformer model for sequence modelling in recommender systems 
 date: 2024-08-31
 categories: [Blog, Tutorial]
 tags: [AI, Machine Learning, RecSys, Transformers]
@@ -316,7 +316,9 @@ torch.Size([4])
 
 Let build the transformer based recommendation model now. We can reuse most of the code that I wrote for my previous post on [Exploring GPT](https://www.kapilsharma.dev/posts/exploring-gpt2/). We will skip defining the `CausalMultiHeadAttention`, `MLP`, `TransformerEncoderLayer` (defined as `GPT2Layer` in previous post), and `Transformer` (defined as `GPT2` in the previous post). Instead, let me just show the differences between what the GPT2 for language model defined vs here.
 
-We will skip the `output_layer` in the `Transformer` i.e. just remove it. We need an interaction layer between the movies and users in rec sys model. Hence, the output layer will be after the interaction. This interaction layer will be defined as an MLP (similar to the one we defined in [DLRM exploration](https://www.kapilsharma.dev/posts/cuda-mode-fusing-kernels-talk/)).
+We will skip the `output_layer` in the `Transformer` i.e. just remove it. We need an interaction layer between the movies and users in rec sys model similar to a two tower architecture. 
+
+Interaction layer concats the movie embeddings and user embeddings and passes it through an MLP. (similar to the one we defined in [DLRM exploration](https://www.kapilsharma.dev/posts/cuda-mode-fusing-kernels-talk/)).
 
 ```python
 class InteractionMLP(nn.Module):
@@ -471,7 +473,7 @@ def init_weights(model: MovieLensTransformer):
 
 Now that we have the model defined and weights initialization done, we should be able to define a train step. Let's follow the sage advice from karpathy and try to overfit one batch.
 
-![Overfit one batch](./extras/karpathy_overfit_one_batch.png)
+![Overfit one batch](/assets/movielens-ntp/karpathy_overfit_one_batch.png)
 
 ### Overfit one batch
 
@@ -1350,3 +1352,4 @@ In this post, we have built a transformer model for next token prediction for mo
 - [BERT4Rec](https://towardsdatascience.com/build-your-own-movie-recommender-system-using-bert4rec-92e4e34938c5)
 - [Metrics](https://www.evidentlyai.com/ranking-metrics/evaluating-recommender-systems#ranking-quality-with-evidently)
 - [Personalized Recommendations with Transformers](https://medium.com/hepsiburada-data-science/personalized-recommendations-with-transformers-11c13cff2be)
+- [Transformers4rec](https://scontent-iad3-1.xx.fbcdn.net/v/t39.8562-6/246721374_422204999475172_9039387325224382577_n.pdf?_nc_cat=104&ccb=1-7&_nc_sid=e280be&_nc_ohc=Bif3FuzLTq8Q7kNvgEgBwvG&_nc_ht=scontent-iad3-1.xx&oh=00_AYAgec6fmiF4Yviuwo5MtYyPqd4yss1qj0uEzi_xbdoFkg&oe=66DAAEFA)
