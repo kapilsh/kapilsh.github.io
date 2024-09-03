@@ -1,5 +1,5 @@
 ---
-title: Transformers for Recommender Systems
+title: Transformers for Recommender Systems - Part 1
 description: >-
   Exploring a simple transformer model for sequence modelling in recommender systems 
 date: 2024-08-31
