@@ -1,12 +1,11 @@
 ---
 title: Deep Dive into Triton Internals (Part 3)
 description: >-
-  Enough MLIR and LLVM to be dangerous 
-date: 2024-09-04
+  Enough MLIR to be dangerous - how Triton uses MLIR passes to progressively lower IR
+date: 2024-09-07
 categories: [ Blog, Tutorial ]
 tags: [ AI, Triton, CUDA, Machine Learning, Compiler ]
 pin: true
-math: true
 author: ks
 ---
 
@@ -374,7 +373,7 @@ The code initializes kernel execution by creating a constant (`BLOCK_SIZE`), ret
 
 ### 4. Splat and add operations
 
-Creates a tensor of i32 values by splatting (broadcasting) the value `%1` to a tensor of shape `(1024,)` and then adds the tensor `%3` to the range `%2` element-wise using `arith.addi`.
+Creates a tensor of `i32` values by splatting (broadcasting) the value `%1` to a tensor of shape `(1024,)` and then adds the tensor `%3` to the range `%2` element-wise using `arith.addi`.
 
 > `arith` is another MLIR dialect that provides a set of arithmetic operations. [Arith Dialet](https://mlir.llvm.org/docs/Dialects/ArithOps/)
 {: .prompt-info}
@@ -456,6 +455,10 @@ $ MLIR_ENABLE_TIMING=1 MLIR_ENABLE_DUMP=1 python3 python/triton/tools/compile.py
 ### Sample output
 
 [Example MLIR Dump](https://gist.github.com/kapilsh/924e81e0e9fe4c1b9b58f1825419baea)
+
+I am hacking on a tool to parse these dumps and provide a more readable output. I will update this post once it is ready. However, for now here is a sample output before/after a pass:
+
+![Python to MLIR Mapping](/assets/python-to-mlir.png)
 
 ## Conclusion
 
