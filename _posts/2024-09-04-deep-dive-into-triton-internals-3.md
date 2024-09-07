@@ -10,8 +10,8 @@ math: true
 author: ks
 ---
 
-This post is a continuation of the series on Triton internals. In this post, we will dive into the MLIR and LLVM
-internals of Triton.
+This post is a continuation of the series on Triton internals. In this post, we will dive into the MLIR
+internals of Triton. We go deeper into the backend compilation process and look at the MLIR passes that Triton uses to progressively lower the IR to the target hardware.
 
 Previous posts covered the following topics:
 
@@ -25,18 +25,18 @@ hash:
 
 ```shell
 $ git rev-parse main
-7480ef5028b724cb434b7841b016c6d6debf3b84
+9baa051fa9dd00cd7255e750c71224153aecd3f0
 ```
 
-## Background: Brief Overview of MLIR
-
-- What is MLIR?
-- What is table-gen?
-- How does MLIR relate to LLVM?
-- How does Triton use MLIR?
-- I wnat to know more about MLIR. Where do I start?
-
 ## Review: Triton Python Bindings
+
+This post expects familiarity with key concepts covered in previous posts. For example, we expect familiarity (but not necessarily deep understanding) with Triton Compiler, MLIR (and table-gen), and the Triton Python bindings.
+
+When I started working on this series of posts, I found one of the TensorFlow videos pretty useful in understanding MLIR applications to ML compilers and accelerators. Although it is not specific to Triton, it provides a good overview of the concepts. 
+
+{% include embed/youtube.html id='R5LLIj8EMxw' %}
+
+## Triton Backend Compilation
 
 In the previous post, we started looking into the NVidia backend. We encountered `add_stages` function that runs through
 different stages of the compilation and produces progressive IR in the process.
@@ -50,19 +50,18 @@ def add_stages(self, stages, options):
     stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.capability)
 ```
 
-We can find these implementations in the `triton/third_party/<vendor/provider>/backend/compiler.py` file. I only have
+We can find these implementations in the `triton/third_party/<vendor/provider>/backend/compiler.py` files. I only have
 NVidia GPU so let's look at NVidia backend.
 
 Code Pointers:
 
-- [`make_ttir`](https://github.com/triton-lang/triton/blob/7480ef5028b724cb434b7841b016c6d6debf3b84/third_party/nvidia/backend/compiler.py#L170-L182)
-- [`make_ttgir`](https://github.com/triton-lang/triton/blob/7480ef5028b724cb434b7841b016c6d6debf3b84/third_party/nvidia/backend/compiler.py#L185-L228)
+- [`make_ttir`](https://github.com/triton-lang/triton/blob/9baa051fa9dd00cd7255e750c71224153aecd3f0/third_party/nvidia/backend/compiler.py#L178-L190)
+- [`make_ttgir`](https://github.com/triton-lang/triton/blob/9baa051fa9dd00cd7255e750c71224153aecd3f0/third_party/nvidia/backend/compiler.py#L193-L236)
 - others are in the same file
 
 ## Triton IR (TTIR)
 
-If we look at first of these functions - `make_ttir`. As the first step in the compilation process, `make_ttir`
-effectively generates a tensor program.
+If we look at first of these functions - `make_ttir`. it effectively generates a tensor program as the first step in the compilation process. This is done by running a series of passes on the input module. Below is the implementation:
 
 ```python
 def make_ttir(mod, metadata, opt):
@@ -80,12 +79,11 @@ def make_ttir(mod, metadata, opt):
     return mod
 ```
 
-We notice that it ends up using ir and passes modules from libtriton.
+We notice that it ends up using `ir` and `passes` modules from libtriton.
 
 ### from triton._C.libtriton import ir, passes, llvm, nvidia
 
-These modules are defined in
-pybind11. [`triton/python/src/main.cc`](https://github.com/triton-lang/triton/blob/7480ef5028b724cb434b7841b016c6d6debf3b84/python/src/main.cc#L46-L55).
+These modules are defined using pybind11 in [`triton/python/src/main.cc`](https://github.com/triton-lang/triton/blob/9baa051fa9dd00cd7255e750c71224153aecd3f0/python/src/main.cc#L46-L55) and provide python bindings for compiler passes defined in the C++ layer.
 
 ```cpp
 PYBIND11_MODULE(libtriton, m) {
@@ -109,8 +107,14 @@ So, from here we will start digging into `ir` and `passes` modules.
 We covered `ir` module briefly in the previous post and discovered that it provides
 the [MLIR PassManager](https://mlir.llvm.org/doxygen/classmlir_1_1PassManager.html#details) reference.
 
-At a high level, PassManager is a container for a sequence of passes. It provides a way to run a sequence of passes on a
-module. Below is some sample code:
+### PassManager
+
+At a high level, `PassManager` is a container for a sequence of passes. It provides a way to run a sequence of passes on a
+module and progressively lower IR down the target hardware. 
+
+#### Hello world example
+
+Here is s simple example of how to use the PassManager:
 
 ```cpp
 mlir::ModuleOp module = mlir::ModuleOp::create(mlir::UnknownLoc::get());
@@ -122,6 +126,38 @@ pm.addPass(mlir::createDeadCodeEliminationPass());
 
 pm.run(module);
 ```
+This "Hello world" example shows how to run two passes on a module. The first pass is Common Subexpression Elimination (CSE), and the second is Dead Code Elimination (DCE).
+
+Let's say we had a toy language with the following function:
+
+```
+def foo(b, c):
+  a = b + c
+  d = b + c
+  e = 2 * a
+  return d
+```
+
+After running the CSE pass, the code would be optimized to:
+
+```
+def foo(b, c):
+  a = b + c
+  d = a
+  e = 2 * a
+  return d
+```
+
+The CSE pass identified that `b + c` was computed twice and replaced the second computation with the value of `a`.
+
+In the next step, the DCE pass would remove the `e` variable since it is not used in the function. The final optimized code would be:
+
+```
+def foo(b, c):
+  a = b + c
+  d = a
+  return d
+```
 
 ### Passes Module
 
@@ -129,8 +165,8 @@ The `passes` module provides a set of passes that can be added to the PassManage
 types of passes such as common, ttir, ttgir.
 
 For
-example, [`passes/common`](https://github.com/triton-lang/triton/blob/7480ef5028b724cb434b7841b016c6d6debf3b84/python/src/passes.cc#L26-L34)
-provides common passes like CSE, LICM, etc. Let's look some of these:
+example, [`passes/common`](https://github.com/triton-lang/triton/blob/9baa051fa9dd00cd7255e750c71224153aecd3f0/python/src/passes.cc#L26-L34)
+provides CSE, LICM, etc. Let's look some of these:
 
 ### Passes.Common Passes
 
@@ -157,20 +193,24 @@ Reference to documentation for these passes: [MLIR Passes](https://mlir.llvm.org
 #### Passes.TTIR Passes
 
 Triton IR passes are defined in the `passes/ttir` module. These passes are specific to Triton and defined
-in [triton/lib/Dialect/Triton/Transforms](https://github.com/triton-lang/triton/tree/7480ef5028b724cb434b7841b016c6d6debf3b84/lib/Dialect/Triton/Transforms).
+in [triton/lib/Dialect/Triton/Transforms](https://github.com/triton-lang/triton/tree/9baa051fa9dd00cd7255e750c71224153aecd3f0/lib/Dialect/Triton/Transforms).
 
 Triton runs passes such as combining ops together, reorder operations to move broadcasting, splats, and tensor pointer
 load/stores.
 
-These passes were covered in
+- These passes were covered in
 the [previous post](https://www.kapilsharma.dev/posts/deep-dive-into-triton-internals-2/#inliner-pass).
-
-Reference table-gen
-file: [TTIR Passes](https://github.com/triton-lang/triton/blob/7480ef5028b724cb434b7841b016c6d6debf3b84/include/triton/Dialect/Triton/Transforms/Passes.td#L1)
+- Reference table-gen
+file: [TTIR Passes](https://github.com/triton-lang/triton/blob/9baa051fa9dd00cd7255e750c71224153aecd3f0/include/triton/Dialect/Triton/Transforms/Passes.td#L1)
 
 ## Triton GPU IR (TTGIR)
 
-The next stage in the compilation process is to generate the GPU IR. This is done by the `make_ttgir` function. Below is
+Reference table-gen files
+
+- [TTGIR Passes](https://github.com/triton-lang/triton/blob/9baa051fa9dd00cd7255e750c71224153aecd3f0/include/triton/Dialect/TritonGPU/Transforms/Passes.td)
+- [TTNVGPUIR Passes (NVidia specific)](https://github.com/triton-lang/triton/blob/9baa051fa9dd00cd7255e750c71224153aecd3f0/include/triton/Dialect/TritonNvidiaGPU/Transforms/Passes.td)
+
+The next stage in the compilation process is to generate the Triton GPU IR. This is done by the `make_ttgir` function. Below is
 the reference NVIDIA version:
 
 ```python
@@ -196,11 +236,7 @@ def make_ttgir(mod, metadata, opt, capability):
 ```
 
 We can see that Triton GPU IR generation relies on some `common`, `nvidia`, and `ttgpuir` passes. We have already
-covered the common passes.
-
-At this stage, Triton compiler applies several gpu specific optimization passes to the IR previously generated.
-
-Some of the well-known optimization passes to the pass manager, including:
+covered the `common` passes. As part of `nvidia` and `ttgpuir` passes, triton compiler applies several gpu specific optimization passes to the IR previously generated. Some of the well-known optimization passes include:
 
 - Coalescing
 - F32 dot product optimization
@@ -208,23 +244,26 @@ Some of the well-known optimization passes to the pass manager, including:
 - Thread locality
 - Matrix multiplication acceleration
 - Optimization of dot operands
-- Data de-duplication -
+- Data de-duplication
 - Instructions reordering
-- TMA lowering
-  and several others.
+- TMA lowering, etc.
 
 I feel that this is good level to cover MLIR passes for GPU lowering. Beyond this, we will get too much into
-implementatin details.
+implementation details. Reader is encouraged to look at the triton codebase and read code for specific passes to learn more.
 
-## LLIR and PTX Generation
+> Example: [Accelerate Matmul](https://github.com/triton-lang/triton/blob/9baa051fa9dd00cd7255e750c71224153aecd3f0/lib/Dialect/TritonGPU/Transforms/AccelerateMatmul.cpp#L386). Please trace through the directory for more transforms.
+{: .prompt-tip}
+
+### LLIR and PTX Generation
 
 We covered LLIR and PTX Generation in [part 1](https://www.kapilsharma.dev/posts/deep-dive-into-triton-internals/), so I
-won't cover it again here. However, the process remains similar here where passes are applied to the IR from previous
-pass and IR is lowered to LLVM IR followed by PTX.
+won't cover it again here. However, the process remains similar, where passes are applied to the GPU IR to lower it to LLVM IR followed by PTX.
 
-## LLM can explain MLIR code
+## IR Walkthrough
 
-Let's dump Triton GPU IR and see if we can understand it. We will of course leverage an LLM to help us. 🔥 🚀🚀🚀 🔥
+Let's do a walkthrough of IR generated after one of the many passes. Triton GPU IR will be an interesting pick since IR should have more specificities of GPU ops.
+
+First, we will compile one of the tutorial example from triton repo. (`vector-add`)
 
 ```shell
 $ python3 python/triton/tools/compile.py \
@@ -234,7 +273,10 @@ $ python3 python/triton/tools/compile.py \
   python/tutorials/01-vector-add.py
 ```
 
-This will put the compiled kernel and IR artifacts in `~/.triton/cache/` directory. For example, on my machine:
+> This will put the compiled kernel and IR artifacts in `~/.triton/cache/` directory. 
+{: .prompt-tip}
+
+After compilation, I see the following files in the cache directory:
 
 ```shell
 -> % ll -R ~/.triton/cache
@@ -274,10 +316,8 @@ total 20K
 -rw-rw-r-- 1 ksharma ksharma 17K Sep  5 22:03 __triton_launcher.so
 ```
 
-I used [`~/.triton/cache/ht7F5vagGWCbXzZnYSv8P9EWINzpLWcHYcdPh9m8Dvg/add_kernel.ttgir`](https://gist.github.com/kapilsh/cee55b221d7f91dc64fbac46f018163c)
-to [prompt Meta.AI to explain the MLIR code](https://www.meta.ai/s/XtXQfTfkswTkiVVn/). It does pretty good job! 🚀🚀🚀 
-
-Here's a summary:
+Let's look into `ht7F5vagGWCbXzZnYSv8P9EWINzpLWcHYcdPh9m8Dvg`. 
+I uploaded the content of `~/.triton/cache/ht7F5vagGWCbXzZnYSv8P9EWINzpLWcHYcdPh9m8Dvg/add_kernel.ttgir` to a [gist](https://gist.github.com/kapilsh/cee55b221d7f91dc64fbac46f018163c). Let's go through it step by step:
 
 ### 1. Module attributes
 
@@ -292,9 +332,38 @@ module attributes {
 }
 ```
 
-### 2. Program ID and Range Creation
+### 2. Kernel function
 
-The code initializes kernel execution by creating a constant, retrieving the program ID, and generating a range of indices from 0 to 1024.
+```
+tt.func public @add_kernel(
+  %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+  %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+  %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+  %arg3: i32 {tt.divisibility = 16 : i32}
+) attributes {noinline = false} {
+  ...
+}
+```
+
+This should look familiar since it maps directly to the python code:
+
+```python
+def add_kernel(x_ptr,  # *Pointer* to first input vector.
+               y_ptr,  # *Pointer* to second input vector.
+               output_ptr,  # *Pointer* to output vector.
+               n_elements,  # Size of the vector.
+               BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
+               # NOTE: `constexpr` so it can be used as a shape value.
+               ):
+```
+
+- `%arg0`, `%arg1`, and `%arg2`: Pointers to float32 arrays with divisibility 16 (meaning the arrays are aligned to 16-byte boundaries).
+- `%arg3`: An integer with divisibility 16
+- `BLOCK_SIZE` is missing. We will see later that it is defined as a constant in the IR.
+
+### 3. Program ID and Range Creation
+
+The code initializes kernel execution by creating a constant (`BLOCK_SIZE`), retrieving the program ID, and generating a range of indices from 0 to 1024.
 
 ```
 %c1024_i32 = arith.constant 1024 : i32
@@ -303,31 +372,34 @@ The code initializes kernel execution by creating a constant, retrieving the pro
 %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
 ```
 
-### 3. Splat and add operations
+### 4. Splat and add operations
 
-Creates a tensor of i32 values by splatting the value %1 to a tensor of shape (1024,) and then adds the tensor %3 to the range %2 element-wise using arith.addi.
+Creates a tensor of i32 values by splatting (broadcasting) the value `%1` to a tensor of shape `(1024,)` and then adds the tensor `%3` to the range `%2` element-wise using `arith.addi`.
 
-> arith is another MLIR dialect that provides a set of arithmetic operations.
-{: .prompt-tip}
+> `arith` is another MLIR dialect that provides a set of arithmetic operations. [Arith Dialet](https://mlir.llvm.org/docs/Dialects/ArithOps/)
+{: .prompt-info}
 
 ```
 %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
 %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
 ```
 
-### 4. Load and store operations
+### 5. Load and store operations
 
-The code generates a tensor of pointers to f32 values, offsets them using tt.addptr, and loads the resulting values from memory using tt.load.
+The code generates a tensor of pointers to `f32` values, offsets them using `tt.addptr`, and loads the resulting values from memory using `tt.load`.
+
+Finally, stores the output of the `arith.addf` operation to the memory location pointed to by `%15` based on condition `%6`. `%15` is the `output_ptr`.
 
 ```
 %7 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
 %8 = tt.addptr %7, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
 %9 = tt.load %8, %6 : tensor<1024x!tt.ptr<f32>, #blocked>
 ...
+tt.store %15, %13, %6 : tensor<1024x!tt.ptr<f32>, #blocked> loc(#loc13)
 tt.return
 ```
 
-Below is the full split of the MLIR code by sections. We can map each of the instructions back to the python (triton DSL) code. I am currently working on a tool for that. 🔥🔥🔥
+We can map each of the instructions back to the python (triton DSL) code as well. See the splits below after parsing the IR based location info. I wrote a [hacky tool](../../triton) for it. 
 
 ```
 Section 1: unknown
@@ -365,24 +437,27 @@ Section 14: /home/ksharma/dev/git/triton/python/tutorials/01-vector-add.py:52:4
   tt.return loc(#loc14)
 ```
 
-```shell
-
 ## Triton MLIR Dumps
 
-We can dump the MLIR IR using the `MLIR_ENABLE_DUMP` environment variable. This will dump the IR at different stages of the compilation process.
+Triton has a bunch of environment variable that provide ways to debug and get backend logging/info. Among these, `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all kernels. 
+- If you are interested in diving deeper into the IR generated by Triton, you can use this MLIR dump feature
+- This could also be useful for debugging tricky bugs. 
 
 ```shell
 # Triton cache interferes with the dump when a dump already exists
 # so, clear the cache. I could not find a way to disable the cache for now
-$ rm -rf ~/.triton/cache/*
-$ conda activate learning-triton
 $ MLIR_ENABLE_TIMING=1 MLIR_ENABLE_DUMP=1 python3 python/triton/tools/compile.py \
   --kernel-name add_kernel \
   --signature "*fp32,*fp32,*fp32,i32,64" \
   --grid=1024,1024,1024 \
-  python/tutorials/01-vector-add.py &> /tmp/my_triton_info_all.txt
+  python/tutorials/01-vector-add.py
 ```
+
+### Sample output
 
 [Example MLIR Dump](https://gist.github.com/kapilsh/924e81e0e9fe4c1b9b58f1825419baea)
 
+## Conclusion
+
+In this post, we looked at the MLIR passes that Triton uses to progressively lower the IR to the target hardware. We walked through the Triton GPU IR generated after one of the many passes and saw how it maps back to the original python code.
 
