@@ -14,8 +14,8 @@ internals of Triton. We go deeper into the backend compilation process and look 
 
 Previous posts covered the following topics:
 
-- [Triton Compilation Process](https://www.kapilsharma.dev/posts/deep-dive-into-triton-internals/)
-- [Triton Compiler Frontend](https://www.kapilsharma.dev/posts/deep-dive-into-triton-internals-2/)
+- **Part 1:** [Triton Compilation Process](https://www.kapilsharma.dev/posts/deep-dive-into-triton-internals/)
+- **Part 2:** [Triton Compiler Frontend](https://www.kapilsharma.dev/posts/deep-dive-into-triton-internals-2/)
 
 ## Commit Hash
 

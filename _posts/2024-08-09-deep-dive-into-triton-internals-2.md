@@ -12,6 +12,10 @@ author: ks
 
 In the [previous post](../deep-dive-into-triton-internals/), we explored the Triton compiler internals and code generation pipeline under the hood. In this post, we will explore further to understand what happens when `triton.compile` is called in the frontend. We will initially use python debugger to peak into the python compiler layer and then look at the native layer in C/C++.
 
+This is part 2 of the deep dive. Other posts in the series:
+- [Deep Dive into Triton Internals (Part 1)](../deep-dive-into-triton-internals).
+- [Deep Dive into Triton Internals (Part 3)](../deep-dive-into-triton-internals-3).
+
 ## Git Hash
 
 > Triton's internals might change in the future. The git hash for the version that I am working on is:
