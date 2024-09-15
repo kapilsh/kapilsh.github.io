@@ -741,4 +741,4 @@ Here are some of the sources I referred to while writing this post:
 - [Triton MLIR Dialects](https://github.com/triton-lang/triton/tree/b0f8332c7dedb6ce3a2cf365e53391775d4e4a2e/include/triton/Dialect)
 - [Reading ELF](https://suchprogramming.com/exploring-elf/)
 - [Babylon project](https://openjdk.org/projects/babylon/articles/triton)
-= [Triton on ROCm](https://rocm.blogs.amd.com/artificial-intelligence/triton/README.html)
+- [Triton on ROCm](https://rocm.blogs.amd.com/artificial-intelligence/triton/README.html)
