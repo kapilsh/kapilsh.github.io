@@ -10,7 +10,7 @@ math: false
 author: ks
 ---
 
-This is a small update and a continuation of the previous posts [Transformers for Recommender Systems](../transformers-for-recsys-1) and [Transformers for Recommender Systems](../transformers-for-recsys-2). 
+This is a small update and a continuation of the previous posts [Transformers for Recommender Systems - Part 1](../transformers-for-recsys-1) and [Transformers for Recommender Systems - Part 2](../transformers-for-recsys-2). 
 
 In this post, we improved the model further by improving duplication penalty loss via regularization. This was a pretty small change such that we use median instead of mean to calculate the penalty loss. 
 
