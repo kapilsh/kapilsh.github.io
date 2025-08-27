@@ -29,63 +29,73 @@ These three built-in variables help identify which thread is executing:
 * Identifies the thread within a block
 * It’s a 3D index: threadIdx.x, threadIdx.y, threadIdx.z
 
-2. blockIdx
+2. `blockIdx`
 * Identifies the block within the grid
 * Also 3D: blockIdx.x, blockIdx.y, blockIdx.z.
 
-3. blockDim
+3. `blockDim`
 * Tells how many threads are in a block (in each dimension)
 * 3D: blockDim.x, blockDim.y, blockDim.z
 
 
 
-🧮 Calculating Global Thread Index
+## 🧮 Calculating Global Thread Index
 Often, you want a 1D global thread index to map each thread to an element in an array. You compute it like this:
 int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
 This gives each thread a unique index across the entire grid.
 
-✅ Example: Add Two Arrays
+### ✅ Example: Add Two Arrays
 Here's a minimal CUDA example to add two arrays:
+
+```c
 __global__ void vectorAdd(float *A, float *B, float *C, int N) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < N) {
         C[idx] = A[idx] + B[idx];
     }
 }
-
+```
 
 Launching the Kernel
 
+```c
 int N = 1000;
 int threadsPerBlock = 256;
 int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
 
 vectorAdd<<<blocksPerGrid, threadsPerBlock>>>(A_d, B_d, C_d, N);
+```
 
 
+## 🔁 Summary
+`threadIdx`: Thread ID within a block
+`blockIdx`: Block ID within the grid
+`blockDim`: Number of threads per block
+`gridDim`: (Optional) Number of blocks in the grid
 
-🔁 Summary
-threadIdx: Thread ID within a block
-blockIdx: Block ID within the grid
-blockDim: Number of threads per block
-gridDim: (Optional) Number of blocks in the grid
-
-🪟 Visualization - vector_add
+##  🪟 Visualization - vector_add
 Let’s say we vector_add A and B with both having 8 elements each. We use block size of 4 and 2 thread blocks. 
 
 It means: 
 
+```c
 blockDim.x = 4
 blockIdx.x = 0, 1
 threadIdx.x = 0, 1, 2, 3
 blockIdx.x * blockDim.x + threadIdx.x: 0, 1, 2, 3, 4, 5, 6, 7
-
+```
 
 🪟 Visualization - image_grayscale
-Image size: 32 x 32 pixels
-Block size: 16 x 16 threads
-Grid size: 2 x 2 blocks (since 32 / 16 = 2)
+
+Let's take below example
+
+* Image size: 32 x 32 pixels
+* Block size: 16 x 16 threads
+* Grid size: 2 x 2 blocks (since 32 / 16 = 2)
+
+
+```c
 int width = 32, height = 32;
 float *d_input, *d_output;
 size_t size = width * height * sizeof(float);
@@ -100,8 +110,11 @@ dim3 gridDim((width + 15) / 16, (height + 15) / 16);
 
 image_grayscale<<<gridDim, blockDim>>>(d_input, d_output, width, height);
 cudaDeviceSynchronize();
+```
 
+Mapping out how blocks will run computations:
 
+```c
 blockIdx.x = 0, 1
 blockIdx.y = 0, 1
 
@@ -120,7 +133,7 @@ For block (1,1):
     thread (0,0) => pixel (16,16)
     thread (15,15) => pixel (31,31)
 ..
-
+```
 
 
 
