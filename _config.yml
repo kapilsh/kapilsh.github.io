@@ -107,7 +107,7 @@ toc: true
 
 comments:
   # Global switch for the post comment system. Keeping it empty means disabled.
-  provider: disqus
+  provider: 
   # The provider options are as follows:
   disqus:
     shortname: kapilsharmadev
