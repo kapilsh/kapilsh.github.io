@@ -67,12 +67,8 @@ int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
 vectorAdd<<<blocksPerGrid, threadsPerBlock>>>(A_d, B_d, C_d, N);
 ```
 
+![Vector Add](/assets/vector_add_gpu.png)
 
-## 🔁 Summary
-`threadIdx`: Thread ID within a block
-`blockIdx`: Block ID within the grid
-`blockDim`: Number of threads per block
-`gridDim`: (Optional) Number of blocks in the grid
 
 ##  🪟 Visualization - vector_add
 Let’s say we vector_add A and B with both having 8 elements each. We use block size of 4 and 2 thread blocks. 
@@ -86,7 +82,7 @@ threadIdx.x = 0, 1, 2, 3
 blockIdx.x * blockDim.x + threadIdx.x: 0, 1, 2, 3, 4, 5, 6, 7
 ```
 
-🪟 Visualization - image_grayscale
+## 🪟 Visualization - image_grayscale
 
 Let's take below example
 
@@ -134,6 +130,14 @@ For block (1,1):
     thread (15,15) => pixel (31,31)
 ..
 ```
+
+![Gary scaling](/assets/gray_scale_gpu.png)
+
+## 🔁 Summary
+* `threadIdx`: Thread ID within a block
+* `blockIdx`: Block ID within the grid
+* `blockDim`: Number of threads per block
+* `gridDim`: (Optional) Number of blocks in the grid
 
 
 
