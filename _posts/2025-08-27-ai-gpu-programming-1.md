@@ -67,8 +67,6 @@ int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
 vectorAdd<<<blocksPerGrid, threadsPerBlock>>>(A_d, B_d, C_d, N);
 ```
 
-![Vector Add](/assets/vector_add_gpu.png)
-
 
 ##  🪟 Visualization - vector_add
 Let’s say we vector_add A and B with both having 8 elements each. We use block size of 4 and 2 thread blocks. 
@@ -81,6 +79,8 @@ blockIdx.x = 0, 1
 threadIdx.x = 0, 1, 2, 3
 blockIdx.x * blockDim.x + threadIdx.x: 0, 1, 2, 3, 4, 5, 6, 7
 ```
+
+![Vector Add](/assets/vector_add_gpu.png)
 
 ## 🪟 Visualization - image_grayscale
 
