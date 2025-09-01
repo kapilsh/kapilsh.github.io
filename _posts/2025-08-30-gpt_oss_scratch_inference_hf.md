@@ -1,7 +1,7 @@
 ---
 title: GPT OSS from Scratch - Inference Huggingface Model
 description: >-
-  Testing out the huggingface version for the gpt-oss-20b locally on an RTX 4090
+  Testing out the huggingface version for the gpt-oss-20b locally on consumer hardware
 date: 2025-08-30
 categories: [Blog]
 tags: [AI, Machine Learning, GPT]
@@ -10,7 +10,7 @@ math: false
 author: ks
 ---
 
-OpenAI's GPT OSS was recently launched in 20B and 120B parameter versions. The 20B model is suitable for local experimentation and research on consumer GPUs. To test this out I decided to give my RTX 4090 out for spin to load and inspect the 20B variant. 
+OpenAI's GPT OSS was recently launched in 20B and 120B parameter versions. The 20B model is suitable for local experimentation and research on consumer GPUs. To test this out I decided to give my RTX 4090 a spin to load and inspect the 20B variant. 
 
 ## Architecture
 
@@ -100,7 +100,7 @@ Mon Sep  1 06:16:25 2025
 +---------------------------------------------------------------------------------------+
 ```
 
-We see approximately 14GB of VRAM used by the model, which seems to imply that this is the MXFP4 quantizated model. As per the [model highlights](https://huggingface.co/openai/gpt-oss-20b#highlights):
+We see approximately 14GB of VRAM used by the model, which seems to imply that this is the MXFP4 quantized model. As per the [model highlights](https://huggingface.co/openai/gpt-oss-20b#highlights):
 
 > MXFP4 quantization: The models were post-trained with MXFP4 quantization of the MoE weights, making gpt-oss-120b run on a single 80GB GPU (like NVIDIA H100 or AMD MI300X) and the gpt-oss-20b model run within 16GB of memory. All evals were performed with the same MXFP4 quantization.
 
@@ -187,13 +187,13 @@ layers.23.post_attention_layernorm.weight torch.Size([2880])
 norm.weight torch.Size([2880])
 ```
 
-Here's a bried analysis of the weights as loaded:
+Here's a brief analysis of the weights as loaded:
 
 ![GPT OSS Weights or Parameters](/assets/gpt_oss_parameters.jpg)
 
 ## Test Inference and Reasoning Traces
 
-Alright, now that the model is loaded -- let's take it for spin. Below I start with the basic prompt that was on the huggingface model card.
+Alright, now that the model is loaded -- let's take it for a spin. Below I start with the basic prompt that was on the huggingface model card.
 
 ```python
 messages = [
@@ -210,7 +210,7 @@ print(outputs[0]["generated_text"][-1]["content"])
 ![GPT OSS Reasoning Trace](/assets/gpt_oss_reasoning.jpg)
 
 
-We can see that the model first outputs an "analysis" block of text where we can see the chain-of-thought reasoning of the model. After that, we see the final assistent response. Another distinct thing we can see that assistent output is formated as regular markdown. In fact, we can render it as is on this webpage since it uses markdown through jekyll. Let's try that:
+We can see that the model first outputs an "analysis" block of text where we can see the chain-of-thought reasoning of the model. After that, we see the final assistant response. Another distinct thing we can see is that the assistant output is formatted as regular markdown. In fact, we can render it as is on this webpage since it uses markdown through jekyll. Let's try that:
 
 ### Markdown Rendering of Assistent Response
 
@@ -269,11 +269,11 @@ print(outputs[0]["generated_text"][-1]["content"])
 
 ![GPT OSS Reasoning 2](/assets/gpt_oss_reasoning_2.jpg)
 
-We see that in this case, the reasoning trace is much longer. May be because it is a "harder" question to answer for the assistent. 
+We see that in this case, the reasoning trace is much longer. Maybe because it is a "harder" question to answer for the assistant. 
 
 ## Coding Prompts
 
-Next, let's try some coding prompts since that could be nice use case where you can run GPT OSS locally to get basic coding needs met or may be even create your own codex or claude code alternative. We will render the output as regular markdown since there will be codeblocks in the assistent output.
+Next, let's try some coding prompts since that could be a nice use case where you can run GPT OSS locally to get basic coding needs met or maybe even create your own codex or claude code alternative. We will render the output as regular markdown since there will be codeblocks in the assistant output.
 
 ### Simpler Prompt
 
@@ -291,7 +291,7 @@ outputs = pipe(
 )
 print(outputs[0]["generated_text"][-1]["content"])
 ```
-Below I have removed some of the tokens so the output can render correctly on this website but rest assured, the assistent output can render as perfect markdown.
+Below I have removed some of the tokens so the output can render correctly on this website but rest assured, the assistant output can render as perfect markdown.
 
 ```
 analysisThe user asks: "Can you show me a Python code example for a simple web server?" They likely want a simple HTTP server example. We can provide a minimal example using Python's built-in http.server module, or a minimal implementation using sockets, or maybe using frameworks like Flask. The simplest is using http.server or BaseHTTPRequestHandler. We can show a simple server that handles GET requests and returns a static page. Provide code and explanation. Maybe also show how to run it. Could mention that it's for demonstration only, not production. Provide code snippet with comments, show how to test with browser or curl. Also mention that Python 3 includes http.server. Provide alternative with Flask. Provide both? The question: "Can you show me a Python code example for a simple web server?" It's open ended. Provide a straightforward example. We'll show using http.server, using socketserver. Also mention using Flask for more robust. Provide code.
@@ -389,7 +389,7 @@ If
 
 ### Harder Prompt
 
-Now, let's try a real world problem where we have the assistent write some PyTorch code to operate over jagged tensors. Let's see how it does. I increase the max_new_tokens to 4096 to give the model more "time to think". 
+Now, let's try a real world problem where we have the assistant write some PyTorch code to operate over jagged tensors. Let's see how it does. I increase the max_new_tokens to 4096 to give the model more "time to think". 
 
 
 ```python
@@ -611,7 +611,7 @@ explicit Python `for`‑loops over the batch dimension are used, keeping the
 computation fully vectorised and GPU‑friendly.
 ```
 
-That's actually pretty good. May be we can test the code generated by the assistent model to see the correctness but as a base model output, this looks pretty good. 
+That's actually pretty good. Maybe we can test the code generated by the assistant model to see the correctness but as a base model output, this looks pretty good. 
 
 Let's see the GPU Utilization from this prompt:
 
@@ -621,7 +621,9 @@ GPU utilization hovered around 45-50% when the inference was being run. So, I co
 
 ## Summary
 
-We explored inference of GPT OSS 20B model running on an RTX 4090 GPU locally. It uses approximately 14GB VRAM in its MXFP4 quantized form, making it suitable for local experimentation. 
+In this post, we explored the inference capabilities of the GPT OSS 20B model running on an RTX 4090 GPU locally. The model uses approximately 14GB of VRAM in its MXFP4 quantized form, making it suitable for local experimentation on consumer hardware.
 
-Inference tests highlight the model's reasoning capability, with outputs including an "analysis" section detailing its thought process. We tested the model on a few different prompts. 
+Our inference tests highlighted the model's impressive reasoning capabilities, with outputs including an "analysis" section that provides visibility into the model's chain-of-thought reasoning process. We tested the model on various prompts ranging from educational content to complex coding tasks, and it performed remarkably well across these different use cases.
+
+The architecture inspection revealed the model's use of mixture-of-experts design, Grouped Query Attention, and other optimizations that enable its efficient operation. This combination of reasonable memory requirements and strong performance makes GPT OSS 20B a valuable tool for researchers and developers wanting to experiment with large language models locally.
 
