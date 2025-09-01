@@ -1,8 +1,8 @@
 ---
-title: GPT OSS from Scratch -- Inference Huggingface Model
+title: GPT OSS from Scratch - Inference Huggingface Model
 description: >-
   Testing out the huggingface version for the gpt-oss-20b locally on an RTX 4090
-date: 2025-08-20
+date: 2025-08-30
 categories: [Blog]
 tags: [AI, Machine Learning, GPT]
 pin: true
@@ -10,25 +10,106 @@ math: false
 author: ks
 ---
 
+OpenAI's GPT OSS was recently launched in 20B and 120B parameter versions. The 20B model is suitable for local experimentation and research on consumer GPUs. To test this out I decided to give my RTX 4090 out for spin to load and inspect the 20B variant. 
+
+## Architecture
+
+Below we show the architecture of the 20B variant of GPT-OSS model. It's a mixture-of-experts (MoE) model, which improves computational efficiency by routing inputs through specialized expert subnetworks. In addition, this seems to also reveal that OpenAI is using Grouped Query Attention (GQA) for their models (at least based on this open source release), instead of Grouped Head Latent Attention, that is used by DeepSeek V3.
+
 ![GPT OSS 20B](/assets/gpt_oss_20b.jpg)
 
+## Inspect Huggingface Model
 
-```python
-from transformers import AutoModel
-from transformers import pipeline
+Along with the model, OpenAI [released instructions](https://huggingface.co/openai/gpt-oss-20b) to inference GPT oss models directly using huggingface `transformers` package. Let's test this out.
 
-# Either do this or below -- othewise model will OOM
-model_id = "openai/gpt-oss-20b"
-model = AutoModel.from_pretrained(model_id, device_map="cuda")
-print(model)
-parameters_state_dict = model.state_dict()
-for key, value in parameters_state_dict.items():
-    print(key, value.size())
-    
+### Checking VRAM Before
+
+Before we load the model, let's make sure there is enough VRAM available:
+
+```shell
+nvidia-smi
+```
+```
+Mon Sep  1 06:12:06 2025       
++---------------------------------------------------------------------------------------+
+| NVIDIA-SMI 535.247.01             Driver Version: 535.247.01   CUDA Version: 12.2     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  NVIDIA GeForce RTX 4090        Off | 00000000:01:00.0  On |                  Off |
+|  0%   45C    P8              26W / 450W |    760MiB / 24564MiB |     23%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+                                                                                         
++---------------------------------------------------------------------------------------+
+| Processes:                                                                            |
+|  GPU   GI   CI        PID   Type   Process name                            GPU Memory |
+|        ID   ID                                                             Usage      |
+|=======================================================================================|
+|    0   N/A  N/A      2030      G   /usr/lib/xorg/Xorg                          380MiB |
+|    0   N/A  N/A      2255      G   /usr/bin/gnome-shell                         77MiB |
+|    0   N/A  N/A     10015      G   ...seed-version=20250718-130045.144000      111MiB |
+|    0   N/A  N/A     11730      G   /usr/share/discord/Discord                   54MiB |
+|    0   N/A  N/A    551469      G   /usr/share/code/code                         97MiB |
++---------------------------------------------------------------------------------------+
 ```
 
+### Load Model
 
-```text
+```python
+from transformers import pipeline
+model_id = "openai/gpt-oss-20b"
+pipe = pipeline(
+    "text-generation",
+    model=model_id,
+    torch_dtype="auto",
+    device_map="auto",
+)
+```
+
+### Check VRAM After
+
+
+```
+Mon Sep  1 06:16:25 2025       
++---------------------------------------------------------------------------------------+
+| NVIDIA-SMI 535.247.01             Driver Version: 535.247.01   CUDA Version: 12.2     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  NVIDIA GeForce RTX 4090        Off | 00000000:01:00.0  On |                  Off |
+| 30%   44C    P8              26W / 450W |  14374MiB / 24564MiB |     16%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+                                                                                         
++---------------------------------------------------------------------------------------+
+| Processes:                                                                            |
+|  GPU   GI   CI        PID   Type   Process name                            GPU Memory |
+|        ID   ID                                                             Usage      |
+|=======================================================================================|
+|    0   N/A  N/A      2030      G   /usr/lib/xorg/Xorg                          380MiB |
+|    0   N/A  N/A      2255      G   /usr/bin/gnome-shell                         85MiB |
+|    0   N/A  N/A     10015      G   ...seed-version=20250718-130045.144000      108MiB |
+|    0   N/A  N/A     11730      G   /usr/share/discord/Discord                   54MiB |
+|    0   N/A  N/A    551469      G   /usr/share/code/code                        124MiB |
+|    0   N/A  N/A   3264863      C   ...ma/anaconda3/envs/models/bin/python    13576MiB |
++---------------------------------------------------------------------------------------+
+```
+
+We see approximately 14GB of VRAM used by the model, which seems to imply that this is the MXFP4 quantizated model. As per the [model highlights](https://huggingface.co/openai/gpt-oss-20b#highlights):
+
+> MXFP4 quantization: The models were post-trained with MXFP4 quantization of the MoE weights, making gpt-oss-120b run on a single 80GB GPU (like NVIDIA H100 or AMD MI300X) and the gpt-oss-20b model run within 16GB of memory. All evals were performed with the same MXFP4 quantization.
+
+Next, let's see the pytorch model:
+
+```python
+print(pipe.model)
+```
+```
 GptOssModel(
   (embed_tokens): Embedding(201088, 2880, padding_idx=199999)
   (layers): ModuleList(
@@ -50,6 +131,27 @@ GptOssModel(
   (norm): GptOssRMSNorm((2880,), eps=1e-05)
   (rotary_emb): GptOssRotaryEmbedding()
 )
+```
+
+From here, we can see that the model uses:
+
+* 24 Transformer blocks
+* Grouped Query Attention (GQA) with 1/8 shrinking (4096 --> 512) for KV cache
+* MoE Router
+* RMS Norm
+* Rotary Embedding (RoPE)
+
+### Inspect parameters
+
+Next, let's inspect the model parameters:
+
+```python
+parameters_state_dict = pipe.model.state_dict()
+for key, value in parameters_state_dict.items():
+    print(key, value.size())
+```
+
+```
 embed_tokens.weight torch.Size([201088, 2880])
 layers.0.self_attn.sinks torch.Size([64])
 layers.0.self_attn.q_proj.weight torch.Size([4096, 2880])
@@ -66,336 +168,7 @@ layers.0.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
 layers.0.mlp.experts.down_proj_bias torch.Size([32, 2880])
 layers.0.input_layernorm.weight torch.Size([2880])
 layers.0.post_attention_layernorm.weight torch.Size([2880])
-layers.1.self_attn.sinks torch.Size([64])
-layers.1.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.1.self_attn.q_proj.bias torch.Size([4096])
-layers.1.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.1.self_attn.k_proj.bias torch.Size([512])
-layers.1.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.1.self_attn.v_proj.bias torch.Size([512])
-layers.1.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.1.self_attn.o_proj.bias torch.Size([2880])
-layers.1.mlp.router.weight torch.Size([32, 2880])
-layers.1.mlp.router.bias torch.Size([32])
-layers.1.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.1.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.1.input_layernorm.weight torch.Size([2880])
-layers.1.post_attention_layernorm.weight torch.Size([2880])
-layers.2.self_attn.sinks torch.Size([64])
-layers.2.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.2.self_attn.q_proj.bias torch.Size([4096])
-layers.2.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.2.self_attn.k_proj.bias torch.Size([512])
-layers.2.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.2.self_attn.v_proj.bias torch.Size([512])
-layers.2.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.2.self_attn.o_proj.bias torch.Size([2880])
-layers.2.mlp.router.weight torch.Size([32, 2880])
-layers.2.mlp.router.bias torch.Size([32])
-layers.2.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.2.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.2.input_layernorm.weight torch.Size([2880])
-layers.2.post_attention_layernorm.weight torch.Size([2880])
-layers.3.self_attn.sinks torch.Size([64])
-layers.3.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.3.self_attn.q_proj.bias torch.Size([4096])
-layers.3.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.3.self_attn.k_proj.bias torch.Size([512])
-layers.3.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.3.self_attn.v_proj.bias torch.Size([512])
-layers.3.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.3.self_attn.o_proj.bias torch.Size([2880])
-layers.3.mlp.router.weight torch.Size([32, 2880])
-layers.3.mlp.router.bias torch.Size([32])
-layers.3.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.3.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.3.input_layernorm.weight torch.Size([2880])
-layers.3.post_attention_layernorm.weight torch.Size([2880])
-layers.4.self_attn.sinks torch.Size([64])
-layers.4.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.4.self_attn.q_proj.bias torch.Size([4096])
-layers.4.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.4.self_attn.k_proj.bias torch.Size([512])
-layers.4.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.4.self_attn.v_proj.bias torch.Size([512])
-layers.4.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.4.self_attn.o_proj.bias torch.Size([2880])
-layers.4.mlp.router.weight torch.Size([32, 2880])
-layers.4.mlp.router.bias torch.Size([32])
-layers.4.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.4.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.4.input_layernorm.weight torch.Size([2880])
-layers.4.post_attention_layernorm.weight torch.Size([2880])
-layers.5.self_attn.sinks torch.Size([64])
-layers.5.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.5.self_attn.q_proj.bias torch.Size([4096])
-layers.5.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.5.self_attn.k_proj.bias torch.Size([512])
-layers.5.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.5.self_attn.v_proj.bias torch.Size([512])
-layers.5.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.5.self_attn.o_proj.bias torch.Size([2880])
-layers.5.mlp.router.weight torch.Size([32, 2880])
-layers.5.mlp.router.bias torch.Size([32])
-layers.5.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.5.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.5.input_layernorm.weight torch.Size([2880])
-layers.5.post_attention_layernorm.weight torch.Size([2880])
-layers.6.self_attn.sinks torch.Size([64])
-layers.6.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.6.self_attn.q_proj.bias torch.Size([4096])
-layers.6.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.6.self_attn.k_proj.bias torch.Size([512])
-layers.6.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.6.self_attn.v_proj.bias torch.Size([512])
-layers.6.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.6.self_attn.o_proj.bias torch.Size([2880])
-layers.6.mlp.router.weight torch.Size([32, 2880])
-layers.6.mlp.router.bias torch.Size([32])
-layers.6.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.6.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.6.input_layernorm.weight torch.Size([2880])
-layers.6.post_attention_layernorm.weight torch.Size([2880])
-layers.7.self_attn.sinks torch.Size([64])
-layers.7.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.7.self_attn.q_proj.bias torch.Size([4096])
-layers.7.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.7.self_attn.k_proj.bias torch.Size([512])
-layers.7.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.7.self_attn.v_proj.bias torch.Size([512])
-layers.7.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.7.self_attn.o_proj.bias torch.Size([2880])
-layers.7.mlp.router.weight torch.Size([32, 2880])
-layers.7.mlp.router.bias torch.Size([32])
-layers.7.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.7.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.7.input_layernorm.weight torch.Size([2880])
-layers.7.post_attention_layernorm.weight torch.Size([2880])
-layers.8.self_attn.sinks torch.Size([64])
-layers.8.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.8.self_attn.q_proj.bias torch.Size([4096])
-layers.8.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.8.self_attn.k_proj.bias torch.Size([512])
-layers.8.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.8.self_attn.v_proj.bias torch.Size([512])
-layers.8.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.8.self_attn.o_proj.bias torch.Size([2880])
-layers.8.mlp.router.weight torch.Size([32, 2880])
-layers.8.mlp.router.bias torch.Size([32])
-layers.8.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.8.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.8.input_layernorm.weight torch.Size([2880])
-layers.8.post_attention_layernorm.weight torch.Size([2880])
-layers.9.self_attn.sinks torch.Size([64])
-layers.9.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.9.self_attn.q_proj.bias torch.Size([4096])
-layers.9.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.9.self_attn.k_proj.bias torch.Size([512])
-layers.9.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.9.self_attn.v_proj.bias torch.Size([512])
-layers.9.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.9.self_attn.o_proj.bias torch.Size([2880])
-layers.9.mlp.router.weight torch.Size([32, 2880])
-layers.9.mlp.router.bias torch.Size([32])
-layers.9.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.9.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.9.input_layernorm.weight torch.Size([2880])
-layers.9.post_attention_layernorm.weight torch.Size([2880])
-layers.10.self_attn.sinks torch.Size([64])
-layers.10.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.10.self_attn.q_proj.bias torch.Size([4096])
-layers.10.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.10.self_attn.k_proj.bias torch.Size([512])
-layers.10.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.10.self_attn.v_proj.bias torch.Size([512])
-layers.10.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.10.self_attn.o_proj.bias torch.Size([2880])
-layers.10.mlp.router.weight torch.Size([32, 2880])
-layers.10.mlp.router.bias torch.Size([32])
-layers.10.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.10.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.10.input_layernorm.weight torch.Size([2880])
-layers.10.post_attention_layernorm.weight torch.Size([2880])
-layers.11.self_attn.sinks torch.Size([64])
-layers.11.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.11.self_attn.q_proj.bias torch.Size([4096])
-layers.11.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.11.self_attn.k_proj.bias torch.Size([512])
-layers.11.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.11.self_attn.v_proj.bias torch.Size([512])
-layers.11.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.11.self_attn.o_proj.bias torch.Size([2880])
-layers.11.mlp.router.weight torch.Size([32, 2880])
-layers.11.mlp.router.bias torch.Size([32])
-layers.11.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.11.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.11.input_layernorm.weight torch.Size([2880])
-layers.11.post_attention_layernorm.weight torch.Size([2880])
-layers.12.self_attn.sinks torch.Size([64])
-layers.12.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.12.self_attn.q_proj.bias torch.Size([4096])
-layers.12.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.12.self_attn.k_proj.bias torch.Size([512])
-layers.12.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.12.self_attn.v_proj.bias torch.Size([512])
-layers.12.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.12.self_attn.o_proj.bias torch.Size([2880])
-layers.12.mlp.router.weight torch.Size([32, 2880])
-layers.12.mlp.router.bias torch.Size([32])
-layers.12.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.12.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.12.input_layernorm.weight torch.Size([2880])
-layers.12.post_attention_layernorm.weight torch.Size([2880])
-layers.13.self_attn.sinks torch.Size([64])
-layers.13.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.13.self_attn.q_proj.bias torch.Size([4096])
-layers.13.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.13.self_attn.k_proj.bias torch.Size([512])
-layers.13.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.13.self_attn.v_proj.bias torch.Size([512])
-layers.13.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.13.self_attn.o_proj.bias torch.Size([2880])
-layers.13.mlp.router.weight torch.Size([32, 2880])
-layers.13.mlp.router.bias torch.Size([32])
-layers.13.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.13.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.13.input_layernorm.weight torch.Size([2880])
-layers.13.post_attention_layernorm.weight torch.Size([2880])
-layers.14.self_attn.sinks torch.Size([64])
-layers.14.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.14.self_attn.q_proj.bias torch.Size([4096])
-layers.14.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.14.self_attn.k_proj.bias torch.Size([512])
-layers.14.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.14.self_attn.v_proj.bias torch.Size([512])
-layers.14.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.14.self_attn.o_proj.bias torch.Size([2880])
-layers.14.mlp.router.weight torch.Size([32, 2880])
-layers.14.mlp.router.bias torch.Size([32])
-layers.14.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.14.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.14.input_layernorm.weight torch.Size([2880])
-layers.14.post_attention_layernorm.weight torch.Size([2880])
-layers.15.self_attn.sinks torch.Size([64])
-layers.15.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.15.self_attn.q_proj.bias torch.Size([4096])
-layers.15.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.15.self_attn.k_proj.bias torch.Size([512])
-layers.15.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.15.self_attn.v_proj.bias torch.Size([512])
-layers.15.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.15.self_attn.o_proj.bias torch.Size([2880])
-layers.15.mlp.router.weight torch.Size([32, 2880])
-layers.15.mlp.router.bias torch.Size([32])
-layers.15.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.15.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.15.input_layernorm.weight torch.Size([2880])
-layers.15.post_attention_layernorm.weight torch.Size([2880])
-layers.16.self_attn.sinks torch.Size([64])
-layers.16.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.16.self_attn.q_proj.bias torch.Size([4096])
-layers.16.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.16.self_attn.k_proj.bias torch.Size([512])
-layers.16.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.16.self_attn.v_proj.bias torch.Size([512])
-layers.16.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.16.self_attn.o_proj.bias torch.Size([2880])
-layers.16.mlp.router.weight torch.Size([32, 2880])
-layers.16.mlp.router.bias torch.Size([32])
-layers.16.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.16.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.16.input_layernorm.weight torch.Size([2880])
-layers.16.post_attention_layernorm.weight torch.Size([2880])
-layers.17.self_attn.sinks torch.Size([64])
-layers.17.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.17.self_attn.q_proj.bias torch.Size([4096])
-layers.17.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.17.self_attn.k_proj.bias torch.Size([512])
-layers.17.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.17.self_attn.v_proj.bias torch.Size([512])
-layers.17.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.17.self_attn.o_proj.bias torch.Size([2880])
-layers.17.mlp.router.weight torch.Size([32, 2880])
-layers.17.mlp.router.bias torch.Size([32])
-layers.17.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.17.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.17.input_layernorm.weight torch.Size([2880])
-layers.17.post_attention_layernorm.weight torch.Size([2880])
-layers.18.self_attn.sinks torch.Size([64])
-layers.18.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.18.self_attn.q_proj.bias torch.Size([4096])
-layers.18.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.18.self_attn.k_proj.bias torch.Size([512])
-layers.18.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.18.self_attn.v_proj.bias torch.Size([512])
-layers.18.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.18.self_attn.o_proj.bias torch.Size([2880])
-layers.18.mlp.router.weight torch.Size([32, 2880])
-layers.18.mlp.router.bias torch.Size([32])
-layers.18.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.18.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.18.input_layernorm.weight torch.Size([2880])
-layers.18.post_attention_layernorm.weight torch.Size([2880])
-layers.19.self_attn.sinks torch.Size([64])
-layers.19.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.19.self_attn.q_proj.bias torch.Size([4096])
-layers.19.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.19.self_attn.k_proj.bias torch.Size([512])
-layers.19.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.19.self_attn.v_proj.bias torch.Size([512])
-layers.19.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.19.self_attn.o_proj.bias torch.Size([2880])
-layers.19.mlp.router.weight torch.Size([32, 2880])
-layers.19.mlp.router.bias torch.Size([32])
-layers.19.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.19.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.19.input_layernorm.weight torch.Size([2880])
-layers.19.post_attention_layernorm.weight torch.Size([2880])
-layers.20.self_attn.sinks torch.Size([64])
-layers.20.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.20.self_attn.q_proj.bias torch.Size([4096])
-layers.20.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.20.self_attn.k_proj.bias torch.Size([512])
-layers.20.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.20.self_attn.v_proj.bias torch.Size([512])
-layers.20.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.20.self_attn.o_proj.bias torch.Size([2880])
-layers.20.mlp.router.weight torch.Size([32, 2880])
-layers.20.mlp.router.bias torch.Size([32])
-layers.20.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.20.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.20.input_layernorm.weight torch.Size([2880])
-layers.20.post_attention_layernorm.weight torch.Size([2880])
-layers.21.self_attn.sinks torch.Size([64])
-layers.21.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.21.self_attn.q_proj.bias torch.Size([4096])
-layers.21.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.21.self_attn.k_proj.bias torch.Size([512])
-layers.21.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.21.self_attn.v_proj.bias torch.Size([512])
-layers.21.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.21.self_attn.o_proj.bias torch.Size([2880])
-layers.21.mlp.router.weight torch.Size([32, 2880])
-layers.21.mlp.router.bias torch.Size([32])
-layers.21.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.21.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.21.input_layernorm.weight torch.Size([2880])
-layers.21.post_attention_layernorm.weight torch.Size([2880])
-layers.22.self_attn.sinks torch.Size([64])
-layers.22.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.22.self_attn.q_proj.bias torch.Size([4096])
-layers.22.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.22.self_attn.k_proj.bias torch.Size([512])
-layers.22.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.22.self_attn.v_proj.bias torch.Size([512])
-layers.22.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.22.self_attn.o_proj.bias torch.Size([2880])
-layers.22.mlp.router.weight torch.Size([32, 2880])
-layers.22.mlp.router.bias torch.Size([32])
-layers.22.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.22.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.22.input_layernorm.weight torch.Size([2880])
-layers.22.post_attention_layernorm.weight torch.Size([2880])
+...
 layers.23.self_attn.sinks torch.Size([64])
 layers.23.self_attn.q_proj.weight torch.Size([4096, 2880])
 layers.23.self_attn.q_proj.bias torch.Size([4096])
@@ -414,43 +187,13 @@ layers.23.post_attention_layernorm.weight torch.Size([2880])
 norm.weight torch.Size([2880])
 ```
 
-```python
-model_id = "openai/gpt-oss-20b"
-pipe = pipeline(
-    "text-generation",
-    model=model_id,
-    torch_dtype="auto",
-    device_map="auto",
-)
-pipe.model
-```
+Here's a bried analysis of the weights as loaded:
 
-```text
-GptOssForCausalLM(
-  (model): GptOssModel(
-    (embed_tokens): Embedding(201088, 2880, padding_idx=199999)
-    (layers): ModuleList(
-      (0-23): 24 x GptOssDecoderLayer(
-        (self_attn): GptOssAttention(
-          (q_proj): Linear(in_features=2880, out_features=4096, bias=True)
-          (k_proj): Linear(in_features=2880, out_features=512, bias=True)
-          (v_proj): Linear(in_features=2880, out_features=512, bias=True)
-          (o_proj): Linear(in_features=4096, out_features=2880, bias=True)
-        )
-        (mlp): GptOssMLP(
-          (router): GptOssTopKRouter()
-          (experts): Mxfp4GptOssExperts()
-        )
-        (input_layernorm): GptOssRMSNorm((2880,), eps=1e-05)
-        (post_attention_layernorm): GptOssRMSNorm((2880,), eps=1e-05)
-      )
-    )
-    (norm): GptOssRMSNorm((2880,), eps=1e-05)
-    (rotary_emb): GptOssRotaryEmbedding()
-  )
-  (lm_head): Linear(in_features=2880, out_features=201088, bias=False)
-)
-```
+![GPT OSS Weights or Parameters](/assets/gpt_oss_parameters.jpg)
+
+## Test Inference and Reasoning Traces
+
+Alright, now that the model is loaded -- let's take it for spin. Below I start with the basic prompt that was on the huggingface model card.
 
 ```python
 messages = [
@@ -464,8 +207,16 @@ outputs = pipe(
 print(outputs[0]["generated_text"][-1]["content"])
 ```
 
-```text
-analysisWe need to explain quantum mechanics clearly and concisely. The user wants a clear and concise explanation. Probably a brief overview of the principles: wave-particle duality, superposition, uncertainty, quantization, wavefunctions, Schrödinger equation, measurement collapse, etc. Also mention key experiments like double-slit, photoelectric effect, etc. Keep it concise but thorough. Use analogies. Provide a short summary. Should be accessible to non-experts. We'll keep it short but cover main points.assistantfinal**Quantum mechanics in a nutshell**
+![GPT OSS Reasoning Trace](/assets/gpt_oss_reasoning.jpg)
+
+
+We can see that the model first outputs an "analysis" block of text where we can see the chain-of-thought reasoning of the model. After that, we see the final assistent response. Another distinct thing we can see that assistent output is formated as regular markdown. In fact, we can render it as is on this webpage since it uses markdown through jekyll. Let's try that:
+
+### Markdown Rendering of Assistent Response
+
+#### Rendering START --- NOT PART OF POST - Just rendering
+
+*Quantum mechanics in a nutshell**
 
 | Core idea | What it means | Everyday picture |
 |-----------|---------------|-------------------|
@@ -487,7 +238,19 @@ analysisWe need to explain quantum mechanics clearly and concisely. The user wan
 - **Fundamental physics**: It explains everything from the structure of atoms to the behavior of the early universe.
 
 **Bottom line:** Quantum mechanics tells us that at microscopic scales, matter and energy behave as waves that can be in many states at once, but when we look, they “choose” a single, definite state. The math captures this strange reality with astonishing precision.
-```
+
+
+#### Rendering END --- NOT PART OF POST - Just rendering
+
+That's neat!! Alright moving on...
+
+### Memory used
+
+Let's check GPU utilization during the inference query:
+
+![GPT OSS Inference GPU UTIL](/assets/gpt_oss_memory_snapshot.png)
+
+## Few More Prompts
 
 ```python
 messages = [
@@ -504,11 +267,130 @@ outputs = pipe(
 print(outputs[0]["generated_text"][-1]["content"])
 ```
 
-```text
-analysisThe user asks: "how much memory to reserve for gpt oss on a 4090 rtx gpu". They likely mean "GPT-OSS" maybe "gpt-oss"? Or "GPT-OS"? Maybe they refer to GPT (the model) on a GPU. They want to know memory for GPT OSS on a 4090. Probably they want to know the memory usage for GPT on RTX 4090. They might refer to "GPT-OSS" as open-source GPT? Not sure. They may refer to "GPT-OSS" as GPT on an RTX 4090 GPU, memory reservation. They might refer to "OpenAI's GPT-OSS"? There's no official GPT OSS. There is "GPT-OSS" open-source alternative like "GPT-4 All" or "GPT4All" or "GPT-OSS by huggingface"? Or "GPT-OSS" as "Open-source GPT"? Actually, "GPT-OSS" might refer to "GPT-OSS" as a fork of GPT. But maybe it's "GPT-OS" or "GPT open source"? But the user likely wants to know how much VRAM to reserve for GPT on a 4090. The 4090 has 24GB VRAM. If they want to run GPT-3, GPT-4, or GPT-2? Usually GPT-3 is huge. It can't run full GPT-3 on GPU. GPT-2 1.5B uses ~6GB. GPT-3 175B is impossible. GPT-4 8.3B? If using quantization, maybe 3.5B can run. GPT-4 all? The question: "how much memory to reserve for gpt oss on a 4090 rtx gpu". They might refer to "gpt-oss" as "GPT4All-J" or "GPT4All" open-source. Could be "gpt-oss" as a repository on GitHub for open-source GPT. Not sure.
+![GPT OSS Reasoning 2](/assets/gpt_oss_reasoning_2.jpg)
 
-Better to ask clarifying. But we need to respond with an estimate: 24GB GPU, but you need to reserve some for OS, drivers, other processes, CUDA, etc. So reserve maybe 22GB for model. But memory usage depends on model size, quantization, batch size. For example, GPT-4 All 3.5B quantized to 4-bit uses ~3GB. GPT-J uses ~7GB. For large models, 24GB might
+We see that in this case, the reasoning trace is much longer. May be because it is a "harder" question to answer for the assistent. 
+
+## Coding Prompts
+
+Next, let's try some coding prompts since that could be nice use case where you can run GPT OSS locally to get basic coding needs met or may be even create your own codex or claude code alternative. We will render the output as regular markdown since there will be codeblocks in the assistent output.
+
+### Simpler Prompt
+
+```python
+messages = [
+    {
+        "role": "user",
+        "content": "Can you show me a Python code example for a simple web server?",
+    },
+]
+
+outputs = pipe(
+    messages,
+    max_new_tokens=1024,
+)
+print(outputs[0]["generated_text"][-1]["content"])
 ```
+Below I have removed some of the tokens so the output can render correctly on this website but rest assured, the assistent output can render as perfect markdown.
+
+```
+analysisThe user asks: "Can you show me a Python code example for a simple web server?" They likely want a simple HTTP server example. We can provide a minimal example using Python's built-in http.server module, or a minimal implementation using sockets, or maybe using frameworks like Flask. The simplest is using http.server or BaseHTTPRequestHandler. We can show a simple server that handles GET requests and returns a static page. Provide code and explanation. Maybe also show how to run it. Could mention that it's for demonstration only, not production. Provide code snippet with comments, show how to test with browser or curl. Also mention that Python 3 includes http.server. Provide alternative with Flask. Provide both? The question: "Can you show me a Python code example for a simple web server?" It's open ended. Provide a straightforward example. We'll show using http.server, using socketserver. Also mention using Flask for more robust. Provide code.
+
+We'll answer with explanation and code. Provide the minimal code for a web server that responds to GET requests.
+
+Let's produce.assistantfinalBelow is a **minimal, “bare‑bones”** HTTP server written in pure Python 3.  
+It listens on a port (default 8000), accepts a single request, and sends back a short HTML page.  
+(Use this only for learning or quick tests – it’s not meant for production.)
+
+#!/usr/bin/env python3
+"""
+A tiny, self‑contained HTTP server that serves a static HTML page.
+"""
+
+import http.server
+import socketserver
+
+# ------------------------------------------------------------------
+# 1️⃣  Define a request handler that knows how to respond to GET.
+# ------------------------------------------------------------------
+class SimpleHandler(http.server.BaseHTTPRequestHandler):
+    # Called when the client sends a GET request.
+    def do_GET(self):
+        # What we’ll send back
+        content = (
+            "<!DOCTYPE html>"
+            "<html>"
+            "  <head><title>My Simple Server</title></head>"
+            "  <body>"
+            "    <h1>Hello, world!</h1>"
+            "    <p>This is served by a tiny Python server.</p>"
+            "  </body>"
+            "</html>"
+        ).encode("utf-8")
+
+        # 200 OK, content type, and content length
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+
+        # Send the body
+        self.wfile.write(content)
+
+    # Optional: log requests to the console in a simple format
+    def log_message(self, format, *args):
+        print("%s - - [%s] %s" %
+              (self.client_address[0],
+               self.log_date_time_string(),
+               format % args))
+
+# ------------------------------------------------------------------
+# 2️⃣  Pick a port and start listening
+# ------------------------------------------------------------------
+HOST = "0.0.0.0"      # listen on all interfaces
+PORT = 8000           # change to 8080 or any other free port
+
+# Using ThreadingMixIn gives us a quick way to handle multiple
+# requests concurrently without blocking the main thread.
+class ThreadedHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    daemon_threads = True   # exit server when main thread exits
+
+with ThreadedHTTPServer((HOST, PORT), SimpleHandler) as httpd:
+    print(f"Serving HTTP on {HOST}:{PORT} (http://{HOST}:{PORT}/)...")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down.")
+
+### How to run it
+
+1. Save the file, e.g. `simple_server.py`.
+2. Make it executable (optional):  
+   chmod +x simple_server.py
+3. Run it:  
+  ./simple_server.py
+   or  
+   python3 simple_server.py
+4. Open a web browser or `curl` to `http://localhost:8000/` and you’ll see the message.
+
+## What you just saw
+
+| Component | What it does |
+|-----------|--------------|
+| `http.server.BaseHTTPRequestHandler` | Base class that parses HTTP requests and provides helper methods (e.g. `send_response`). |
+| `do_GET` | Handles HTTP `GET` requests. You can add more methods (`do_POST`, `do_PUT`, …) for other verbs. |
+| `ThreadedHTTPServer` | A small wrapper that lets the server handle each request in a new thread, so multiple clients can talk to it at the same time. |
+| `serve_forever()` | Keeps the server alive until you hit `Ctrl‑C` (KeyboardInterrupt). |
+
+## A quick alternative: Flask (if you need routing, templates, etc.)
+
+If
+```
+
+### Harder Prompt
+
+Now, let's try a real world problem where we have the assistent write some PyTorch code to operate over jagged tensors. Let's see how it does. I increase the max_new_tokens to 4096 to give the model more "time to think". 
+
 
 ```python
 messages = [
@@ -525,6 +407,7 @@ outputs = pipe(
 print(outputs[0]["generated_text"][-1]["content"])
 ```
 
+```
 analysisWe need to write PyTorch code for intersection across two sparse tensors. The representation: a tuple of 2 tensors. First tensor contains lengths of values for each batch. Second tensor is coalesced tensor with all values. So effectively we have a ragged representation. We need to compute intersection between two such sparse tensors for each batch element. Output likely also as tuple (lengths, values). Must avoid loops over batch_size, use vectorized operations. Need to handle variable lengths. Approach: Use torch.cumsum to compute offsets. Then gather segments. Use torch.unique or set intersection? For intersection, we can sort and then use torch.intersect1d? But that is not batched. We need to compute intersection per batch. We can use torch.nn.functional.embedding? Another method: For each batch, we could convert each segment to a set via hashing maybe using torch.scatter? Could use torch.logical_and on bitmasks? But values might be arbitrary ints. We can sort the values and use torch.binary_cross? Let's think.
 
 We have lengths1: shape (B), lengths2: shape (B). Offsets1 = torch.cumsum(lengths1, dim=0) with zero at start. Offsets2 similarly. We can get start indices: offsets1[:-1], offsets2[:-1]. Then we can gather segments via indexing into values1 and values2. For batched operations without loops, we can use torch.segment_intersect? Not built-in. But we can use torch.scatter and torch.unique? We could create a boolean mask for all values across batch: For each batch, produce a mask of values in values1. For values2, we filter by mask. Approach: Use torch.nn.functional.embedding? Another approach: Use torch.scatter_add to create a histogram per batch for values1. Then we can binary AND with histogram of values2. But we need to output indices. Could use torch.unique on values2 where histogram > 0. But we cannot easily filter per batch. However we can do per batch by using scatter_add with batch indices.
@@ -595,16 +478,13 @@ We should also handle dtype of values: maybe int64. Use torch.long.
 Let's write code.assistantfinalBelow is a **fully vectorised** PyTorch implementation that finds the set‑intersection of two sparse tensors.  
 The tensors are supplied in the “ragged” format you described:
 
-```text
 sparse = (lengths, values_flat)
 lengths      – 1‑D tensor of shape (B,)  (B = batch size)
 values_flat  – 1‑D tensor containing all values, co‑alesced across the batch
-```
 
 The routine returns the same tuple type – a batch‑wise representation of the
 intersection.
 
-```python
 import torch
 
 def sparse_intersection(sparse_a, sparse_b):
@@ -666,9 +546,7 @@ def sparse_intersection(sparse_a, sparse_b):
     values_out  = intersection[:, 1]          # already sorted
 
     return lengths_out, values_out
-```
 
----
 
 ### How it works (no explicit Python loops)
 
@@ -693,11 +571,9 @@ def sparse_intersection(sparse_a, sparse_b):
    the flattened `intersection[:, 1]` gives all intersecting values in the
    desired order.  No Python‑level looping over the batch is required.
 
----
-
 ### Example usage
 
-```python
+python
 # Example data
 batch = 3
 # 1st sparse tensor
@@ -713,14 +589,14 @@ result_lengths, result_values = sparse_intersection((lengths1, values1),
 
 print("Intersection lengths:", result_lengths)
 print("Intersection values:", result_values)
-```
+
 
 **Output**
 
-```
+
 Intersection lengths: tensor([2, 1, 1])
 Intersection values: tensor([2, 5, 7, 3])
-```
+
 
 Explanation:
 
@@ -733,3 +609,19 @@ Explanation:
 The returned tensors correctly represent the batched intersection.  No
 explicit Python `for`‑loops over the batch dimension are used, keeping the
 computation fully vectorised and GPU‑friendly.
+```
+
+That's actually pretty good. May be we can test the code generated by the assistent model to see the correctness but as a base model output, this looks pretty good. 
+
+Let's see the GPU Utilization from this prompt:
+
+![GPU UTIL Longer prompt](/assets/gpt_oss_gpu_util.png)
+
+GPU utilization hovered around 45-50% when the inference was being run. So, I could have increased the max_new_tokens to a higher value to get a longer response. But this seems reasonable for now.
+
+## Summary
+
+We explored inference of GPT OSS 20B model running on an RTX 4090 GPU locally. It uses approximately 14GB VRAM in its MXFP4 quantized form, making it suitable for local experimentation. 
+
+Inference tests highlight the model's reasoning capability, with outputs including an "analysis" section detailing its thought process. We tested the model on a few different prompts. 
+
