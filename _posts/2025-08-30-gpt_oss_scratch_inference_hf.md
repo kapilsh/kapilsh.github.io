@@ -10,7 +10,7 @@ math: false
 author: ks
 ---
 
-OpenAI's GPT OSS was recently launched in 20B and 120B parameter versions. The 20B model is suitable for local experimentation and research on consumer GPUs. To test this out I decided to give my RTX 4090 a spin to load and inspect the 20B variant. 
+OpenAI's GPT OSS was recently launched in 20B and 120B parameter versions. The 20B model is suitable for local experimentation and research on consumer GPUs. Before building the model from scratch and loading pre-trained weights, I wanted to explore the Huggingface version to better understand the model architecture and experiment with some prompts. To test this out I decided to give my RTX 4090 a spin to load and inspect the 20B variant. 
 
 ## Architecture
 
