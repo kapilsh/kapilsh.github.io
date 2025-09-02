@@ -100,9 +100,10 @@ Mon Sep  1 06:16:25 2025
 +---------------------------------------------------------------------------------------+
 ```
 
-We see approximately 14GB of VRAM used by the model, which seems to imply that this is the MXFP4 quantized model. As per the [model highlights](https://huggingface.co/openai/gpt-oss-20b#highlights):
+We see approximately 14GB of VRAM used by the model, which seems to imply that the model is not using MXFP4 quantized model. 
 
-> MXFP4 quantization: The models were post-trained with MXFP4 quantization of the MoE weights, making gpt-oss-120b run on a single 80GB GPU (like NVIDIA H100 or AMD MI300X) and the gpt-oss-20b model run within 16GB of memory. All evals were performed with the same MXFP4 quantization.
+> I checked later and all weights are converted to bfloat16 and it is [mentioned in gpt-oss repo](https://github.com/openai/gpt-oss?tab=readme-ov-file#reference-pytorch-implementation). Only the triton reference implementation uses MXFP4 implementation.
+{: .prompt-info}
 
 Next, let's see the pytorch model:
 
@@ -152,40 +153,44 @@ for key, value in parameters_state_dict.items():
 ```
 
 ```
-embed_tokens.weight torch.Size([201088, 2880])
-layers.0.self_attn.sinks torch.Size([64])
-layers.0.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.0.self_attn.q_proj.bias torch.Size([4096])
-layers.0.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.0.self_attn.k_proj.bias torch.Size([512])
-layers.0.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.0.self_attn.v_proj.bias torch.Size([512])
-layers.0.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.0.self_attn.o_proj.bias torch.Size([2880])
-layers.0.mlp.router.weight torch.Size([32, 2880])
-layers.0.mlp.router.bias torch.Size([32])
-layers.0.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.0.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.0.input_layernorm.weight torch.Size([2880])
-layers.0.post_attention_layernorm.weight torch.Size([2880])
+model.embed_tokens.weight torch.Size([201088, 2880]) torch.bfloat16
+model.layers.0.self_attn.sinks torch.Size([64]) torch.bfloat16
+model.layers.0.self_attn.q_proj.weight torch.Size([4096, 2880]) torch.bfloat16
+model.layers.0.self_attn.q_proj.bias torch.Size([4096]) torch.bfloat16
+model.layers.0.self_attn.k_proj.weight torch.Size([512, 2880]) torch.bfloat16
+model.layers.0.self_attn.k_proj.bias torch.Size([512]) torch.bfloat16
+model.layers.0.self_attn.v_proj.weight torch.Size([512, 2880]) torch.bfloat16
+model.layers.0.self_attn.v_proj.bias torch.Size([512]) torch.bfloat16
+model.layers.0.self_attn.o_proj.weight torch.Size([2880, 4096]) torch.bfloat16
+model.layers.0.self_attn.o_proj.bias torch.Size([2880]) torch.bfloat16
+model.layers.0.mlp.router.weight torch.Size([32, 2880]) torch.bfloat16
+model.layers.0.mlp.router.bias torch.Size([32]) torch.bfloat16
+model.layers.0.mlp.experts.gate_up_proj_bias torch.Size([32, 5760]) torch.bfloat16
+model.layers.0.mlp.experts.down_proj_bias torch.Size([32, 2880]) torch.bfloat16
+model.layers.0.input_layernorm.weight torch.Size([2880]) torch.bfloat16
+model.layers.0.post_attention_layernorm.weight torch.Size([2880]) torch.bfloat16
 ...
-layers.23.self_attn.sinks torch.Size([64])
-layers.23.self_attn.q_proj.weight torch.Size([4096, 2880])
-layers.23.self_attn.q_proj.bias torch.Size([4096])
-layers.23.self_attn.k_proj.weight torch.Size([512, 2880])
-layers.23.self_attn.k_proj.bias torch.Size([512])
-layers.23.self_attn.v_proj.weight torch.Size([512, 2880])
-layers.23.self_attn.v_proj.bias torch.Size([512])
-layers.23.self_attn.o_proj.weight torch.Size([2880, 4096])
-layers.23.self_attn.o_proj.bias torch.Size([2880])
-layers.23.mlp.router.weight torch.Size([32, 2880])
-layers.23.mlp.router.bias torch.Size([32])
-layers.23.mlp.experts.gate_up_proj_bias torch.Size([32, 5760])
-layers.23.mlp.experts.down_proj_bias torch.Size([32, 2880])
-layers.23.input_layernorm.weight torch.Size([2880])
-layers.23.post_attention_layernorm.weight torch.Size([2880])
-norm.weight torch.Size([2880])
+model.layers.23.self_attn.sinks torch.Size([64]) torch.bfloat16
+model.layers.23.self_attn.q_proj.weight torch.Size([4096, 2880]) torch.bfloat16
+model.layers.23.self_attn.q_proj.bias torch.Size([4096]) torch.bfloat16
+model.layers.23.self_attn.k_proj.weight torch.Size([512, 2880]) torch.bfloat16
+model.layers.23.self_attn.k_proj.bias torch.Size([512]) torch.bfloat16
+model.layers.23.self_attn.v_proj.weight torch.Size([512, 2880]) torch.bfloat16
+model.layers.23.self_attn.v_proj.bias torch.Size([512]) torch.bfloat16
+model.layers.23.self_attn.o_proj.weight torch.Size([2880, 4096]) torch.bfloat16
+model.layers.23.self_attn.o_proj.bias torch.Size([2880]) torch.bfloat16
+model.layers.23.mlp.router.weight torch.Size([32, 2880]) torch.bfloat16
+model.layers.23.mlp.router.bias torch.Size([32]) torch.bfloat16
+model.layers.23.mlp.experts.gate_up_proj_bias torch.Size([32, 5760]) torch.bfloat16
+model.layers.23.mlp.experts.down_proj_bias torch.Size([32, 2880]) torch.bfloat16
+model.layers.23.input_layernorm.weight torch.Size([2880]) torch.bfloat16
+model.layers.23.post_attention_layernorm.weight torch.Size([2880]) torch.bfloat16
+model.norm.weight torch.Size([2880]) torch.bfloat16
+lm_head.weight torch.Size([201088, 2880]) torch.bfloat16
 ```
+
+> NOTE: All the weights are in bfloat16 format
+{: .prompt-info}
 
 Here's a brief analysis of the weights as loaded:
 
@@ -621,9 +626,9 @@ GPU utilization hovered around 45-50% when the inference was being run. So, I co
 
 ## Summary
 
-In this post, we explored the inference capabilities of the GPT OSS 20B model running on an RTX 4090 GPU locally. The model uses approximately 14GB of VRAM in its MXFP4 quantized form, making it suitable for local experimentation on consumer hardware.
+In this post, we examined the inference capabilities of the GPT OSS 20B model running locally on an RTX 4090 GPU. The model uses approximately 14GB of VRAM in its bfloat16 form, making it feasible for local experimentation on consumer hardware.
 
-Our inference tests highlighted the model's impressive reasoning capabilities, with outputs including an "analysis" section that provides visibility into the model's chain-of-thought reasoning process. We tested the model on various prompts ranging from educational content to complex coding tasks, and it performed remarkably well across these different use cases.
+Inference tests included prompts covering educational content and coding tasks. The model provided outputs with an "analysis" section that detailed its reasoning process. 
 
-The architecture inspection revealed the model's use of mixture-of-experts design, Grouped Query Attention, and other optimizations that enable its efficient operation. This combination of reasonable memory requirements and strong performance makes GPT OSS 20B a valuable tool for researchers and developers wanting to experiment with large language models locally.
+The architecture inspection highlighted the model's mixture-of-experts design, Grouped Query Attention, and other optimizations that contribute to its efficient operation. These features, combined with its memory requirements, make GPT OSS 20B a practical option for local experimentation with large language models.
 
