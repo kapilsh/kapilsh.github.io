@@ -1,10 +1,10 @@
 ---
-title: GPT OSS from Scratch - Inference Huggingface Model
+title: GPT OSS - Inference Huggingface Model
 description: >-
   Testing out the huggingface version for the gpt-oss-20b locally on consumer hardware
 date: 2025-08-30
 categories: [Blog]
-tags: [AI, Machine Learning, GPT]
+tags: [AI, Machine Learning, LLM]
 pin: true
 math: false
 author: ks

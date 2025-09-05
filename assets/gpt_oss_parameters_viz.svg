@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="550pt" height="814pt" viewBox="0.00 0.00 550.00 813.60">
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 809.6)">
+<title>ModelWeights</title>
+<polygon fill="white" stroke="none" points="-4,4 -4,-809.6 546,-809.6 546,4 -4,4"/>
+<g id="clust1" class="cluster">
+<title>cluster_mid</title>
+<path fill="none" stroke="gray" d="M20,-171.2C20,-171.2 522,-171.2 522,-171.2 528,-171.2 534,-177.2 534,-183.2 534,-183.2 534,-296.8 534,-296.8 534,-302.8 528,-308.8 522,-308.8 522,-308.8 20,-308.8 20,-308.8 14,-308.8 8,-302.8 8,-296.8 8,-296.8 8,-183.2 8,-183.2 8,-177.2 14,-171.2 20,-171.2"/>
+<text text-anchor="middle" x="62.81" y="-294" font-family="Courier,monospace" font-size="12.00">Blocks 2–23</text>
+</g>
+<!-- embedding -->
+<g id="node1" class="node">
+<title>embedding</title>
+<polygon fill="#d0e8ff" stroke="none" points="87.37,-706.8 87.37,-729.6 454.63,-729.6 454.63,-706.8 87.37,-706.8"/>
+<polygon fill="none" stroke="black" points="87.37,-706.8 87.37,-729.6 454.63,-729.6 454.63,-706.8 87.37,-706.8"/>
+<text text-anchor="start" x="203.79" y="-715" font-family="Courier,monospace" font-weight="bold" font-size="14.00">embedding.weight</text>
+<polygon fill="none" stroke="black" points="87.37,-684 87.37,-706.8 454.63,-706.8 454.63,-684 87.37,-684"/>
+<text text-anchor="start" x="90.37" y="-691.2" font-family="Courier,monospace" font-size="14.00">[201088, 2880] • bfloat16 • 579,133,440</text>
+</g>
+<!-- block0 -->
+<g id="node4" class="node">
+<title>block0</title>
+<polygon fill="#e8f7e8" stroke="none" points="21.36,-617.2 21.36,-640 520.64,-640 520.64,-617.2 21.36,-617.2"/>
+<polygon fill="none" stroke="black" points="21.36,-617.2 21.36,-640 520.64,-640 520.64,-617.2 21.36,-617.2"/>
+<text text-anchor="start" x="241.6" y="-625.4" font-family="Courier,monospace" font-weight="bold" font-size="14.00">Block 0</text>
+<polygon fill="none" stroke="black" points="21.36,-594.4 21.36,-617.2 153.38,-617.2 153.38,-594.4 21.36,-594.4"/>
+<text text-anchor="start" x="24.36" y="-601.6" font-family="Courier,monospace" font-size="14.00">attn.sinks</text>
+<polygon fill="none" stroke="black" points="153.38,-594.4 153.38,-617.2 520.64,-617.2 520.64,-594.4 153.38,-594.4"/>
+<text text-anchor="start" x="316.01" y="-601.6" font-family="Courier,monospace" font-size="14.00">[64] • bfloat16 • 64</text>
+<polygon fill="none" stroke="black" points="21.36,-571.6 21.36,-594.4 153.38,-594.4 153.38,-571.6 21.36,-571.6"/>
+<text text-anchor="start" x="24.36" y="-578.8" font-family="Courier,monospace" font-size="14.00">attn.norm.scale</text>
+<polygon fill="none" stroke="black" points="153.38,-571.6 153.38,-594.4 520.64,-594.4 520.64,-571.6 153.38,-571.6"/>
+<text text-anchor="start" x="290.8" y="-578.8" font-family="Courier,monospace" font-size="14.00">[2880] • float32 • 2880</text>
+<polygon fill="none" stroke="black" points="21.36,-548.8 21.36,-571.6 153.38,-571.6 153.38,-548.8 21.36,-548.8"/>
+<text text-anchor="start" x="24.36" y="-556" font-family="Courier,monospace" font-size="14.00">attn.qkv.weight</text>
+<polygon fill="none" stroke="black" points="153.38,-548.8 153.38,-571.6 520.64,-571.6 520.64,-548.8 153.38,-548.8"/>
+<text text-anchor="start" x="189.99" y="-556" font-family="Courier,monospace" font-size="14.00">[5120,2880] • bfloat16 • 14,745,600</text>
+<polygon fill="none" stroke="black" points="21.36,-526 21.36,-548.8 153.38,-548.8 153.38,-526 21.36,-526"/>
+<text text-anchor="start" x="24.36" y="-533.2" font-family="Courier,monospace" font-size="14.00">attn.qkv.bias</text>
+<polygon fill="none" stroke="black" points="153.38,-526 153.38,-548.8 520.64,-548.8 520.64,-526 153.38,-526"/>
+<text text-anchor="start" x="274" y="-533.2" font-family="Courier,monospace" font-size="14.00">[5120] • bfloat16 • 5,120</text>
+<polygon fill="none" stroke="black" points="21.36,-503.2 21.36,-526 153.38,-526 153.38,-503.2 21.36,-503.2"/>
+<text text-anchor="start" x="24.36" y="-510.4" font-family="Courier,monospace" font-size="14.00">attn.out.weight</text>
+<polygon fill="none" stroke="black" points="153.38,-503.2 153.38,-526 520.64,-526 520.64,-503.2 153.38,-503.2"/>
+<text text-anchor="start" x="189.99" y="-510.4" font-family="Courier,monospace" font-size="14.00">[2880,4096] • bfloat16 • 11,796,480</text>
+<polygon fill="none" stroke="black" points="21.36,-480.4 21.36,-503.2 153.38,-503.2 153.38,-480.4 21.36,-480.4"/>
+<text text-anchor="start" x="24.36" y="-487.6" font-family="Courier,monospace" font-size="14.00">attn.out.bias</text>
+<polygon fill="none" stroke="black" points="153.38,-480.4 153.38,-503.2 520.64,-503.2 520.64,-480.4 153.38,-480.4"/>
+<text text-anchor="start" x="274" y="-487.6" font-family="Courier,monospace" font-size="14.00">[2880] • bfloat16 • 2,880</text>
+<polygon fill="none" stroke="black" points="21.36,-457.6 21.36,-480.4 153.38,-480.4 153.38,-457.6 21.36,-457.6"/>
+<text text-anchor="start" x="24.36" y="-464.8" font-family="Courier,monospace" font-size="14.00">mlp.mlp1_weight</text>
+<polygon fill="none" stroke="black" points="153.38,-457.6 153.38,-480.4 520.64,-480.4 520.64,-457.6 153.38,-457.6"/>
+<text text-anchor="start" x="156.38" y="-464.8" font-family="Courier,monospace" font-size="14.00">[32,5760,2880] • bfloat16 • 530,841,600</text>
+<polygon fill="none" stroke="black" points="21.36,-434.8 21.36,-457.6 153.38,-457.6 153.38,-434.8 21.36,-434.8"/>
+<text text-anchor="start" x="24.36" y="-442" font-family="Courier,monospace" font-size="14.00">mlp.mlp1_bias</text>
+<polygon fill="none" stroke="black" points="153.38,-434.8 153.38,-457.6 520.64,-457.6 520.64,-434.8 153.38,-434.8"/>
+<text text-anchor="start" x="231.99" y="-442" font-family="Courier,monospace" font-size="14.00">[32,5760] • bfloat16 • 184,320</text>
+<polygon fill="none" stroke="black" points="21.36,-412 21.36,-434.8 153.38,-434.8 153.38,-412 21.36,-412"/>
+<text text-anchor="start" x="24.36" y="-419.2" font-family="Courier,monospace" font-size="14.00">mlp.mlp2_weight</text>
+<polygon fill="none" stroke="black" points="153.38,-412 153.38,-434.8 520.64,-434.8 520.64,-412 153.38,-412"/>
+<text text-anchor="start" x="156.38" y="-419.2" font-family="Courier,monospace" font-size="14.00">[32,2880,2880] • bfloat16 • 265,420,800</text>
+<polygon fill="none" stroke="black" points="21.36,-389.2 21.36,-412 153.38,-412 153.38,-389.2 21.36,-389.2"/>
+<text text-anchor="start" x="24.36" y="-396.4" font-family="Courier,monospace" font-size="14.00">mlp.mlp2_bias</text>
+<polygon fill="none" stroke="black" points="153.38,-389.2 153.38,-412 520.64,-412 520.64,-389.2 153.38,-389.2"/>
+<text text-anchor="start" x="240.39" y="-396.4" font-family="Courier,monospace" font-size="14.00">[32,2880] • bfloat16 • 92,160</text>
+<polygon fill="none" stroke="black" points="21.36,-366.4 21.36,-389.2 153.38,-389.2 153.38,-366.4 21.36,-366.4"/>
+<text text-anchor="start" x="24.36" y="-373.6" font-family="Courier,monospace" font-size="14.00">mlp.norm.scale</text>
+<polygon fill="none" stroke="black" points="153.38,-366.4 153.38,-389.2 520.64,-389.2 520.64,-366.4 153.38,-366.4"/>
+<text text-anchor="start" x="282.4" y="-373.6" font-family="Courier,monospace" font-size="14.00">[2880] • float32 • 2,880</text>
+<polygon fill="none" stroke="black" points="21.36,-343.6 21.36,-366.4 153.38,-366.4 153.38,-343.6 21.36,-343.6"/>
+<text text-anchor="start" x="24.36" y="-350.8" font-family="Courier,monospace" font-size="14.00">mlp.gate.weight</text>
+<polygon fill="none" stroke="black" points="153.38,-343.6 153.38,-366.4 520.64,-366.4 520.64,-343.6 153.38,-343.6"/>
+<text text-anchor="start" x="240.39" y="-350.8" font-family="Courier,monospace" font-size="14.00">[32,2880] • bfloat16 • 92,160</text>
+<polygon fill="none" stroke="black" points="21.36,-320.8 21.36,-343.6 153.38,-343.6 153.38,-320.8 21.36,-320.8"/>
+<text text-anchor="start" x="24.36" y="-328" font-family="Courier,monospace" font-size="14.00">mlp.gate.bias</text>
+<polygon fill="none" stroke="black" points="153.38,-320.8 153.38,-343.6 520.64,-343.6 520.64,-320.8 153.38,-320.8"/>
+<text text-anchor="start" x="316.01" y="-328" font-family="Courier,monospace" font-size="14.00">[32] • bfloat16 • 32</text>
+</g>
+<!-- embedding&#45;&gt;block0 -->
+<g id="edge1" class="edge">
+<title>embedding-&gt;block0</title>
+<path fill="none" stroke="black" d="M271,-680.06C271,-672.78 271,-664.26 271,-654.93"/>
+<polygon fill="black" stroke="black" points="274.5,-655.14 271,-645.14 267.5,-655.14 274.5,-655.14"/>
+</g>
+<!-- final_norm -->
+<g id="node2" class="node">
+<title>final_norm</title>
+<polygon fill="#ffe8d0" stroke="none" points="150.38,-116.4 150.38,-139.2 391.62,-139.2 391.62,-116.4 150.38,-116.4"/>
+<polygon fill="none" stroke="black" points="150.38,-116.4 150.38,-139.2 391.62,-139.2 391.62,-116.4 150.38,-116.4"/>
+<text text-anchor="start" x="228.99" y="-124.6" font-family="Courier,monospace" font-weight="bold" font-size="14.00">norm.scale</text>
+<polygon fill="none" stroke="black" points="150.38,-93.6 150.38,-116.4 391.62,-116.4 391.62,-93.6 150.38,-93.6"/>
+<text text-anchor="start" x="153.38" y="-100.8" font-family="Courier,monospace" font-size="14.00">[2880] • float32 • 2,880</text>
+</g>
+<!-- unembedding -->
+<g id="node3" class="node">
+<title>unembedding</title>
+<polygon fill="#ffd0d0" stroke="none" points="87.37,-26.8 87.37,-49.6 454.63,-49.6 454.63,-26.8 87.37,-26.8"/>
+<polygon fill="none" stroke="black" points="87.37,-26.8 87.37,-49.6 454.63,-49.6 454.63,-26.8 87.37,-26.8"/>
+<text text-anchor="start" x="195.39" y="-35" font-family="Courier,monospace" font-weight="bold" font-size="14.00">unembedding.weight</text>
+<polygon fill="none" stroke="black" points="87.37,-4 87.37,-26.8 454.63,-26.8 454.63,-4 87.37,-4"/>
+<text text-anchor="start" x="90.37" y="-11.2" font-family="Courier,monospace" font-size="14.00">[201088, 2880] • bfloat16 • 579,133,440</text>
+</g>
+<!-- final_norm&#45;&gt;unembedding -->
+<g id="edge4" class="edge">
+<title>final_norm-&gt;unembedding</title>
+<path fill="none" stroke="black" d="M271,-90.06C271,-82.14 271,-73.24 271,-64.69"/>
+<polygon fill="black" stroke="black" points="274.5,-64.9 271,-54.9 267.5,-64.9 274.5,-64.9"/>
+</g>
+<!-- blocks2_23 -->
+<g id="node5" class="node">
+<title>blocks2_23</title>
+<polygon fill="#f9f9f9" stroke="none" points="24.36,-251.6 24.36,-274.4 517.64,-274.4 517.64,-251.6 24.36,-251.6"/>
+<polygon fill="none" stroke="black" points="24.36,-251.6 24.36,-274.4 517.64,-274.4 517.64,-251.6 24.36,-251.6"/>
+<text text-anchor="start" x="153.38" y="-259.8" font-family="Courier,monospace" font-weight="bold" font-size="14.00">Each Block has 13 parameters</text>
+<polygon fill="none" stroke="black" points="24.36,-228.8 24.36,-251.6 517.64,-251.6 517.64,-228.8 24.36,-228.8"/>
+<text text-anchor="start" x="27.36" y="-236" font-family="Courier,monospace" font-size="14.00">attn.sinks • attn.norm.scale • qkv (W,b) • out (W,b)</text>
+<polygon fill="none" stroke="black" points="24.36,-206 24.36,-228.8 517.64,-228.8 517.64,-206 24.36,-206"/>
+<text text-anchor="start" x="27.36" y="-213.2" font-family="Courier,monospace" font-size="14.00">mlp1 (W,b) • mlp2 (W,b)</text>
+<polygon fill="none" stroke="black" points="24.36,-183.2 24.36,-206 517.64,-206 517.64,-183.2 24.36,-183.2"/>
+<text text-anchor="start" x="27.36" y="-190.4" font-family="Courier,monospace" font-size="14.00">mlp.norm.scale • gate (W,b)</text>
+</g>
+<!-- block0&#45;&gt;blocks2_23 -->
+<g id="edge2" class="edge">
+<title>block0-&gt;blocks2_23</title>
+<path fill="none" stroke="black" d="M271,-317.1C271,-307.5 271,-298.22 271,-289.53"/>
+<polygon fill="black" stroke="black" points="274.5,-289.58 271,-279.58 267.5,-289.58 274.5,-289.58"/>
+</g>
+<!-- blocks2_23&#45;&gt;final_norm -->
+<g id="edge3" class="edge">
+<title>blocks2_23-&gt;final_norm</title>
+<path fill="none" stroke="black" d="M271,-179.38C271,-170.97 271,-162.35 271,-154.31"/>
+<polygon fill="black" stroke="black" points="274.5,-154.56 271,-144.56 267.5,-154.56 274.5,-154.56"/>
+</g>
+<!-- summary -->
+<g id="node6" class="node">
+<title>summary</title>
+<polygon fill="none" stroke="black" points="385.22,-805.6 150.78,-805.6 150.78,-769.6 391.22,-769.6 391.22,-799.6 385.22,-805.6"/>
+<polyline fill="none" stroke="black" points="385.22,-805.6 385.22,-799.6"/>
+<polyline fill="none" stroke="black" points="391.22,-799.6 385.22,-799.6"/>
+<text text-anchor="middle" x="271" y="-784.3" font-family="Courier,monospace" font-size="11.00">Input Tokens | Vocab Size = 201088</text>
+</g>
+<!-- summary&#45;&gt;embedding -->
+<g id="edge5" class="edge">
+<title>summary-&gt;embedding</title>
+<path fill="none" stroke="black" stroke-dasharray="5,2" d="M271,-769.11C271,-761.88 271,-753.2 271,-744.68"/>
+<polygon fill="black" stroke="black" points="274.5,-744.83 271,-734.83 267.5,-744.83 274.5,-744.83"/>
+</g>
+</g>
+</svg>
