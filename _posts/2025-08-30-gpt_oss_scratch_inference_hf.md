@@ -100,9 +100,9 @@ Mon Sep  1 06:16:25 2025
 +---------------------------------------------------------------------------------------+
 ```
 
-We see approximately 14GB of VRAM used by the model, which seems to imply that the model is not using MXFP4 quantized model. 
+We see approximately 14GB of VRAM used by the model, which seems to imply that the model is using MXFP4 quantized model. 
 
-> I checked later and all weights are converted to bfloat16 and it is [mentioned in gpt-oss repo](https://github.com/openai/gpt-oss?tab=readme-ov-file#reference-pytorch-implementation). Only the triton reference implementation uses MXFP4 implementation.
+> MXFP4 quantization: The models were post-trained with MXFP4 quantization of the MoE weights, making gpt-oss-120b run on a single 80GB GPU (like NVIDIA H100 or AMD MI300X) and the gpt-oss-20b model run within 16GB of memory. All evals were performed with the same MXFP4 quantization.
 {: .prompt-info}
 
 Next, let's see the pytorch model:
