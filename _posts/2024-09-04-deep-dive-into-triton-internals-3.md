@@ -398,7 +398,7 @@ tt.store %15, %13, %6 : tensor<1024x!tt.ptr<f32>, #blocked> loc(#loc13)
 tt.return
 ```
 
-We can map each of the instructions back to the python (triton DSL) code as well. See the splits below after parsing the IR based location info. I wrote a [hacky tool](../../triton) for it. 
+We can map each of the instructions back to the python (triton DSL) code as well. See the splits below after parsing the IR based location info. 
 
 ```
 Section 1: unknown

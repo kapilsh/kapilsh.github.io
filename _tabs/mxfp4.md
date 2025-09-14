@@ -80,27 +80,37 @@ order: 3
 }
 
 #mxfp4-visualizer-container .input-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
     margin-bottom: 15px;
-    justify-content: center;
+    width: 100%;
+    max-width: 100%;
 }
 
-#mxfp4-visualizer-container .input-grid > * {
-    flex: 1;
-    min-width: 100px;
-    max-width: 150px;
+@media (max-width: 768px) {
+    #mxfp4-visualizer-container .input-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 480px) {
+    #mxfp4-visualizer-container .input-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 #mxfp4-visualizer-container .input-field {
-    padding: 10px;
+    padding: 8px;
     border: none;
     border-radius: 8px;
     text-align: center;
-    font-size: 1rem;
+    font-size: 0.9rem;
     background: rgba(255,255,255,0.9);
     color: #333;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
 }
 
 #mxfp4-visualizer-container .buttons {
@@ -193,23 +203,21 @@ order: 3
 }
 
 #mxfp4-visualizer-container .quantization-flow {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
     gap: 15px;
     margin-bottom: 20px;
 }
 
-@media (min-width: 768px) {
+@media (max-width: 768px) {
     #mxfp4-visualizer-container .quantization-flow {
-        display: grid;
         grid-template-columns: repeat(2, 1fr);
-        gap: 15px;
     }
 }
 
-@media (min-width: 1000px) {
+@media (max-width: 480px) {
     #mxfp4-visualizer-container .quantization-flow {
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: 1fr;
     }
 }
 
@@ -270,16 +278,21 @@ order: 3
 }
 
 #mxfp4-visualizer-container .error-grid {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
     gap: 10px;
-    justify-content: center;
 }
 
-#mxfp4-visualizer-container .error-grid .error-item {
-    flex: 1;
-    min-width: 120px;
-    max-width: 200px;
+@media (max-width: 768px) {
+    #mxfp4-visualizer-container .error-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 480px) {
+    #mxfp4-visualizer-container .error-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 #mxfp4-visualizer-container .error-item {
@@ -319,6 +332,18 @@ order: 3
                     <input type="number" class="input-field" id="val1" step="0.1" value="-1.25">
                     <input type="number" class="input-field" id="val2" step="0.1" value="0.75">
                     <input type="number" class="input-field" id="val3" step="0.1" value="4.0">
+                    <input type="number" class="input-field" id="val4" step="0.1" value="1.2">
+                    <input type="number" class="input-field" id="val5" step="0.1" value="-0.8">
+                    <input type="number" class="input-field" id="val6" step="0.1" value="3.1">
+                    <input type="number" class="input-field" id="val7" step="0.1" value="-2.3">
+                    <input type="number" class="input-field" id="val8" step="0.1" value="0.9">
+                    <input type="number" class="input-field" id="val9" step="0.1" value="5.2">
+                    <input type="number" class="input-field" id="val10" step="0.1" value="-1.7">
+                    <input type="number" class="input-field" id="val11" step="0.1" value="2.8">
+                    <input type="number" class="input-field" id="val12" step="0.1" value="-0.4">
+                    <input type="number" class="input-field" id="val13" step="0.1" value="1.6">
+                    <input type="number" class="input-field" id="val14" step="0.1" value="-3.5">
+                    <input type="number" class="input-field" id="val15" step="0.1" value="4.7">
                 </div>
                 <div class="buttons">
                     <button class="btn btn-primary" onclick="quantize()">🚀 Quantize</button>
@@ -326,7 +351,7 @@ order: 3
                     <button class="btn btn-secondary" onclick="loadPreset()">📋 Preset</button>
                 </div>
                 <div class="stats">
-                    <div>📏 Vec Size: <span id="vecSize">4</span></div>
+                    <div>📏 Vec Size: <span id="vecSize">16</span></div>
                     <div>⚖️ Scale: <span id="scaleValue">1.0</span></div>
                 </div>
             </div>
@@ -336,26 +361,50 @@ order: 3
                 <div style="margin-bottom: 15px;">
                     <div style="font-size: 1.1rem; margin-bottom: 10px; text-align: center;">BF16 Input (16-bit each)</div>
                     <div class="input-grid">
-                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 8px; text-align: center; color: #333; font-weight: bold; font-size: 0.8rem;" id="bf16_0">0100000010100000</div>
-                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 8px; text-align: center; color: #333; font-weight: bold; font-size: 0.8rem;" id="bf16_1">1011111110100000</div>
-                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 8px; text-align: center; color: #333; font-weight: bold; font-size: 0.8rem;" id="bf16_2">0011111101100000</div>
-                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 8px; text-align: center; color: #333; font-weight: bold; font-size: 0.8rem;" id="bf16_3">0100000010000000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_0">0100000010100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_1">1011111110100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_2">0011111101100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_3">0100000010000000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_4">0100000010100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_5">1011111110100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_6">0011111101100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_7">0100000010000000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_8">0100000010100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_9">1011111110100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_10">0011111101100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_11">0100000010000000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_12">0100000010100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_13">1011111110100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_14">0011111101100000</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 6px; border-radius: 6px; text-align: center; color: #333; font-weight: bold; font-size: 0.7rem;" id="bf16_15">0100000010000000</div>
                     </div>
                 </div>
                 <div>
                     <div style="font-size: 1.1rem; margin-bottom: 10px; text-align: center;">MXFP4 Output (4-bit each)</div>
                     <div class="input-grid">
-                        <div style="background: rgba(255,255,255,0.9); padding: 10px; border-radius: 8px; text-align: center; color: #333; font-weight: bold;" id="code0">0100</div>
-                        <div style="background: rgba(255,255,255,0.9); padding: 10px; border-radius: 8px; text-align: center; color: #333; font-weight: bold;" id="code1">1010</div>
-                        <div style="background: rgba(255,255,255,0.9); padding: 10px; border-radius: 8px; text-align: center; color: #333; font-weight: bold;" id="code2">0010</div>
-                        <div style="background: rgba(255,255,255,0.9); padding: 10px; border-radius: 8px; text-align: center; color: #333; font-weight: bold;" id="code3">0110</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code0">0100</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code1">1010</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code2">0010</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code3">0110</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code4">0011</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code5">1001</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code6">0101</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code7">1100</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code8">0010</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code9">0110</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code10">1011</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code11">0101</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code12">1001</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code13">0011</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code14">1110</div>
+                        <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code15">0110</div>
                     </div>
                 </div>
                 <div class="stats">
-                    <div>💾 Original: <span id="originalBits">64</span> bits</div>
-                    <div>📦 Compressed: <span id="compressedBits">48</span> bits</div>
-                    <div>🗜️ Ratio: <span id="compressionRatio">1.33</span>:1</div>
-                    <div>💰 Saved: <span id="savedPercent">25.0</span>%</div>
+                    <div>💾 Original: <span id="originalBits">256</span> bits</div>
+                    <div>📦 Compressed: <span id="compressedBits">96</span> bits</div>
+                    <div>🗜️ Ratio: <span id="compressionRatio">2.67</span>:1</div>
+                    <div>💰 Saved: <span id="savedPercent">62.5</span>%</div>
                 </div>
             </div>
         </div>
@@ -499,12 +548,10 @@ order: 3
 
         function quantize() {
             // Get input values
-            const values = [
-                parseFloat(document.getElementById('val0').value) || 0,
-                parseFloat(document.getElementById('val1').value) || 0,
-                parseFloat(document.getElementById('val2').value) || 0,
-                parseFloat(document.getElementById('val3').value) || 0
-            ];
+            const values = [];
+            for (let i = 0; i < 16; i++) {
+                values.push(parseFloat(document.getElementById(`val${i}`).value) || 0);
+            }
 
             // Compute scale factor
             const scale = computeScaleFactor(values);
@@ -544,7 +591,7 @@ order: 3
             `;
 
             // Update quantization flow
-            updateQuantizationFlow(values, scaledValues, quantResults);
+            updateQuantizationFlow(values, scaledValues, quantResults, scale);
 
             // Calculate compression stats
             updateCompressionStats(values.length);
@@ -553,17 +600,19 @@ order: 3
             updateErrorAnalysis(values, quantResults, scale);
         }
 
-        function updateQuantizationFlow(original, scaled, quantResults) {
+        function updateQuantizationFlow(original, scaled, quantResults, scale) {
             const flowContainer = document.getElementById('quantFlow');
             flowContainer.innerHTML = '';
 
-            for (let i = 0; i < original.length; i++) {
+            // Show first 8 values for visualization (to keep it manageable)
+            const displayCount = Math.min(8, original.length);
+            for (let i = 0; i < displayCount; i++) {
                 const flowItem = document.createElement('div');
                 flowItem.className = 'flow-item';
                 flowItem.innerHTML = `
                     <div class="flow-value">${original[i].toFixed(2)}</div>
                     <div class="flow-arrow">↓</div>
-                    <div style="font-size: 0.9rem; color: #666;">÷ ${document.getElementById('scaleValue').textContent}</div>
+                    <div style="font-size: 0.9rem; color: #666;">÷ ${scale.toFixed(3)}</div>
                     <div class="flow-arrow">↓</div>
                     <div style="font-size: 0.9rem; color: #666;">${scaled[i].toFixed(2)}</div>
                     <div class="flow-arrow">↓</div>
@@ -627,7 +676,7 @@ order: 3
         }
 
         function generateRandom() {
-            for (let i = 0; i < 4; i++) {
+            for (let i = 0; i < 16; i++) {
                 const randomValue = (Math.random() - 0.5) * 8; // Range: -4 to 4
                 document.getElementById(`val${i}`).value = randomValue.toFixed(2);
             }
@@ -637,9 +686,18 @@ order: 3
         function loadPreset() {
             // Demonstrate different scale factors for different blocks
             const examples = [
-                { values: [0.1, 0.2, 0.3, 0.15], desc: "Small values (scale ≈ 0.05)" },
-                { values: [5.0, -4.8, 3.2, -5.9], desc: "Large values (scale ≈ 1.0)" },
-                { values: [1.0, 2.0, 3.0, -1.5], desc: "Medium values (scale ≈ 0.5)" }
+                {
+                    values: [0.1, 0.2, 0.15, 0.3, -0.12, 0.25, -0.08, 0.18, 0.22, -0.14, 0.19, 0.11, -0.16, 0.28, 0.13, -0.09],
+                    desc: "Small values (fine scale)"
+                },
+                {
+                    values: [5.0, -4.8, 3.2, -5.9, 4.1, -3.7, 6.2, -4.5, 3.8, 5.1, -4.2, 3.9, -5.3, 4.6, -3.1, 5.7],
+                    desc: "Large values (coarse scale)"
+                },
+                {
+                    values: [1.0, 2.0, -1.5, 2.3, -0.8, 1.7, -1.2, 2.1, 1.4, -1.8, 2.5, -1.1, 1.9, -2.2, 1.6, -0.9],
+                    desc: "Medium values (medium scale)"
+                }
             ];
 
             const example = examples[Math.floor(Date.now() / 3000) % examples.length];
@@ -662,7 +720,7 @@ order: 3
             quantize();
 
             // Add event listeners to input fields
-            for (let i = 0; i < 4; i++) {
+            for (let i = 0; i < 16; i++) {
                 document.getElementById(`val${i}`).addEventListener('input', quantize);
             }
         });
