@@ -346,9 +346,9 @@ order: 3
                     <input type="number" class="input-field" id="val15" step="0.1" value="4.7">
                 </div>
                 <div class="buttons">
-                    <button class="btn btn-primary" onclick="quantize()">🚀 Quantize</button>
-                    <button class="btn btn-secondary" onclick="generateRandom()">🎲 Random</button>
-                    <button class="btn btn-secondary" onclick="loadPreset()">📋 Preset</button>
+                    <button class="btn btn-primary" id="quantizeBtn">🚀 Quantize</button>
+                    <button class="btn btn-secondary" id="randomBtn">🎲 Random</button>
+                    <button class="btn btn-secondary" id="presetBtn">📋 Preset</button>
                 </div>
                 <div class="stats">
                     <div>📏 Vec Size: <span id="vecSize">16</span></div>
@@ -461,6 +461,7 @@ order: 3
 </div>
 
 <script>
+{% raw %}
         // MXFP4 E2M1 lookup table
         const MXFP4_LUT = {
             0b0000: 0.0,  0b0001: 0.5,  0b0010: 1.0,  0b0011: 1.5,
@@ -504,7 +505,7 @@ order: 3
                     <div style="font-family: monospace; font-size: 0.7rem;">${code.toString(2).padStart(4, '0')}</div>
                     <div style="font-weight: bold;">${value}</div>
                 `;
-                cell.onclick = () => toggleLUTCell(cell, code);
+                cell.addEventListener('click', () => toggleLUTCell(cell, code));
                 lutGrid.appendChild(cell);
             }
         }
@@ -723,5 +724,11 @@ order: 3
             for (let i = 0; i < 16; i++) {
                 document.getElementById(`val${i}`).addEventListener('input', quantize);
             }
+
+            // Add event listeners to buttons
+            document.getElementById('quantizeBtn').addEventListener('click', quantize);
+            document.getElementById('randomBtn').addEventListener('click', generateRandom);
+            document.getElementById('presetBtn').addEventListener('click', loadPreset);
         });
+{% endraw %}
 </script>
