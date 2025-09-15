@@ -10,9 +10,7 @@ math: false
 author: ks
 ---
 
-# Understanding MXFP4 Quantization
-
-MXFP4 (Microscaling 4-bit Floating Point) is quantization format that enables significant memory compression for neural networks while maintaining reasonable accuracy and was introduced with GPT OSS model versions from OpenAI.
+MXFP4 (Microscaling 4-bit Floating Point) is a quantization format that enables significant memory compression for neural networks while maintaining reasonable accuracy and was introduced with GPT OSS model versions from OpenAI.
 
 ## Key Concepts
 
