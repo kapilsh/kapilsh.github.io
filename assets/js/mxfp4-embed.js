@@ -19,6 +19,18 @@ function findNearestEmbedMXFP4(value) {
     return { code: bestCode, value: EMBED_MXFP4_LUT[bestCode] };
 }
 
+function computeEmbedScaleFactor(values) {
+    const maxAbs = Math.max(...values.map(Math.abs));
+    if (maxAbs === 0) return 1.0;
+
+    const maxMXFP4 = 6.0;
+    const rawScale = maxAbs / maxMXFP4;
+
+    // Use power-of-2 scaling (same as full visualizer)
+    const scaleExp = Math.ceil(Math.log2(rawScale));
+    return Math.pow(2, Math.max(0, scaleExp));
+}
+
 function embedQuantize() {
     const values = [
         parseFloat(document.getElementById('embed-val0').value) || 0,
@@ -27,8 +39,8 @@ function embedQuantize() {
         parseFloat(document.getElementById('embed-val3').value) || 0
     ];
 
-    const maxAbs = Math.max(...values.map(Math.abs));
-    const scale = Math.max(1.0, Math.pow(2, Math.ceil(Math.log2(maxAbs / 6.0))));
+    // Compute dynamic scale factor from input BF16 values
+    const scale = computeEmbedScaleFactor(values);
 
     const scaledValues = values.map(v => v / scale);
     const quantResults = scaledValues.map(v => findNearestEmbedMXFP4(v));
