@@ -53,11 +53,11 @@ function embedQuantize() {
 
     const originalBits = 64;
     const compressedBits = 48;
-    document.getElementById('embed-ratio').textContent = (originalBits/compressedBits).toFixed(2);
+    document.getElementById('embed-ratio').textContent = (originalBits / compressedBits).toFixed(2);
 }
 
 // Initialize on page load and add event listeners for real-time updates
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     embedQuantize();
 
     // Add event listeners to all input fields
