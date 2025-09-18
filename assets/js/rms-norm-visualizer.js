@@ -55,11 +55,23 @@ function initializeData() {
 }
 
 function generatePresetInput(dim, rowIndex) {
+    // Use the exact values from the blog post example
+    const exampleRows = [
+        [2.0, -1.0, 3.0, 0.5, -0.5, 1.5, -2.0, 1.0], // Row 0
+        [4.0, -3.0, 2.5, 1.0, -1.5, 0.0, -0.5, 2.0], // Row 1
+        [-1.0, 3.5, -2.5, 1.5, 0.0, -3.0, 2.5, -0.5]  // Row 2
+    ];
+
+    if (rowIndex < exampleRows.length && dim <= 8) {
+        // Use exact values from example, truncated to current dimension
+        return exampleRows[rowIndex].slice(0, dim);
+    }
+
+    // Fallback for additional rows or dimensions
     const preset = [];
-    const rowVariation = (rowIndex + 1) * 0.5; // Each row has different scale
+    const rowVariation = (rowIndex + 1) * 0.5;
 
     for (let i = 0; i < dim; i++) {
-        // Create different patterns for each row
         if (rowIndex % 2 === 0) {
             preset[i] = rowVariation * (2.0 + Math.sin(i * 0.5)) * (i % 2 === 0 ? 1 : -0.6);
         } else {
@@ -248,7 +260,7 @@ async function runVisualization() {
             const blockEnd = Math.min(blockOffset + currentBlockSize, currentFeatureDim);
 
             // Update UI
-            document.getElementById('blockRange').textContent = `[${blockOffset}:${blockEnd-1}]`;
+            document.getElementById('blockRange').textContent = `[${blockOffset}:${blockEnd - 1}]`;
 
             // Highlight current block
             highlightBlock(rowIdx, blockOffset, blockEnd, 'processing');
@@ -355,7 +367,7 @@ function sleep(ms) {
 }
 
 // Event listeners - these will be attached when the DOM loads
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     // Event listeners
     document.getElementById('numRows').addEventListener('change', initializeData);
     document.getElementById('featureDim').addEventListener('change', initializeData);
