@@ -3,8 +3,8 @@ title: Triton Kernels - RMS Norm
 description: >-
   RMS Normalization Triton kernel implementation for LLMs
 date: 2025-09-17
-categories: [Tool]
-tags: [AI, Machine Learning, LLM, Triton, Normalization, GPU]
+categories: [Blog]
+tags: [AI, Machine Learning, LLM, Triton, GPU, Kernels]
 pin: true
 math: true
 author: ks
