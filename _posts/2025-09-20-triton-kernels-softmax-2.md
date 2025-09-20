@@ -10,7 +10,7 @@ math: false
 author: ks
 ---
 
-As a recap, in the [prevous post](../posts/triton-kernels-softmax) I implemented a Triton softmax kernel. The kernel achieves competitive performance with PyTorch at small-to-medium vocabulary sizes but shows degradation at very large vocabularies (32K+) and large batch_sizes. In this post, we will use some profiling tools to debug why that might be the case. 
+As a recap, in the [prevous post](../triton-kernels-softmax) I implemented a Triton softmax kernel. The kernel achieves competitive performance with PyTorch at small-to-medium vocabulary sizes but shows degradation at very large vocabularies (32K+) and large batch_sizes. In this post, we will use some profiling tools to debug why that might be the case. 
 
 ## NCU Profiler
 
