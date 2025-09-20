@@ -1055,6 +1055,8 @@ $ python softmax_benchmark.py --M 8192 --N 32000  --iters 1000 --backend triton
   </p>
 </div>
 
+![Reason](/assets/softmax_perf_reason_github.png)
+
 ## Summary
 
 In this exploration, I implemented a Triton softmax kernel using a hybrid approach with fast and tiled paths. The kernel achieves competitive performance with PyTorch at small-to-medium vocabulary sizes but shows degradation at very large vocabularies (32K+). Key findings:
@@ -1062,7 +1064,6 @@ In this exploration, I implemented a Triton softmax kernel using a hybrid approa
 - **Fast path optimization** for small sequences (≤ BLOCK_SIZE) enables single-pass computation
 - **Numerical stability** maintained through max subtraction across all implementations
 - **Performance trade-offs**: Triton excels at medium sizes (512-8192) but PyTorch scales better for large vocabularies
-- **Memory bandwidth**: Triton peaks around 870-900 GB/s while PyTorch maintains consistent throughput
 
 
 ### Code
