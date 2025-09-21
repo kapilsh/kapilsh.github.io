@@ -169,6 +169,163 @@ I have uploaded the assembly to gists for detailed comparison:
 }
 </style>
 
+## Proton profiler
+
+I also briefly tested the proton profiler to explore the profiling capabilities of the tool. Nice talk on it from triton conference from last year:
+
+{% include embed/youtube.html id='Av1za_0o2Qs' %}
+
+```python
+#!/usr/bin/env python3
+
+import sys
+import torch
+import click
+from loguru import logger
+import triton.profiler as proton
+
+# Import the existing softmax kernel
+import sys
+import os
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from softmax import softmax, pytorch_softmax
+
+# Ensure CUDA is available
+if not torch.cuda.is_available():
+    logger.error("CUDA is not available. This script requires a CUDA-capable GPU.")
+    sys.exit(1)
+
+DEVICE = torch.device("cuda")
+
+
+def profile_softmax_with_proton(
+    M, N, dtype=torch.float16, backend="triton", profile_name="softmax_profile"
+):
+    """
+    Profile softmax kernel using Triton's Proton profiler.
+
+    Args:
+        M: Number of rows (batch dimension)
+        N: Number of columns (feature dimension)
+        dtype: Data type for tensors
+        backend: Either "triton" or "torch"
+        profile_name: Name for the profile output
+    """
+    logger.info(f"Profiling {backend} softmax with M={M}, N={N}, dtype={dtype}")
+    logger.info(f"Profile will be saved as: {profile_name}")
+
+    # Select softmax function
+    if backend == "triton":
+        softmax_fn = softmax
+    elif backend == "torch":
+        softmax_fn = pytorch_softmax
+    else:
+        raise ValueError(f"Unknown backend: {backend}")
+
+    # Create input tensor
+    x = torch.randn(M, N, dtype=dtype, device=DEVICE) * 2.0
+
+    # Warmup run
+    logger.info("Running warmup...")
+    for _ in range(5):
+        _ = softmax_fn(x)
+
+    # Profile the kernel execution
+    logger.info("Starting Proton profiling...")
+
+    _ = proton.start(f"{profile_name}", backend="cupti")
+
+    for _ in range(1000):
+        output = softmax_fn(x)
+
+    proton.finalize()
+
+    # Move the generated file to the desired name with backend suffix
+    import shutil
+    import os
+    final_filename = f"{profile_name}_{backend}.hatchet"
+    if os.path.exists("proton.hatchet"):
+        shutil.move("proton.hatchet", final_filename)
+        logger.success(f"Profiling completed! Profile saved to: {final_filename}")
+    else:
+        logger.warning("proton.hatchet not found, profile may not have been generated")
+
+    logger.info(f"To view the profile, use: proton-viewer {final_filename}")
+
+    return output
+
+
+@click.command()
+@click.option("--M", type=int, required=True, help="Number of rows (batch dimension)")
+@click.option(
+    "--N", type=int, required=True, help="Number of columns (feature dimension)"
+)
+@click.option(
+    "--backend",
+    type=click.Choice(["triton", "torch"]),
+    default="triton",
+    help="Backend to use: triton (custom kernel) or torch (PyTorch)",
+)
+@click.option(
+    "--dtype",
+    type=click.Choice(["float16", "float32"]),
+    default="float16",
+    help="Data type for tensors",
+)
+@click.option(
+    "--profile-name",
+    type=str,
+    default="softmax_profile",
+    help="Name for the profile output file",
+)
+def main(m, n, backend, dtype, profile_name):
+    """Profile softmax kernel using Triton's Proton profiler."""
+
+    # Convert dtype string to torch dtype
+    dtype_map = {"float16": torch.float16, "float32": torch.float32}
+    dtype_tensor = dtype_map[dtype]
+
+    logger.info(f"Starting {backend} softmax profiling with parameters:")
+    logger.info(f"  Backend: {backend}")
+    logger.info(f"  M (rows): {m}")
+    logger.info(f"  N (cols): {n}")
+    logger.info(f"  dtype: {dtype}")
+    logger.info(f"  Profile name: {profile_name}")
+
+    # Run profiling
+    output = profile_softmax_with_proton(m, n, dtype_tensor, backend, profile_name)
+
+    logger.success("Profiling completed successfully!")
+    final_filename = f"{profile_name}_{backend}.hatchet"
+    logger.info(f"Profile file: {final_filename}")
+    logger.info(f"View with: proton-viewer {final_filename}")
+
+
+if __name__ == "__main__":
+    main()
+
+```
+
+```shell
+$ proton profile_softmax.py --M 4096 --N 32000 --backend torch
+$ proton-viewer -m time/ms ./softmax_profile_torch.hatchet 
+656.702 ROOT
+├─ 0.543 _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIN3c104HalfES4_S4_NS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLm2EEEEviT0_T1_
+├─ 655.861 _ZN2at6native43_GLOBAL__N__b6de9c8c_10_SoftMax_cu_9f978f6319cunn_SoftMaxForwardILi8EN3c104HalfEfS4_NS1_22SoftMaxForwardEpilogueEEEvPT2_PKT0_i
+└─ 0.298 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEvlNS_15PhiloxCudaStateESK_SL_
+
+$ proton profile_softmax.py --M 4096 --N 32000 --backend triton
+$ proton-viewer -m time/ms ./softmax_profile_triton.hatchet 
+668.793 ROOT
+├─ 0.543 _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_13AUnaryFunctorIN3c104HalfES4_S4_NS0_15binary_internal10MulFunctorIfEEEESt5arrayIPcLm2EEEEviT0_T1_
+├─ 0.302 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEvlNS_15PhiloxCudaStateESK_SL_
+└─ 667.948 softmax_forward
+
+```
+
+It reproduces that triton version is worse but I wasn't able to get useful insight out of it -- may be I am using it wrong -- but ncu seemed to be a lot more useful!
+
 ## Summary
 
 Performance profiling using NCU revealed that the Triton softmax kernel shows degraded performance due to increased warp stalls, likely due to non-negative value checks before `sqrt` in triton version
