@@ -123,13 +123,13 @@ Comparing this to torch version:
 
 I have uploaded the assembly to gists for detailed comparison:
 
-### SASS Assembly Code Comparison
+### SASS Comparison
 
 <div style="background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%); border: 1px solid #0284c7; border-radius: 12px; padding: 24px; margin: 24px 0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
   <div style="margin-bottom: 16px;">
-    <h4 style="color: #0369a1; margin: 0 0 8px 0; font-size: 1.1em;">🔍 Assembly Code Analysis</h4>
+    <h4 style="color: #0369a1; margin: 0 0 8px 0; font-size: 1.1em;">🔍 SASS Reference</h4>
     <p style="color: #374151; margin: 0; line-height: 1.5;">
-      The following gist contains the SASS assembly output for both Triton and PyTorch kernels. You can see the differences in instruction patterns and optimization strategies between the two implementations.
+      The following gist contains the SASS assembly output for both Triton and PyTorch kernels for reference.
     </p>
   </div>
 
@@ -140,8 +140,8 @@ I have uploaded the assembly to gists for detailed comparison:
   <div style="margin-top: 16px; padding: 12px; background-color: rgba(255, 255, 255, 0.7); border-radius: 6px;">
     <strong style="color: #0369a1;">📁 Files in the gist:</strong>
     <ul style="margin: 8px 0 0 0; color: #374151;">
-      <li><code>triton_sass</code> - Assembly output from the Triton softmax kernel</li>
-      <li><code>torch_sass.txt</code> - Assembly output from PyTorch's optimized softmax implementation</li>
+      <li><code>triton_sass.txt</code> - SASS output from the Triton softmax kernel</li>
+      <li><code>torch_sass.txt</code> - SASS output from PyTorch implementation</li>
     </ul>
   </div>
 </div>
@@ -171,17 +171,16 @@ I have uploaded the assembly to gists for detailed comparison:
 
 ## Summary
 
-Performance profiling using NCU revealed that the Triton softmax kernel shows degraded performance due to increased warp stalls. 
+Performance profiling using NCU revealed that the Triton softmax kernel shows degraded performance due to increased warp stalls, likely due to non-negative value checks before `sqrt` in triton version
 
 Key findings:
 
 - **Warp latency**: Triton kernel shows 14.43 vs 11.99 cycles per instruction compared to PyTorch
 - **Stall cause**: Excessive time spent in floating-point validation routines (`CALL.REL.NOINC 0x70efb7c4c750`)
-- **Warp divergence**: The validation code handles NaN/infinity checks causing significant branching overhead
+- **Warp divergence**: The validation code handles negative/NaN/infinity checks causing significant branching overhead
 - **Assembly difference**: PyTorch implementation avoids this validation bottleneck entirely
 
-The performance gap stems from compiler-generated safety checks rather than algorithmic differences but that is s debugging exercise for another day! ✌️ 
-
+The performance gap stems from compiler-generated safety checks rather than algorithmic differences -- I guess another debugging exercise for another day! ✌️ 
 
 ### Code
 
