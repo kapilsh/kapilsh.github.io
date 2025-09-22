@@ -1057,6 +1057,17 @@ $ python softmax_benchmark.py --M 8192 --N 32000  --iters 1000 --backend triton
 
 ![Reason](/assets/softmax_perf_reason_github.png)
 
+### Update (I missed this originally)
+
+> After looking a little closer at the profile, I noticed that the `BLOCK_SIZE` was automatically changed to 128 in case of the triton kernel versus 1024 for Torch. It seems that triton is autotuning the hard CUDA block size instead of using the logical BLOCK_SIZE that is provided in the kernel.
+{: .prompt-warning}
+
+In addition, when I look at the official tutorial on softmax, they do some shenanigans with the `num_warps` and warmup. 
+
+<script src="https://emgithub.com/embed-v2.js?target=https%3A%2F%2Fgithub.com%2Ftriton-lang%2Ftriton%2Fblob%2Fmain%2Fpython%2Ftutorials%2F02-fused-softmax.py%23L134-L147&style=github&type=code&showBorder=on&showLineNumbers=on&showFileMeta=on&showFullPath=on&showCopy=on"></script>
+
+<script src="https://emgithub.com/embed-v2.js?target=https%3A%2F%2Fgithub.com%2Ftriton-lang%2Ftriton%2Fblob%2Fmain%2Fpython%2Ftutorials%2F02-fused-softmax.py%23L168-L174&style=github&type=code&showBorder=on&showLineNumbers=on&showFileMeta=on&showFullPath=on&showCopy=on"></script>
+
 ## Summary
 
 In this exploration, I implemented a Triton softmax kernel using a hybrid approach with fast and tiled paths. The kernel achieves competitive performance with PyTorch at small-to-medium vocabulary sizes but shows degradation at very large vocabularies (32K+). Key findings:
