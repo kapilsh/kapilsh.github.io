@@ -265,6 +265,9 @@ if n_cols <= BLOCK_SIZE:
 
 ### Tiled Path (Large Rows)
 
+> UPDATE (2025-09-24): On performance debugging, I later realized that the tiled path is never executed because I was always passing `BLOCK_SIZE = max(triton.next_power_of_2(n_cols), 64)`. FWIW, when I capped the BLOCK_SIZE, the kernel performance wasn't great as soon we hit vocab dimension of >=1024. It seems to suggest that the block size strategy in the kernel is fine. **Below, we still cover the tiled approach for demostration purposes.**
+{: .prompt-warning}
+
 For larger feature dimensions, we use the three-pass approach with block processing:
 
 #### Pass 1: Find Row Maximum
