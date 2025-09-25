@@ -328,22 +328,22 @@ order: 3
             <div class="input-section">
                 <h3 class="section-title">📊 Input BF16 Values</h3>
                 <div class="input-grid">
-                    <input type="number" class="input-field" id="val0" step="0.1" value="2.5">
-                    <input type="number" class="input-field" id="val1" step="0.1" value="-1.25">
-                    <input type="number" class="input-field" id="val2" step="0.1" value="0.75">
-                    <input type="number" class="input-field" id="val3" step="0.1" value="4.0">
-                    <input type="number" class="input-field" id="val4" step="0.1" value="1.2">
-                    <input type="number" class="input-field" id="val5" step="0.1" value="-0.8">
-                    <input type="number" class="input-field" id="val6" step="0.1" value="3.1">
-                    <input type="number" class="input-field" id="val7" step="0.1" value="-2.3">
-                    <input type="number" class="input-field" id="val8" step="0.1" value="0.9">
-                    <input type="number" class="input-field" id="val9" step="0.1" value="5.2">
-                    <input type="number" class="input-field" id="val10" step="0.1" value="-1.7">
-                    <input type="number" class="input-field" id="val11" step="0.1" value="2.8">
-                    <input type="number" class="input-field" id="val12" step="0.1" value="-0.4">
-                    <input type="number" class="input-field" id="val13" step="0.1" value="1.6">
-                    <input type="number" class="input-field" id="val14" step="0.1" value="-3.5">
-                    <input type="number" class="input-field" id="val15" step="0.1" value="4.7">
+                    <input type="number" class="input-field" id="val0" step="0.1" value="250.5">
+                    <input type="number" class="input-field" id="val1" step="0.1" value="-125.25">
+                    <input type="number" class="input-field" id="val2" step="0.1" value="75.75">
+                    <input type="number" class="input-field" id="val3" step="0.1" value="400.0">
+                    <input type="number" class="input-field" id="val4" step="0.1" value="120.2">
+                    <input type="number" class="input-field" id="val5" step="0.1" value="-80.8">
+                    <input type="number" class="input-field" id="val6" step="0.1" value="310.1">
+                    <input type="number" class="input-field" id="val7" step="0.1" value="-230.3">
+                    <input type="number" class="input-field" id="val8" step="0.1" value="90.9">
+                    <input type="number" class="input-field" id="val9" step="0.1" value="520.2">
+                    <input type="number" class="input-field" id="val10" step="0.1" value="-170.7">
+                    <input type="number" class="input-field" id="val11" step="0.1" value="280.8">
+                    <input type="number" class="input-field" id="val12" step="0.1" value="-40.4">
+                    <input type="number" class="input-field" id="val13" step="0.1" value="160.6">
+                    <input type="number" class="input-field" id="val14" step="0.1" value="-350.5">
+                    <input type="number" class="input-field" id="val15" step="0.1" value="470.7">
                 </div>
                 <div class="buttons">
                     <button class="btn btn-primary" id="quantizeBtn">🚀 Quantize</button>
@@ -352,7 +352,6 @@ order: 3
                 </div>
                 <div class="stats">
                     <div>📏 Vec Size: <span id="vecSize">16</span></div>
-                    <div>⚖️ Scale: <span id="scaleValue">1.0</span></div>
                 </div>
             </div>
 
@@ -399,6 +398,9 @@ order: 3
                         <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code14">1110</div>
                         <div style="background: rgba(255,255,255,0.9); padding: 8px; border-radius: 6px; text-align: center; color: #333; font-weight: bold;" id="code15">0110</div>
                     </div>
+                </div>
+                <div style="background: rgba(255,255,255,0.9); padding: 12px; border-radius: 8px; text-align: center; color: #333; font-weight: bold; margin-bottom: 15px; font-size: 1.1rem;">
+                    ⚖️ Scale Factor: <span id="scaleValue">1.0</span>
                 </div>
                 <div class="stats">
                     <div>💾 Original: <span id="originalBits">256</span> bits</div>

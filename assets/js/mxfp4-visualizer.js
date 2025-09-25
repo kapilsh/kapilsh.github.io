@@ -106,12 +106,15 @@ function quantize() {
 
         // Update MXFP4 output code
         const codeElement = document.getElementById(`code${i}`);
-        codeElement.textContent = quantResults[i].code.toString(2).padStart(4, '0');
+        codeElement.innerHTML = `
+            <div style="font-size: 0.8rem; font-family: monospace;">${quantResults[i].code.toString(2).padStart(4, '0')}</div>
+            <div style="font-size: 0.7rem; margin-top: 2px;">${quantResults[i].value.toFixed(1)}</div>
+        `;
     });
 
     // Highlight corresponding LUT cells for all quantized values
     const lutCells = document.querySelectorAll('.lut-cell');
-    lutCells.forEach((cell, idx) => {
+    lutCells.forEach((cell) => {
         cell.classList.remove('selected');
     });
 
@@ -214,7 +217,7 @@ function updateErrorAnalysis(originalValues, quantResults, scale) {
 
 function generateRandom() {
     for (let i = 0; i < 16; i++) {
-        const randomValue = (Math.random() - 0.5) * 8; // Range: -4 to 4
+        const randomValue = (Math.random() - 0.5) * 2000; // Range: -1000 to 1000
         document.getElementById(`val${i}`).value = randomValue.toFixed(2);
     }
     quantize();
@@ -224,15 +227,15 @@ function loadPreset() {
     // Demonstrate different scale factors for different blocks
     const examples = [
         {
-            values: [0.1, 0.2, 0.15, 0.3, -0.12, 0.25, -0.08, 0.18, 0.22, -0.14, 0.19, 0.11, -0.16, 0.28, 0.13, -0.09],
+            values: [10.1, 20.2, 15.15, 30.3, -12.12, 25.25, -8.08, 18.18, 22.22, -14.14, 19.19, 11.11, -16.16, 28.28, 13.13, -9.09],
             desc: "Small values (fine scale)"
         },
         {
-            values: [5.0, -4.8, 3.2, -5.9, 4.1, -3.7, 6.2, -4.5, 3.8, 5.1, -4.2, 3.9, -5.3, 4.6, -3.1, 5.7],
+            values: [500.0, -480.8, 320.2, -590.9, 410.1, -370.7, 620.2, -450.5, 380.8, 510.1, -420.2, 390.9, -530.3, 460.6, -310.1, 570.7],
             desc: "Large values (coarse scale)"
         },
         {
-            values: [1.0, 2.0, -1.5, 2.3, -0.8, 1.7, -1.2, 2.1, 1.4, -1.8, 2.5, -1.1, 1.9, -2.2, 1.6, -0.9],
+            values: [100.0, 200.0, -150.5, 230.3, -80.8, 170.7, -120.2, 210.1, 140.4, -180.8, 250.5, -110.1, 190.9, -220.2, 160.6, -90.9],
             desc: "Medium values (medium scale)"
         }
     ];
