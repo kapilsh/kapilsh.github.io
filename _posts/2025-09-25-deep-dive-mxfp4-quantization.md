@@ -4,7 +4,7 @@ description: >-
   Complete technical exploration of MXFP4 quantization, including matrix multiplication and Mixture of Experts implementation with interactive visualizations
 date: 2025-09-25
 categories: [Deep Learning]
-tags: [AI, Machine Learning, LLM, Quantization, MXFP4, MoE, Matrix Multiplication, Optimization]
+tags: [AI, Machine Learning, LLM, Quantization,]
 pin: true
 math: true
 author: ks
@@ -218,25 +218,27 @@ C = (A_quantized @ B_quantized) × (scale_A × scale_B)
 
 ### Block-wise Matrix Multiplication
 
-<div id="matmul-visualization" class="my-4">
-  <h4>MXFP4 Matrix Multiplication Visualization</h4>
-  <div class="controls mb-3">
-    <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
-      <button id="step-button" class="btn btn-primary">Step Forward</button>
-      <button id="reset-button" class="btn btn-secondary">Reset</button>
-      <button id="randomize-button" class="btn btn-info">Randomize Matrices</button>
-      <button id="simulate-button" class="btn btn-success">Auto Simulate</button>
-      <span style="margin-left: 15px; font-weight: 500;">
-        Step: <span id="current-step">0</span> / <span id="total-steps">16</span>
-      </span>
-      <span style="margin-left: 15px; font-size: 12px; color: #666;">
-        Speed: <input type="range" id="speed-slider" min="1" max="10" value="5" style="width: 80px;">
-        <span id="speed-value">Medium</span>
-      </span>
+<div id="matmul-visualization-wrapper" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 15px; padding: 20px; margin: 30px 0; box-shadow: 0 10px 30px rgba(0,0,0,0.15);">
+  <div id="matmul-visualization" style="background: white; border-radius: 10px; padding: 25px;">
+    <h4 style="color: #333; margin-bottom: 20px; text-align: center;">🧮 MXFP4 Matrix Multiplication Visualization</h4>
+    <div class="controls mb-3">
+      <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
+        <button id="step-button" class="btn btn-primary">Step Forward</button>
+        <button id="reset-button" class="btn btn-secondary">Reset</button>
+        <button id="randomize-button" class="btn btn-info">Randomize Matrices</button>
+        <button id="simulate-button" class="btn btn-success">Auto Simulate</button>
+        <span style="margin-left: 15px; font-weight: 500;">
+          Step: <span id="current-step">0</span> / <span id="total-steps">16</span>
+        </span>
+        <span style="margin-left: 15px; font-size: 12px; color: #666;">
+          Speed: <input type="range" id="speed-slider" min="1" max="10" value="5" style="width: 80px;">
+          <span id="speed-value">Medium</span>
+        </span>
+      </div>
     </div>
-  </div>
-  <div id="matmul-canvas-container" style="height: 800px; width: 100%; position: relative;">
-    <canvas id="matmulCanvas" style="width: 100%; height: 100%; display: block;"></canvas>
+    <div id="matmul-canvas-container" style="height: 800px; width: 100%; position: relative;">
+      <canvas id="matmulCanvas" style="width: 100%; height: 100%; display: block;"></canvas>
+    </div>
   </div>
 </div>
 

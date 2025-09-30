@@ -762,7 +762,7 @@ class MXFP4Visualizer {
                 const y = start.y + i * cellSize;
 
                 // Cell background
-                ctx.fillStyle = isResult ? 'rgba(231, 76, 60, 0.1)' : 'rgba(255, 255, 255, 0.9)';
+                ctx.fillStyle = isResult ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 255, 255, 0.9)';
                 ctx.fillRect(x, y, cellSize, cellSize);
 
                 // Cell border
