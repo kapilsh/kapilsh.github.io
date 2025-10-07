@@ -1,53 +1,66 @@
 ---
-title: "CUDA GEMM Optimization: An Interactive Journey"
+title: "Explore GEMMs - optimization journey"
 description: >-
-  Interactive visualizations of CUDA matrix multiplication optimization techniques from naive implementation to near-cuBLAS performance
+  CUDA matrix multiplication optimization explorations
 date: 2025-10-01
 categories: [Blog]
-tags: [CUDA, GPU, Optimization, Matrix Multiplication, Performance]
+tags: [Triton, CUDA, GPU, GEMM, Performance]
 pin: true
 math: true
 author: ks
 ---
 
-Matrix multiplication (GEMM - General Matrix Multiply) is one of the most fundamental operations in deep learning and scientific computing. Understanding how to optimize GEMM kernels on GPUs provides deep insights into GPU architecture, memory hierarchies, and parallel computing principles.
+Matrix multiplication (GEMM - General Matrix Multiply) is one of the most fundamental operations in deep learning. Understanding how to optimize GEMM kernels on GPUs provides deep insights into GPU architecture, memory hierarchies, and parallel computing principles.
 
-This post presents an interactive exploration of CUDA GEMM optimization, inspired by [Simon Boehm's excellent article](https://siboehm.com/articles/22/CUDA-MMM). We'll walk through seven optimization stages, each with interactive visualizations to help understand the concepts.
-
-## Performance Journey Overview
-
-Starting from a naive implementation at ~300 GFLOPs (1.3% of cuBLAS), we'll progressively optimize to reach ~20,000 GFLOPs (84.8% of cuBLAS) through:
-
-1. **Naive Implementation** - 309 GFLOPs (1.3%)
-2. **Global Memory Coalescing** - 1,987 GFLOPs (8.5%)
-3. **Shared Memory Caching** - 2,980 GFLOPs (12.8%)
-4. **1D Block Tiling** - 8,475 GFLOPs (36.5%)
-5. **2D Block Tiling** - 15,972 GFLOPs (68.7%)
-6. **Vectorized Memory Access** - 18,237 GFLOPs (78.4%)
-7. **Autotuning** - 19,721 GFLOPs (84.8%)
+If the reader is remotely interested in CUDA or Triton programmin, they have likely come across [this gemm of a post](https://siboehm.com/articles/22/CUDA-MMM) -- pun intended -- by Simon Boehm. We'll build on this and walk through several optimization stages, each with some interactive visualizations to help understand the concepts. In addition, we will try to do most of the work in triton instead.
 
 ## GEMM Basics
 
-Matrix multiplication computes $C = A \times B$ where:
-- $A$ is $M \times K$
-- $B$ is $K \times N$
-- $C$ is $M \times N$
+GEMM (General Matrix Multiply) is a fundamental operation defined as:
 
-Each element $C[i,j]$ is computed as:
+$$C = \alpha AB + \beta C$$
 
-$$C[i,j] = \sum_{k=0}^{K-1} A[i,k] \times B[k,j]$$
+where:
+- $A$ is an $M \times K$ matrix
+- $B$ is a $K \times N$ matrix
+- $C$ is an $M \times N$ matrix (both input and output)
+- $\alpha$ and $\beta$ are scalar coefficients
 
-For a $4096 \times 4096$ matrix multiplication:
-- Total operations: $2 \times 4096^3 \approx 137$ billion FLOPs
+**Key Points:**
+- The standard matrix product $C = AB$ is a special case with $\alpha = 1$ and $\beta = 0$
+- When $\beta \neq 0$, GEMM accumulates into a pre-existing matrix $C$
+- This formulation enables fused operations, avoiding separate kernel launches
+
+### Computational Complexity
+
+Each element $C[i,j]$ requires a dot product:
+
+$$C[i,j] = \alpha \sum_{k=0}^{K-1} A[i,k] \times B[k,j] + \beta C[i,j]$$
+
+For matrices of size $M \times K$, $K \times N$:
+- Total dot products: $M \times N$
+- Operations per dot product: $2K$ (K multiplies + K adds) + 3 scalar ops ($\alpha$, $\beta$, addition of $M \times N$ matrix)
+- **Total FLOPs**: $2MNK + MK$ (dominated by dot products)
+
+For a $4096 \times 4096$ matrix multiplication ($M = N = K = 4096$):
+- Total operations: $2 \times 4096^3 \approx 137$ GFLOPs
 - Memory required: $3 \times 4096^2 \times 4$ bytes $\approx$ 201 MB (float32)
+- **Arithmetic Intensity**: $\frac{137 \text{ GFLOPs}}{201 \text{ MB}} \approx 682$ FLOPs/byte
+
+## Code Repository
+
+Full implementation of all kernels discussed in this post:
+
+<div class="github-card" data-user="gpusgobrr" data-repo="explore-gemm" data-width="100%" data-height="" data-theme="default"></div>
+
 
 ## Kernel 1: Naive Implementation
 
 ### Concept
 
-The simplest approach: assign each thread to compute one output element.
+The simplest approach to calculate GEMM assign each thread to compute one output element. Here is a naive implementation for matrix maltiply GEMM kernel
 
-```cuda
+```c
 __global__ void sgemm_naive(int M, int N, int K,
                             float alpha, const float *A,
                             const float *B, float beta,
@@ -65,198 +78,280 @@ __global__ void sgemm_naive(int M, int N, int K,
 }
 ```
 
-### Memory Access Pattern
+#### Caller
 
-Each thread independently:
-1. Loads one row of $A$ (K elements)
-2. Loads one column of $B$ (K elements)
-3. Computes dot product
-4. Writes one element to $C$
+We operate on torch Tensors directly to call the above kernel:
 
-**Problem**: Threads access memory in a scattered, non-coalesced pattern.
+```cpp
 
-<div id="naive-viz"></div>
+void sgemm_naive(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
+                 torch::Tensor &output_matrix, float alpha, float beta)
+{
+    // Validate inputs
+    TORCH_CHECK(matrix_a.device().is_cuda(), "Matrix A must be on CUDA device");
+    TORCH_CHECK(matrix_b.device().is_cuda(), "Matrix B must be on CUDA device");
+    TORCH_CHECK(matrix_a.dtype() == torch::kFloat32, "Matrix A must be float32");
+    TORCH_CHECK(matrix_b.dtype() == torch::kFloat32, "Matrix B must be float32");
+    TORCH_CHECK(matrix_a.dim() == 2, "Matrix A must be 2D");
+    TORCH_CHECK(matrix_b.dim() == 2, "Matrix B must be 2D");
 
-### Triton Implementation
+    const int num_rows_a = static_cast<int>(matrix_a.size(0));
+    const int num_cols_a = static_cast<int>(matrix_a.size(1));
+    const int num_cols_b = static_cast<int>(matrix_b.size(1));
 
-```python
-import triton
-import triton.language as tl
+    TORCH_CHECK(matrix_b.size(0) == num_cols_a, "Matrix dimensions must match: A is MxK, B must be KxN");
 
-@triton.jit
-def matmul_kernel_naive(
-    # Pointers to matrices
-    a_ptr, b_ptr, c_ptr,
-    # Matrix dimensions
-    M, N, K,
-    # Strides
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-):
-    # Each program/thread computes one element of C
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    TORCH_CHECK(output_matrix.device().is_cuda(), "Matrix C must be on CUDA device");
+    TORCH_CHECK(output_matrix.dtype() == torch::kFloat32, "Matrix C must be float32");
+    TORCH_CHECK(output_matrix.size(0) == num_rows_a && output_matrix.size(1) == num_cols_b, "Matrix C must be MxN");
 
-    # Compute C[pid_m, pid_n]
-    # Load row from A and column from B
-    offs_k = tl.arange(0, K)
+    // Get raw device pointers
+    const float *d_matrix_a = matrix_a.data_ptr<float>();
+    const float *d_matrix_b = matrix_b.data_ptr<float>();
+    float *d_output_matrix = output_matrix.data_ptr<float>();
 
-    a_ptrs = a_ptr + pid_m * stride_am + offs_k * stride_ak
-    b_ptrs = b_ptr + offs_k * stride_bk + pid_n * stride_bn
+    // Configure kernel launch: 16x16 threads per block
+    constexpr int threads_per_block = 32;
+    dim3 block_dim(threads_per_block, threads_per_block);
+    dim3 grid_dim(CEIL_DIV(num_rows_a, threads_per_block),
+                  CEIL_DIV(num_cols_b, threads_per_block));
 
-    a = tl.load(a_ptrs, mask=offs_k < K, other=0.0)
-    b = tl.load(b_ptrs, mask=offs_k < K, other=0.0)
-
-    # Compute dot product
-    c = tl.sum(a * b)
-
-    # Write result
-    c_ptr += pid_m * stride_cm + pid_n * stride_cn
-    tl.store(c_ptr, c)
-
-def matmul_naive(a, b):
-    M, K = a.shape
-    K, N = b.shape
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-
-    grid = lambda META: (M, N)
-
-    matmul_kernel_naive[grid](
-        a, b, c,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-    )
-    return c
-```
-
-**Key Differences from CUDA**:
-- No explicit thread indexing - Triton uses `program_id`
-- Automatic memory boundary checking with `mask` parameter
-- Vector operations: `tl.sum(a * b)` instead of manual loop
-- Grid size specified as lambda function
-
-### Performance Analysis
-
-- **Performance**: 309 GFLOPs (1.3% of cuBLAS)
-- **Memory Traffic**: ~548 GB for $4096^2$ matrices
-- **Memory Bandwidth**: ~15 GB/s (vs 768 GB/s theoretical)
-- **Bottleneck**: Poor memory access patterns
-
-## Kernel 2: Global Memory Coalescing
-
-### Concept
-
-Restructure thread-to-output mapping so threads in the same warp access consecutive memory locations.
-
-```cuda
-__global__ void sgemm_coalesced(int M, int N, int K,
-                                float alpha, const float *A,
-                                const float *B, float beta,
-                                float *C) {
-    // Changed mapping for coalesced access
-    const int x = blockIdx.x * BLOCKSIZE + (threadIdx.x / BLOCKSIZE);
-    const int y = blockIdx.y * BLOCKSIZE + (threadIdx.x % BLOCKSIZE);
-
-    if (x < M && y < N) {
-        float tmp = 0.0;
-        for (int i = 0; i < K; ++i) {
-            tmp += A[x * K + i] * B[i * N + y];
-        }
-        C[x * N + y] = alpha * tmp + beta * C[x * N + y];
-    }
+    // Launch kernel
+    sgemm_naive_kernel<<<grid_dim, block_dim>>>(
+        num_rows_a, num_cols_b, num_cols_a,
+        alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix);
 }
 ```
 
-### Memory Coalescing Explained
 
-**Warp-level memory access**: NVIDIA GPUs execute 32 threads (a warp) simultaneously. When these threads access consecutive memory addresses, the hardware can combine them into fewer memory transactions.
+> **What does the memory access pattern look like in this naive case?** 
+>
+> At a high level, each thread independently:
+> 1. Loads one row of $A$ (K elements)
+> 2. Loads one column of $B$ (K elements)
+> 3. Computes dot product
+> 4. Writes one element to $C$
+{: .prompt-tip}
 
-**Example**:
+Let's look an interactive visualization of it below
+
+<div id="naive-viz"></div>
+
+> **Problem**: Threads access memory in a scattered, non-coalesced pattern.
+{: .prompt-warning}
+
+I ran the naive kernel and pytorch gemm kernels on my RTX 4090 to experiment. Let's see the results below:
+
+```
+2025-10-07 07:11:33.403 | INFO     | __main__:run_benchmarks:745 - 📊 Comparison (baseline: PyTorch)
+2025-10-07 07:11:33.404 | INFO     | __main__:run_benchmarks:746 - ────────────────────────────────────────────────────────────────────────────────
+2025-10-07 07:11:33.404 | INFO     | __main__:run_benchmarks:770 - PyTorch             : 1.00× (baseline) 🎯
+2025-10-07 07:11:33.404 | INFO     | __main__:run_benchmarks:773 - CUDA Naive          : 0.01× 🐢
+2025-10-07 07:11:33.404 | INFO     | __main__:run_benchmarks:775 - 
+
+2025-10-07 07:11:33.406 | INFO     | __main__:run_benchmarks:655 - ================================================================================
+2025-10-07 07:11:33.406 | INFO     | __main__:run_benchmarks:656 - 📐 Matrix dimensions: (4096, 4096) @ (4096, 4096) = (4096, 4096)
+2025-10-07 07:11:33.406 | INFO     | __main__:run_benchmarks:661 - 💾 Expected memory usage: 0.20 GB (0.07 GB per matrix)
+2025-10-07 07:11:33.406 | INFO     | __main__:run_benchmarks:664 - ================================================================================
+2025-10-07 07:11:33.406 | INFO     | __main__:run_benchmarks:700 - 
+🔵 Benchmarking PyTorch...
+2025-10-07 07:11:33.599 | INFO     | __main__:run_benchmarks:713 -    ⏱️  Time: 1.6782 ms (min: 1.6128, max: 2.0460)
+2025-10-07 07:11:33.599 | SUCCESS  | __main__:run_benchmarks:716 -    💪 Performance: 81.90 TFLOPS
+2025-10-07 07:11:33.599 | SUCCESS  | __main__:run_benchmarks:717 -    🌊 Bandwidth: 119.97 GB/s
+2025-10-07 07:11:33.599 | INFO     | __main__:run_benchmarks:700 - 
+🔴 Benchmarking CUDA Naive...
+2025-10-07 07:11:58.810 | INFO     | __main__:run_benchmarks:713 -    ⏱️  Time: 222.9623 ms (min: 219.4291, max: 232.7135)
+2025-10-07 07:11:58.810 | SUCCESS  | __main__:run_benchmarks:716 -    💪 Performance: 0.62 TFLOPS
+2025-10-07 07:11:58.810 | SUCCESS  | __main__:run_benchmarks:717 -    🌊 Bandwidth: 0.90 GB/s
+2025-10-07 07:11:58.810 | INFO     | __main__:run_benchmarks:744 - 
+```
+> For M = N = K = 4096:
+> - The naive CUDA kernel is 133× slower than PyTorch (0.01× speedup)
+> - Achieves only 0.76% of PyTorch's TFLOPS
+> - Bandwidth utilization is 133× worse (0.90 GB/s vs 119.97 GB/s)
+{: .prompt-info}
+
+### Benchmark Results
+
+Below are the full benchmark results comparing the naive CUDA kernel against PyTorch's optimized GEMM implementation across different shapes:
+
+![Naive Only](/assets/explore_gemm_naive_only.png)
+
+As we can see, the naive implementation is significantly slower than PyTorch's optimized kernel, achieving only ~1% of PyTorch's performance. 
+
+
+## Kernel 2: Global Memory Coalescing
+
+### Why Memory Coalescing Matters
+
+#### The Hardware Perspective
+
+To understand memory coalescing, we need to understand GPU execution hierarchy:
+
+**Threads → Warps → Thread Blocks → Streaming Multiprocessors (SMs)**
+
+1. **Threads**: Individual execution units in your CUDA kernel
+2. **Warps**: Groups of 32 threads that execute the same instruction simultaneously (SIMT - Single Instruction, Multiple Thread)
+3. **Thread Blocks**: Logical groupings of threads (up to 1024 threads) that share resources and can synchronize
+4. **Streaming Multiprocessors (SMs)**: The physical processors on the GPU that execute thread blocks
+
+> A modern GPU like the H100 has **144 SMs**, each capable of running up to **2,048 threads concurrently** (64 warps). Each SM has **4 warp schedulers** that issue instructions to warps every clock cycle.
+{: .prompt-tip}
+
+> On my RTX 4090, I have 128 SMs and it allows **1024 threads concurrently** (32 warps).
+{: .prompt-info}
+
+> The key insight: **warps are the fundamental unit of execution**. All 32 threads in a warp execute the same instruction at the same time. When these threads access consecutive memory addresses, the hardware can combine their memory requests into a single transaction. Modern GPU DRAM systems can fetch large contiguous blocks (32B, 64B, or 128B cache lines) in one transaction. Without coalescing, the same 32 accesses could require 32 separate transactions → **32x increase in memory traffic** ⚠️.
+{: .prompt-tip}
+
+
+**Why SMs matter for GEMM**:
+- Each SM has limited resources (registers, shared memory)
+- Multiple thread blocks compete for these resources
+- SMs can switch between warps in a **single clock cycle** (1000x faster than CPU context switches)
+- This enables **latency hiding**: while one warp waits for memory, another executes
+- GEMM efficiency depends on keeping all warp schedulers busy with coalesced memory access patterns
+
+**Coalescing Example**:
 - 32 threads each load a 4-byte float
-- Total: 128 bytes
-- Coalesced: 1 memory transaction (128-byte cache line)
-- Uncoalesced: Up to 32 transactions
+- Total data: 128 bytes
+- **Coalesced**: 1 memory transaction (128-byte cache line)
+- **Uncoalesced**: Up to 32 separate transactions
 
-<div id="coalescing-viz"></div>
+### Concept
 
-### Triton Implementation
+Now that we have general hardware fundatmentals, we can see that the naive kernel's memory access pattern is inefficient. When threads in a warp access scattered memory locations, each access requires a separate memory transaction. Memory coalescing restructures the thread-to-output mapping so threads in the same warp access consecutive memory locations, enabling the hardware to combine multiple accesses into a single transaction.
 
-```python
-@triton.jit
-def matmul_kernel_coalesced(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    BLOCK_SIZE: tl.constexpr,
-):
-    # Program IDs represent block positions
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+#### Thread-to-Output Remapping
 
-    # Compute block offsets
-    offs_m = pid_m * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    offs_n = pid_n * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    offs_k = tl.arange(0, K)
+```cuda
+template <const uint block_size>
+__global__ void sgemm_global_mem_coalesce_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
+                                                 float alpha, const float *matrix_a,
+                                                 const float *matrix_b, float beta, float *matrix_c)
+{
+    // Map 1D thread ID to 2D output position for coalesced memory access
+    // *** KEY CHANGE wrt NAIVE kernel
+    const int output_row = blockIdx.x * block_size + (threadIdx.x / block_size);
+    const int output_col = blockIdx.y * block_size + (threadIdx.x % block_size);
+    // *** KEY CHANGE wrt NAIVE kernel
 
-    # Create pointer arrays for the block
-    # Triton automatically handles coalescing for contiguous accesses
-    a_ptrs = a_ptr + (offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn)
+    // Boundary check for non-multiple of block size
+    if (output_row < num_rows_a && output_col < num_cols_b)
+    {
+        float accumulator = 0.0f;
+        for (int k_idx = 0; k_idx < num_cols_a; ++k_idx)
+        {
+            accumulator += matrix_a[output_row * num_cols_a + k_idx] *
+                          matrix_b[k_idx * num_cols_b + output_col];
+        }
+        const int output_idx = output_row * num_cols_b + output_col;
+        matrix_c[output_idx] = alpha * accumulator + beta * matrix_c[output_idx];
+    }
+}
 
-    # Compute
-    accumulator = tl.zeros((BLOCK_SIZE, BLOCK_SIZE), dtype=tl.float32)
-
-    a = tl.load(a_ptrs, mask=(offs_m[:, None] < M) & (offs_k[None, :] < K), other=0.0)
-    b = tl.load(b_ptrs, mask=(offs_k[:, None] < K) & (offs_n[None, :] < N), other=0.0)
-
-    accumulator += tl.dot(a, b)
-
-    c = accumulator.to(tl.float32)
-
-    # Store
-    c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
-    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
-    tl.store(c_ptrs, c, mask=mask)
-
-def matmul_coalesced(a, b):
-    M, K = a.shape
-    K, N = b.shape
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-
-    BLOCK_SIZE = 32
-
-    grid = lambda META: (
-        triton.cdiv(M, BLOCK_SIZE),
-        triton.cdiv(N, BLOCK_SIZE),
-    )
-
-    matmul_kernel_coalesced[grid](
-        a, b, c,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
-    return c
 ```
 
-**Triton's Automatic Coalescing**:
-- Uses `tl.arange()` to create contiguous offset arrays
-- Broadcasting with `[:, None]` and `[None, :]` creates 2D access patterns
-- Triton compiler automatically generates coalesced memory accesses
-- `tl.dot()` uses hardware-accelerated matrix multiply
+### Caller
 
-### Performance Analysis
+```cpp
+void sgemm_global_mem_coalesce(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
+                               torch::Tensor &output_matrix, float alpha, float beta)
+{
+    // Validate inputs
+    TORCH_CHECK(matrix_a.device().is_cuda(), "Matrix A must be on CUDA device");
+    TORCH_CHECK(matrix_b.device().is_cuda(), "Matrix B must be on CUDA device");
+    TORCH_CHECK(matrix_a.dtype() == torch::kFloat32, "Matrix A must be float32");
+    TORCH_CHECK(matrix_b.dtype() == torch::kFloat32, "Matrix B must be float32");
+    TORCH_CHECK(matrix_a.dim() == 2, "Matrix A must be 2D");
+    TORCH_CHECK(matrix_b.dim() == 2, "Matrix B must be 2D");
 
-- **Performance**: 1,987 GFLOPs (6.4× improvement)
-- **Memory Bandwidth**: 110 GB/s (7.3× improvement)
-- **Key Insight**: Memory access patterns matter more than computation
+    const int num_rows_a = static_cast<int>(matrix_a.size(0));
+    const int num_cols_a = static_cast<int>(matrix_a.size(1));
+    const int num_cols_b = static_cast<int>(matrix_b.size(1));
+
+    TORCH_CHECK(matrix_b.size(0) == num_cols_a, "Matrix dimensions must match: A is MxK, B must be KxN");
+
+    TORCH_CHECK(output_matrix.device().is_cuda(), "Matrix C must be on CUDA device");
+    TORCH_CHECK(output_matrix.dtype() == torch::kFloat32, "Matrix C must be float32");
+    TORCH_CHECK(output_matrix.size(0) == num_rows_a && output_matrix.size(1) == num_cols_b, "Matrix C must be MxN");
+
+    // Get raw device pointers
+    const float *d_matrix_a = matrix_a.data_ptr<float>();
+    const float *d_matrix_b = matrix_b.data_ptr<float>();
+    float *d_output_matrix = output_matrix.data_ptr<float>();
+
+    // Configure kernel launch: 1D blocks with block_size^2 threads (32x32 = 1024 threads per block)
+    constexpr uint block_size = 32;
+    dim3 block_dim(block_size * block_size);
+    dim3 grid_dim(CEIL_DIV(num_rows_a, block_size),
+                  CEIL_DIV(num_cols_b, block_size));
+
+    // Launch kernel
+    sgemm_global_mem_coalesce_kernel<block_size><<<grid_dim, block_dim>>>(
+        num_rows_a, num_cols_b, num_cols_a,
+        alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix);
+}
+```
+
+The key change from the naive kernel:
+
+
+Threads with consecutive `threadIdx.x` now access consecutive elements in the same row of A—enabling coalescing.
+
+<div id="index-transform-viz"></div>
+
+#### The Performance Impact
+
+Just like the naive version, we ran a benchmark for N = M = K = 4096 to get the FLOPs and memory bandwidth numbers.
+
+```
+────────────────────────────────────────────────────────────────────────────────
+2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:745 - 📊 Comparison (baseline: PyTorch)
+2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:746 - ────────────────────────────────────────────────────────────────────────────────
+2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:770 - PyTorch             : 1.00× (baseline) 🎯
+2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:773 - CUDA Naive          : 0.01× 🐢
+2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:773 - CUDA Coalesced      : 0.07× 🐢
+2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:775 - 
+
+2025-10-07 10:41:26.468 | INFO     | __main__:run_benchmarks:655 - ================================================================================
+2025-10-07 10:41:26.468 | INFO     | __main__:run_benchmarks:656 - 📐 Matrix dimensions: (4096, 4096) @ (4096, 4096) = (4096, 4096)
+2025-10-07 10:41:26.468 | INFO     | __main__:run_benchmarks:661 - 💾 Expected memory usage: 0.20 GB (0.07 GB per matrix)
+2025-10-07 10:41:26.468 | INFO     | __main__:run_benchmarks:664 - ================================================================================
+2025-10-07 10:41:26.469 | INFO     | __main__:run_benchmarks:700 - 
+🔵 Benchmarking PyTorch...
+2025-10-07 10:41:26.663 | INFO     | __main__:run_benchmarks:713 -    ⏱️  Time: 1.6991 ms (min: 1.6189, max: 1.9333)
+2025-10-07 10:41:26.663 | SUCCESS  | __main__:run_benchmarks:716 -    💪 Performance: 80.89 TFLOPS
+2025-10-07 10:41:26.663 | SUCCESS  | __main__:run_benchmarks:717 -    🌊 Bandwidth: 118.49 GB/s
+2025-10-07 10:41:26.663 | INFO     | __main__:run_benchmarks:700 - 
+🔴 Benchmarking CUDA Naive...
+2025-10-07 10:41:51.896 | INFO     | __main__:run_benchmarks:713 -    ⏱️  Time: 222.4662 ms (min: 219.6237, max: 235.8671)
+2025-10-07 10:41:51.896 | SUCCESS  | __main__:run_benchmarks:716 -    💪 Performance: 0.62 TFLOPS
+2025-10-07 10:41:51.896 | SUCCESS  | __main__:run_benchmarks:717 -    🌊 Bandwidth: 0.90 GB/s
+2025-10-07 10:41:51.896 | INFO     | __main__:run_benchmarks:700 - 
+🟢 Benchmarking CUDA Coalesced...
+2025-10-07 10:41:55.180 | INFO     | __main__:run_benchmarks:713 -    ⏱️  Time: 29.0288 ms (min: 28.4549, max: 29.5383)
+2025-10-07 10:41:55.180 | SUCCESS  | __main__:run_benchmarks:716 -    💪 Performance: 4.73 TFLOPS
+2025-10-07 10:41:55.180 | SUCCESS  | __main__:run_benchmarks:717 -    🌊 Bandwidth: 6.94 GB/s
+2025-10-07 10:41:55.180 | INFO     | __main__:run_benchmarks:744 - 
+────────────────────────────────────────────────────────────────────────────────
+
+```
+
+> **Throughput:**
+> - 7.63× TFLOPS improvement (0.62 → 4.73 TFLOPS)
+> - Still only 5.8% of PyTorch's performance, but a significant step forward
+> 
+> **Bandwidth:**
+> - 7.71× bandwidth improvement (0.90 → 6.94 GB/s)
+> - Better memory utilization through coalesced access patterns
+{: .prompt-info}
+
+Below are the full benchmark results comparing the naive CUDA kernel against PyTorch's optimized GEMM implementation across different shapes:
+
+![Global coalesced](/assets/explore_gemm_global_coalesced.png)
+
+We can see that performance improved but still way slower than the pytorch version.
 
 ## Kernel 3: Shared Memory Caching
 
@@ -1236,9 +1331,6 @@ Beyond what we covered:
 5. **Mixed Precision**: FP16/BF16 compute with FP32 accumulation
 6. **Persistent Kernels**: Keep GPU occupied across multiple operations
 
-## Code Repository
-
-Full implementation of all kernels: [github.com/siboehm/SGEMM_CUDA](https://github.com/siboehm/SGEMM_CUDA)
 
 ## References
 
@@ -1259,16 +1351,29 @@ Full implementation of all kernels: [github.com/siboehm/SGEMM_CUDA](https://gith
 - [GPU Gems 3](https://developer.nvidia.com/gpugems/gpugems3/contributors) - Advanced GPU programming techniques
 - [Understanding GPU Memory](https://developer.nvidia.com/blog/how-access-global-memory-efficiently-cuda-c-kernels/) - Memory coalescing explained
 
+## [TO DELETE] Performance Journey Overview
+
+Starting from a naive implementation at ~300 GFLOPs (1.3% of cuBLAS), we'll progressively optimize to reach ~20,000 GFLOPs (84.8% of cuBLAS) through:
+
+1. **Naive Implementation** - 309 GFLOPs (1.3%)
+2. **Global Memory Coalescing** - 1,987 GFLOPs (8.5%)
+3. **Shared Memory Caching** - 2,980 GFLOPs (12.8%)
+4. **1D Block Tiling** - 8,475 GFLOPs (36.5%)
+5. **2D Block Tiling** - 15,972 GFLOPs (68.7%)
+6. **Vectorized Memory Access** - 18,237 GFLOPs (78.4%)
+7. **Autotuning** - 19,721 GFLOPs (84.8%)
+
 <script src="/assets/js/gemm-optimization-visualizer.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize all visualizations
-    new NaiveKernelViz('naive-viz');
-    new CoalescingViz('coalescing-viz');
-    new SharedMemoryViz('shared-memory-viz');
-    new Tiling1DViz('1d-tiling-viz');
-    new Tiling2DViz('2d-tiling-viz');
-    new VectorizedViz('vectorized-viz');
-    new PerformanceComparison('performance-comparison');
+    // Initialize all visualizations (only if div exists)
+    if (document.getElementById('naive-viz')) new NaiveKernelViz('naive-viz');
+    if (document.getElementById('index-transform-viz')) new IndexTransformViz('index-transform-viz');
+    if (document.getElementById('shared-memory-viz')) new SharedMemoryViz('shared-memory-viz');
+    if (document.getElementById('1d-tiling-viz')) new Tiling1DViz('1d-tiling-viz');
+    if (document.getElementById('2d-tiling-viz')) new Tiling2DViz('2d-tiling-viz');
+    if (document.getElementById('vectorized-viz')) new VectorizedViz('vectorized-viz');
+    if (document.getElementById('performance-comparison')) new PerformanceComparison('performance-comparison');
 });
 </script>
+<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>

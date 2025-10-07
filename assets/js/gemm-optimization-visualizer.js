@@ -182,6 +182,10 @@ function sleep(ms) {
 class NaiveKernelViz {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
         this.isAnimating = false;
         this.matrixSize = 8;
         this.init();
@@ -191,22 +195,15 @@ class NaiveKernelViz {
         this.container.innerHTML = commonStyles + `
             <div class="viz-container">
                 <div class="viz-title">Naive Kernel: One Thread Per Output</div>
+                <div class="viz-info">
+                    <div id="naiveStats"></div>
+                </div>
+                <br>
                 <div class="viz-controls">
                     <button class="viz-btn" id="naiveAnimate">Animate</button>
                     <button class="viz-btn" id="naiveReset">Reset</button>
                 </div>
                 <div class="viz-canvas" id="naiveCanvas"></div>
-                <div class="viz-info">
-                    <h4>How It Works</h4>
-                    <p>Each thread computes one element of output matrix C by:</p>
-                    <ul style="margin: 10px 0; padding-left: 20px;">
-                        <li>Loading one complete row from matrix A</li>
-                        <li>Loading one complete column from matrix B</li>
-                        <li>Computing their dot product</li>
-                        <li>Writing the result to C</li>
-                    </ul>
-                    <div id="naiveStats"></div>
-                </div>
                 <div class="legend">
                     <div class="legend-item">
                         <div class="legend-box" style="background: #4CAF50;"></div>
@@ -319,6 +316,10 @@ class NaiveKernelViz {
 class CoalescingViz {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
         this.isAnimating = false;
         this.init();
     }
@@ -477,6 +478,10 @@ class CoalescingViz {
 class SharedMemoryViz {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
         this.isAnimating = false;
         this.tileSize = 4;
         this.matrixSize = 8;
@@ -658,6 +663,10 @@ class SharedMemoryViz {
 class Tiling1DViz {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
         this.isAnimating = false;
         this.threadTileSize = 4; // TM = 4
         this.matrixSize = 8;
@@ -851,6 +860,10 @@ class Tiling1DViz {
 class Tiling2DViz {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
         this.isAnimating = false;
         this.TM = 4;
         this.TN = 4;
@@ -1042,6 +1055,10 @@ class Tiling2DViz {
 class VectorizedViz {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
         this.init();
     }
 
@@ -1225,6 +1242,10 @@ class VectorizedViz {
 class PerformanceComparison {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
         this.init();
     }
 
@@ -1342,10 +1363,236 @@ class PerformanceComparison {
     }
 }
 
+// ============================================================================
+// Index Transformation Visualization (Naive vs Coalesced)
+// ============================================================================
+class IndexTransformViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+        this.isAnimating = false;
+        this.blockSize = 4;
+        this.init();
+    }
+
+    init() {
+        this.container.innerHTML = commonStyles + `
+            <div class="viz-container">
+                <div class="viz-title">Index Transformation: Naive vs Coalesced</div>
+                <div class="viz-info">
+                    <p>Compare how thread indices map to matrix positions in naive vs coalesced kernels.</p>
+                    <p><strong>Block Size:</strong> ${this.blockSize}×${this.blockSize} | <strong>Threads per block:</strong> ${this.blockSize * this.blockSize}</p>
+                </div>
+                <br>
+                <div class="viz-controls">
+                    <button class="viz-btn" id="transformAnimate">Animate Thread Mapping</button>
+                    <button class="viz-btn" id="transformReset">Reset</button>
+                </div>
+                <div class="viz-canvas" id="transformCanvas" style="overflow-x: auto;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; min-width: 700px;">
+                        <!-- Naive Kernel -->
+                        <div style="border: 2px solid #e74c3c; padding: 15px; border-radius: 8px;">
+                            <h3 style="text-align: center; color: #e74c3c; margin-bottom: 12px; font-size: 16px;">🐌 Naive Kernel</h3>
+                            <div style="background: #2a2a2a; padding: 8px; border-radius: 6px; margin-bottom: 12px; font-family: monospace; font-size: 11px;">
+                                <div>x = blockIdx.x * ${this.blockSize} + threadIdx.x</div>
+                                <div>y = blockIdx.y * ${this.blockSize} + threadIdx.y</div>
+                            </div>
+                            <div id="naiveGrid" style="display: grid; grid-template-columns: repeat(${this.blockSize}, 65px); column-gap: 8px; row-gap: 16px; justify-content: center;"></div>
+                            <div id="naiveMemAccess" style="margin-top: 12px; padding: 8px; background: #2a2a2a; border-radius: 6px; min-height: 70px; font-size: 12px;"></div>
+                        </div>
+                        <!-- Coalesced Kernel -->
+                        <div style="border: 2px solid #27ae60; padding: 15px; border-radius: 8px;">
+                            <h3 style="text-align: center; color: #27ae60; margin-bottom: 12px; font-size: 16px;">🚀 Coalesced Kernel</h3>
+                            <div style="background: #2a2a2a; padding: 8px; border-radius: 6px; margin-bottom: 12px; font-family: monospace; font-size: 11px;">
+                                <div>x = blockIdx.x * ${this.blockSize} + (threadIdx.x / ${this.blockSize})</div>
+                                <div>y = blockIdx.y * ${this.blockSize} + (threadIdx.x % ${this.blockSize})</div>
+                            </div>
+                            <div id="coalescedGrid" style="display: grid; grid-template-columns: repeat(${this.blockSize}, 65px); column-gap: 8px; row-gap: 16px; justify-content: center;"></div>
+                            <div id="coalescedMemAccess" style="margin-top: 12px; padding: 8px; background: #2a2a2a; border-radius: 6px; min-height: 70px; font-size: 12px;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Wait for DOM to be ready
+        setTimeout(() => {
+            this.renderGrids();
+
+            const animateBtn = document.getElementById('transformAnimate');
+            const resetBtn = document.getElementById('transformReset');
+
+            if (animateBtn) {
+                animateBtn.addEventListener('click', () => this.animate());
+            }
+            if (resetBtn) {
+                resetBtn.addEventListener('click', () => this.reset());
+            }
+        }, 0);
+    }
+
+    renderGrids() {
+        const naiveGrid = document.getElementById('naiveGrid');
+        const coalescedGrid = document.getElementById('coalescedGrid');
+
+        if (!naiveGrid || !coalescedGrid) {
+            console.error('Grid containers not found');
+            return;
+        }
+
+        naiveGrid.innerHTML = '';
+        coalescedGrid.innerHTML = '';
+
+        // Create cells for both grids
+        for (let i = 0; i < this.blockSize * this.blockSize; i++) {
+            const naiveCell = this.createCell(i, 'naive');
+            const coalescedCell = this.createCell(i, 'coalesced');
+            naiveGrid.appendChild(naiveCell);
+            coalescedGrid.appendChild(coalescedCell);
+        }
+    }
+
+    createCell(threadIdx, type) {
+        const cell = document.createElement('div');
+        cell.className = 'matrix-cell';
+        cell.style.width = '65px';
+        cell.style.height = '75px';
+        cell.style.background = '#333';
+        cell.style.display = 'flex';
+        cell.style.flexDirection = 'column';
+        cell.style.alignItems = 'center';
+        cell.style.justifyContent = 'space-around';
+        cell.style.padding = '5px 3px';
+        cell.dataset.threadIdx = threadIdx;
+        cell.dataset.type = type;
+
+        let x, y, row;
+        if (type === 'naive') {
+            x = threadIdx % this.blockSize;
+            y = Math.floor(threadIdx / this.blockSize);
+            row = x;
+        } else {
+            x = Math.floor(threadIdx / this.blockSize);
+            y = threadIdx % this.blockSize;
+            row = x;
+        }
+
+        cell.innerHTML = `
+            <div style="font-weight: bold; color: #4CAF50; font-size: 9px;">T${threadIdx}</div>
+            <div style="display: flex; gap: 3px; justify-content: center;">
+                <div style="background: #1a1a1a; padding: 2px 4px; border-radius: 3px; border: 1px solid #555;">
+                    <div style="font-size: 7px; color: #999;">x</div>
+                    <div style="font-size: 13px; font-weight: bold; color: #FFA726; line-height: 1;">${x}</div>
+                </div>
+                <div style="background: #1a1a1a; padding: 2px 4px; border-radius: 3px; border: 1px solid #555;">
+                    <div style="font-size: 7px; color: #999;">y</div>
+                    <div style="font-size: 13px; font-weight: bold; color: #42A5F5; line-height: 1;">${y}</div>
+                </div>
+            </div>
+            <div style="font-size: 8px; color: #888;">A[${row}][k]</div>
+        `;
+
+        return cell;
+    }
+
+    async animate() {
+        if (this.isAnimating) return;
+        this.isAnimating = true;
+        document.getElementById('transformAnimate').disabled = true;
+
+        this.renderGrids();
+        document.getElementById('naiveMemAccess').innerHTML = '';
+        document.getElementById('coalescedMemAccess').innerHTML = '';
+
+        const totalThreads = this.blockSize * this.blockSize;
+
+        for (let i = 0; i < totalThreads; i++) {
+            // Highlight current thread in both kernels
+            const naiveCell = document.querySelector(`[data-thread-idx="${i}"][data-type="naive"]`);
+            const coalescedCell = document.querySelector(`[data-thread-idx="${i}"][data-type="coalesced"]`);
+
+            naiveCell.classList.add('active');
+            coalescedCell.classList.add('active');
+
+            // Calculate memory access patterns
+            const naiveX = i % this.blockSize;
+            const naiveRow = naiveX;
+
+            const coalescedX = Math.floor(i / this.blockSize);
+            const coalescedY = i % this.blockSize;
+
+            // Update memory access info
+            const prevNaiveX = (i - 1) % this.blockSize;
+            const sameRowNaive = i > 0 && naiveRow === prevNaiveX ? '✅' : '❌';
+            const prevCoalescedX = i > 0 ? Math.floor((i - 1) / this.blockSize) : -1;
+            const sameRowCoalesced = prevCoalescedX === coalescedX ? '✅' : '❌';
+
+            document.getElementById('naiveMemAccess').innerHTML = `
+                <div style="font-weight: bold; margin-bottom: 8px; color: #4CAF50;">Thread ${i} Memory Access</div>
+                <div style="margin-bottom: 4px;">Matrix Position: <strong>A[${naiveRow}][k]</strong></div>
+                ${i > 0 ? `
+                    <div style="margin-top: 8px; padding: 8px; background: #1a1a1a; border-radius: 4px;">
+                        ${naiveRow !== prevNaiveX ?
+                        `❌ <strong style="color: #e74c3c;">Different row</strong> from Thread ${i - 1}<br>
+                             <span style="color: #999;">Stride: K elements (scattered)</span>` :
+                        `✅ <strong style="color: #27ae60;">Same row</strong> as Thread ${i - 1}`}
+                    </div>
+                ` : '<div style="color: #999; margin-top: 8px;">First thread in warp</div>'}
+            `;
+
+            document.getElementById('coalescedMemAccess').innerHTML = `
+                <div style="font-weight: bold; margin-bottom: 8px; color: #4CAF50;">Thread ${i} Memory Access</div>
+                <div style="margin-bottom: 4px;">Matrix Position: <strong>A[${coalescedX}][${coalescedY}]</strong></div>
+                ${i > 0 ? `
+                    <div style="margin-top: 8px; padding: 8px; background: #1a1a1a; border-radius: 4px;">
+                        ${coalescedX === prevCoalescedX ?
+                        `✅ <strong style="color: #27ae60;">Same row</strong> as Thread ${i - 1}<br>
+                             <span style="color: #4CAF50;">Stride: 1 element (coalesced! 🚀)</span>` :
+                        `⚠️ <strong style="color: #FFA726;">New row</strong> (warp ${Math.floor(i / this.blockSize)})`}
+                    </div>
+                ` : '<div style="color: #999; margin-top: 8px;">First thread in warp</div>'}
+            `;
+
+            await sleep(700);
+
+            naiveCell.classList.remove('active');
+            coalescedCell.classList.remove('active');
+        }
+
+        // Show completion message
+        document.getElementById('naiveMemAccess').innerHTML = `
+            <div style="text-align: center; padding: 15px;">
+                <div style="font-size: 14px; color: #e74c3c; font-weight: bold;">❌ Non-coalesced Access</div>
+                <div style="margin-top: 8px; color: #999;">→ ${this.blockSize} memory transactions for first ${this.blockSize} threads</div>
+            </div>
+        `;
+
+        document.getElementById('coalescedMemAccess').innerHTML = `
+            <div style="text-align: center; padding: 15px;">
+                <div style="font-size: 14px; color: #27ae60; font-weight: bold;">✅ Coalesced Access</div>
+                <div style="margin-top: 8px; color: #999;">→ 1 memory transaction for first ${this.blockSize} threads</div>
+            </div>
+        `;
+
+        document.getElementById('transformAnimate').disabled = false;
+        this.isAnimating = false;
+    }
+
+    reset() {
+        this.renderGrids();
+        document.getElementById('naiveMemAccess').innerHTML = '';
+        document.getElementById('coalescedMemAccess').innerHTML = '';
+    }
+}
+
 // Export for use in HTML
 if (typeof window !== 'undefined') {
     window.NaiveKernelViz = NaiveKernelViz;
     window.CoalescingViz = CoalescingViz;
+    window.IndexTransformViz = IndexTransformViz;
     window.SharedMemoryViz = SharedMemoryViz;
     window.Tiling1DViz = Tiling1DViz;
     window.Tiling2DViz = Tiling2DViz;
