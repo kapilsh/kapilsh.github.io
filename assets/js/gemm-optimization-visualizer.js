@@ -473,6 +473,368 @@ class CoalescingViz {
 }
 
 // ============================================================================
+// Coalesced Kernel: Matrix Access Pattern Visualization
+// ============================================================================
+class CoalescedMatrixViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+        this.isAnimating = false;
+        this.matrixSize = 8;
+        this.blockSize = 4;
+        this.init();
+    }
+
+    init() {
+        this.container.innerHTML = commonStyles + `
+            <div class="viz-container">
+                <div class="viz-title">Coalesced Kernel: Warp-Level Matrix Access</div>
+                <div class="viz-info">
+                    <div id="coalescedMatrixStats"></div>
+                </div>
+                <br>
+                <div class="viz-controls">
+                    <button class="viz-btn" id="coalescedMatrixAnimate">Animate Warp Access</button>
+                    <button class="viz-btn" id="coalescedMatrixReset">Reset</button>
+                </div>
+                <div class="viz-canvas" id="coalescedMatrixCanvas"></div>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #4CAF50;"></div>
+                        <span>Current Warp (4 threads)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #FFA726;"></div>
+                        <span>Accessed Memory (Coalesced)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #2196F3;"></div>
+                        <span>Computed Results</span>
+                    </div>
+                </div>
+                <div class="viz-info" style="margin-top: 20px;">
+                    <h4>Key Difference from Naive</h4>
+                    <p><strong>Coalesced:</strong> Threads in the same warp (with consecutive threadIdx.x) compute outputs in the same row,
+                    accessing consecutive elements from matrix A → Memory coalescing!</p>
+                    <p><strong>Naive:</strong> Threads in the same warp compute outputs in different rows,
+                    accessing scattered elements from A → No coalescing.</p>
+                </div>
+            </div>
+        `;
+
+        this.canvas = document.getElementById('coalescedMatrixCanvas');
+        this.renderMatrices();
+
+        document.getElementById('coalescedMatrixAnimate').addEventListener('click', () => this.animate());
+        document.getElementById('coalescedMatrixReset').addEventListener('click', () => this.reset());
+    }
+
+    renderMatrices() {
+        this.canvas.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; flex-wrap: wrap;"></div>';
+        const wrapper = this.canvas.firstChild;
+
+        this.matrixA = createMatrixGrid(this.matrixSize, this.matrixSize, 35, 'Matrix A', wrapper);
+        this.matrixB = createMatrixGrid(this.matrixSize, this.matrixSize, 35, 'Matrix B', wrapper);
+        this.matrixC = createMatrixGrid(this.matrixSize, this.matrixSize, 35, 'Matrix C (Output)', wrapper);
+    }
+
+    async animate() {
+        if (this.isAnimating) return;
+        this.isAnimating = true;
+        this.renderMatrices();
+
+        document.getElementById('coalescedMatrixAnimate').disabled = true;
+        document.getElementById('coalescedMatrixStats').innerHTML = '';
+
+        let totalMemoryAccesses = 0;
+        let coalescedAccesses = 0;
+
+        // Process in warps (4 threads per warp in our simplified example)
+        const warpSize = this.blockSize;
+        const totalWarps = (this.matrixSize * this.matrixSize) / warpSize;
+
+        for (let warp = 0; warp < totalWarps; warp++) {
+            // Calculate which row this warp is working on
+            const row = Math.floor((warp * warpSize) / this.matrixSize);
+
+            // Highlight the warp of threads (4 consecutive output elements in same row)
+            const warpThreads = [];
+            for (let t = 0; t < warpSize; t++) {
+                const globalThreadIdx = warp * warpSize + t;
+                const i = Math.floor(globalThreadIdx / this.matrixSize);
+                const j = globalThreadIdx % this.matrixSize;
+
+                if (i < this.matrixSize && j < this.matrixSize) {
+                    const outputCell = this.matrixC.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                    outputCell.classList.add('active');
+                    warpThreads.push({ i, j });
+                }
+            }
+
+            // Highlight row in A (coalesced access - same row for all threads in warp)
+            for (let k = 0; k < this.matrixSize; k++) {
+                const cellA = this.matrixA.querySelector(`[data-row="${row}"][data-col="${k}"]`);
+                if (cellA) cellA.classList.add('highlight');
+            }
+
+            // Highlight columns in B (one per thread)
+            for (let t = 0; t < warpThreads.length; t++) {
+                const { j } = warpThreads[t];
+                for (let k = 0; k < this.matrixSize; k++) {
+                    const cellB = this.matrixB.querySelector(`[data-row="${k}"][data-col="${j}"]`);
+                    if (cellB) cellB.classList.add('highlight');
+                }
+            }
+
+            totalMemoryAccesses += warpSize * this.matrixSize * 2; // Reads from A and B
+            coalescedAccesses++;
+
+            this.updateStats(warp + 1, totalWarps, coalescedAccesses, totalMemoryAccesses);
+
+            await sleep(400);
+
+            // Clear highlights and mark as computed
+            this.matrixA.querySelectorAll('.highlight').forEach(el => el.classList.remove('highlight'));
+            this.matrixB.querySelectorAll('.highlight').forEach(el => el.classList.remove('highlight'));
+            this.matrixC.querySelectorAll('.active').forEach(el => {
+                el.classList.remove('active');
+                el.style.background = '#2196F3';
+            });
+        }
+
+        document.getElementById('coalescedMatrixAnimate').disabled = false;
+        this.isAnimating = false;
+    }
+
+    updateStats(warpsCompleted, totalWarps, coalescedAccesses, memoryAccesses) {
+        document.getElementById('coalescedMatrixStats').innerHTML = `
+            <div class="viz-stats">
+                <div class="viz-stat">
+                    <div class="viz-stat-label">Warps Completed</div>
+                    <div class="viz-stat-value">${warpsCompleted}/${totalWarps}</div>
+                </div>
+                <div class="viz-stat">
+                    <div class="viz-stat-label">Coalesced Memory Transactions</div>
+                    <div class="viz-stat-value">${coalescedAccesses} (grouped accesses)</div>
+                </div>
+                <div class="viz-stat">
+                    <div class="viz-stat-label">Access Pattern</div>
+                    <div class="viz-stat-value">Consecutive (Coalesced! 🚀)</div>
+                </div>
+            </div>
+        `;
+    }
+
+    reset() {
+        this.renderMatrices();
+        document.getElementById('coalescedMatrixStats').innerHTML = '';
+    }
+}
+
+// ============================================================================
+// GPU Memory Hierarchy Visualization
+// ============================================================================
+class MemoryHierarchyViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+        this.init();
+    }
+
+    init() {
+        this.container.innerHTML = commonStyles + `
+            <style>
+                .mem-layer {
+                    margin: 15px auto;
+                    padding: 20px;
+                    border-radius: 10px;
+                    position: relative;
+                    transition: all 0.3s;
+                    cursor: pointer;
+                }
+                .mem-layer:hover {
+                    transform: translateY(-2px);
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+                }
+                .mem-layer-title {
+                    font-size: 18px;
+                    font-weight: 700;
+                    margin-bottom: 8px;
+                }
+                .mem-layer-stats {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                    gap: 10px;
+                    margin-top: 10px;
+                }
+                .mem-stat {
+                    font-size: 12px;
+                }
+                .mem-stat-label {
+                    color: rgba(255,255,255,0.7);
+                    font-size: 11px;
+                }
+                .mem-stat-value {
+                    font-size: 16px;
+                    font-weight: 600;
+                    margin-top: 2px;
+                }
+                .arrow-down {
+                    text-align: center;
+                    font-size: 24px;
+                    color: #666;
+                    margin: 5px 0;
+                }
+                .shared-mem-detail {
+                    margin-top: 15px;
+                    padding: 15px;
+                    background: rgba(0,0,0,0.2);
+                    border-radius: 8px;
+                    border-left: 4px solid #FFA726;
+                }
+                .thread-block {
+                    display: inline-block;
+                    width: 40px;
+                    height: 40px;
+                    background: #4CAF50;
+                    border-radius: 4px;
+                    margin: 3px;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 10px;
+                    font-weight: bold;
+                }
+            </style>
+            <div class="viz-container">
+                <div class="viz-title">RTX 4090 Memory Hierarchy</div>
+                <div style="max-width: 700px; margin: 0 auto;">
+                    <!-- Memory Stack -->
+                    <div style="display: flex; flex-direction: column; gap: 0;">
+                        <!-- Registers -->
+                        <div class="mem-layer" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; width: 100%; border-radius: 10px 10px 0 0;">
+                            <div class="mem-layer-title">📦 Registers</div>
+                            <div class="mem-layer-stats">
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Size/SM</div>
+                                    <div class="mem-stat-value">256 KB</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Bandwidth</div>
+                                    <div class="mem-stat-value">~19 TB/s</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Latency</div>
+                                    <div class="mem-stat-value">~1 cycle</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Scope</div>
+                                    <div class="mem-stat-value">Per Thread</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- L1 Cache / Shared Memory -->
+                        <div class="mem-layer" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; width: 100%; border-radius: 0;">
+                            <div class="mem-layer-title">🔄 L1 Cache / Shared Memory</div>
+                            <div class="mem-layer-stats">
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Size/SM</div>
+                                    <div class="mem-stat-value">128 KB</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Bandwidth</div>
+                                    <div class="mem-stat-value">~14 TB/s</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Latency</div>
+                                    <div class="mem-stat-value">~20-30 cycles</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Scope</div>
+                                    <div class="mem-stat-value">Per Thread Block</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- L2 Cache -->
+                        <div class="mem-layer" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; width: 100%; border-radius: 0;">
+                            <div class="mem-layer-title">💾 L2 Cache</div>
+                            <div class="mem-layer-stats">
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Total Size</div>
+                                    <div class="mem-stat-value">72 MB</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Bandwidth</div>
+                                    <div class="mem-stat-value">~3.5 TB/s</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Latency</div>
+                                    <div class="mem-stat-value">~200 cycles</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Scope</div>
+                                    <div class="mem-stat-value">All SMs</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Global Memory (HBM) -->
+                        <div class="mem-layer" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); color: white; width: 100%; border-radius: 0 0 10px 10px;">
+                            <div class="mem-layer-title">🌐 Global Memory (GDDR6X)</div>
+                            <div class="mem-layer-stats">
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Total Size</div>
+                                    <div class="mem-stat-value">24 GB</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Bandwidth</div>
+                                    <div class="mem-stat-value">~1 TB/s</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Latency</div>
+                                    <div class="mem-stat-value">~400-800 cycles</div>
+                                </div>
+                                <div class="mem-stat">
+                                    <div class="mem-stat-label">Scope</div>
+                                    <div class="mem-stat-value">Device-wide</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+
+                    <!-- Key Insights -->
+                    <div class="viz-info" style="margin-top: 20px;">
+                        <h4>🎯 Key Insights for GEMM Optimization</h4>
+                        <div style="line-height: 1.8;">
+                            <strong style="color: #4CAF50;">1. Shared Memory is Critical:</strong>
+                            14 TB/s vs 1 TB/s global memory = 14× faster!<br>
+
+                            <strong style="color: #FFA726;">2. Minimize Global Memory Access:</strong>
+                            Load data once, reuse in shared memory/registers<br>
+
+                            <strong style="color: #42A5F5;">3. Maximize Register Usage:</strong>
+                            19 TB/s bandwidth - keep hot data in registers<br>
+
+                            <strong style="color: #AB47BC;">4. Coalescing Matters:</strong>
+                            Even with caching, coalesced access patterns maximize throughput
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+}
+
+// ============================================================================
 // Kernel 3: Shared Memory Caching Visualization
 // ============================================================================
 class SharedMemoryViz {
@@ -498,13 +860,6 @@ class SharedMemoryViz {
                 </div>
                 <div class="viz-canvas" id="sharedCanvas"></div>
                 <div class="viz-info">
-                    <h4>Shared Memory Benefits</h4>
-                    <p>Instead of each thread loading from global memory independently:</p>
-                    <ul style="margin: 10px 0; padding-left: 20px;">
-                        <li>Threads cooperatively load tiles into fast shared memory</li>
-                        <li>All threads in block reuse the cached data</li>
-                        <li>Reduces global memory traffic by tile_size factor</li>
-                    </ul>
                     <div id="sharedStats"></div>
                 </div>
                 <div class="legend">
@@ -1592,6 +1947,8 @@ class IndexTransformViz {
 if (typeof window !== 'undefined') {
     window.NaiveKernelViz = NaiveKernelViz;
     window.CoalescingViz = CoalescingViz;
+    window.CoalescedMatrixViz = CoalescedMatrixViz;
+    window.MemoryHierarchyViz = MemoryHierarchyViz;
     window.IndexTransformViz = IndexTransformViz;
     window.SharedMemoryViz = SharedMemoryViz;
     window.Tiling1DViz = Tiling1DViz;

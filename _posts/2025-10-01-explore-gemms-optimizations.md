@@ -296,8 +296,13 @@ void sgemm_global_mem_coalesce(const torch::Tensor &matrix_a, const torch::Tenso
 
 The key change from the naive kernel:
 
-
 Threads with consecutive `threadIdx.x` now access consecutive elements in the same row of A—enabling coalescing.
+
+### Memory Access Visualization
+
+Let's visualize how the coalesced kernel accesses memory during matrix multiplication. Notice how threads in the same warp now access the **same row** of matrix A, enabling memory coalescing:
+
+<div id="coalesced-matrix-viz"></div>
 
 <div id="index-transform-viz"></div>
 
@@ -347,158 +352,233 @@ Just like the naive version, we ran a benchmark for N = M = K = 4096 to get the 
 > - Better memory utilization through coalesced access patterns
 {: .prompt-info}
 
+
 Below are the full benchmark results comparing the naive CUDA kernel against PyTorch's optimized GEMM implementation across different shapes:
 
 ![Global coalesced](/assets/explore_gemm_global_coalesced.png)
 
 We can see that performance improved but still way slower than the pytorch version.
 
+
+
 ## Kernel 3: Shared Memory Caching
+
+### GPU Memory Hierarchy
+
+Before diving into shared memory optimization, let's understand the RTX 4090's memory hierarchy and why shared memory is so critical for performance:
+
+<div id="memory-hierarchy-viz"></div>
+
+### SM Architecture
+
+![SM architecture](/assets/4090_sm.png)
+
+Shared memory provides **bandwidth advantage** compared to global memory:
+
+| Memory Type | Bandwidth | Latency | Location |
+|------------|-----------|---------|----------|
+| **Global Memory (GDDR6X)** | ~1 TB/s | 400-800 cycles | Off-chip |
+| **Shared Memory (L1)** | ~14 TB/s | 20-30 cycles | On-chip |
+
+
+Even with coalesced access, both the naive and coalesced kernels repeatedly read the same data from global memory:
+- Each element of matrix $A$ is read $N$ times (once per column of $B$)
+- Each element of matrix $B$ is read $M$ times (once per row of $A$)
+- For a 1024×1024 matrix multiplication: **each element is read ~1000 times from slow global memory**
+
+#### The Shared Memory Solution
+
+The RTX 4090 has **128 KB of shared memory per SM**, physically located on-chip. This memory is:
+
+1. **Partitioned among thread blocks**: Each block gets its own chunk of shared memory
+2. **Shared within a block**: All threads in a block can access the same shared memory
+3. **Explicitly managed**: We control what data goes into shared memory
+4. **Much faster**: 14 TB/s vs 1 TB/s global memory bandwidth
+5. **Lower latency**: ~20-30 cycles vs 400-800 cycles
+
+With 128 SMs on the RTX 4090, that's a total of **16.4 MB of shared memory** distributed across the chip.
 
 ### Concept
 
-Load tiles of $A$ and $B$ into fast shared memory (on-chip cache), then compute using cached values.
+Now, instead of reading from global memory for every operation, we:
+
+1. **Load tiles** (chunks) of $A$ and $B$ from global memory into shared memory
+2. **Compute partial results** using the tiles in fast shared memory
+3. **Reuse** the tile data across multiple threads without re-reading from global memory
+4. **Slide the tiles** across matrices $A$ and $B$ to compute the final result
+
 
 ```cuda
-__global__ void sgemm_shared_mem_block(int M, int N, int K,
-                                       float alpha, const float *A,
-                                       const float *B, float beta,
-                                       float *C) {
-    const uint cRow = blockIdx.x;
-    const uint cCol = blockIdx.y;
 
-    __shared__ float As[BLOCKSIZE * BLOCKSIZE];
-    __shared__ float Bs[BLOCKSIZE * BLOCKSIZE];
+constexpr uint BLOCKSIZE =  32;
 
-    const uint threadRow = threadIdx.x / BLOCKSIZE;
-    const uint threadCol = threadIdx.x % BLOCKSIZE;
+__global__ void sgemm_shared_mem_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
+                                        float alpha, const float *matrix_a,
+                                        const float *matrix_b, float beta,
+                                        float *matrix_c)
+{
+    const uint block_row = blockIdx.x;
+    const uint block_col = blockIdx.y;
 
-    A += cRow * BLOCKSIZE * K;
-    B += cCol * BLOCKSIZE;
-    C += cRow * BLOCKSIZE * N + cCol * BLOCKSIZE;
+    __shared__ float tile_a[BLOCKSIZE * BLOCKSIZE];
+    __shared__ float tile_b[BLOCKSIZE * BLOCKSIZE];
 
-    float tmp = 0.0;
-    for (int bkIdx = 0; bkIdx < K; bkIdx += BLOCKSIZE) {
-        // Load tile into shared memory
-        As[threadRow * BLOCKSIZE + threadCol] =
-            A[threadRow * K + threadCol];
-        Bs[threadRow * BLOCKSIZE + threadCol] =
-            B[threadRow * N + threadCol];
-        __syncthreads();
+    const uint thread_row = threadIdx.x / BLOCKSIZE;
+    const uint thread_col = threadIdx.x % BLOCKSIZE;
 
-        // Compute using shared memory
-        for (int dotIdx = 0; dotIdx < BLOCKSIZE; ++dotIdx) {
-            tmp += As[threadRow * BLOCKSIZE + dotIdx] *
-                   Bs[dotIdx * BLOCKSIZE + threadCol];
+    // Calculate global row and column indices for this thread
+    const int global_row = block_row * BLOCKSIZE + thread_row;
+    const int global_col = block_col * BLOCKSIZE + thread_col;
+
+    // Move pointers to the starting position for this block
+    matrix_a += block_row * BLOCKSIZE * num_cols_a;  // row=block_row, col=0
+    matrix_b += block_col * BLOCKSIZE;               // row=0, col=block_col
+    matrix_c += block_row * BLOCKSIZE * num_cols_b + block_col * BLOCKSIZE;
+
+    float accumulator = 0.0f;
+
+    // Loop over all tiles along K dimension
+    for (int tile_idx = 0; tile_idx < num_cols_a; tile_idx += BLOCKSIZE)
+    {
+        // Load tile from matrix A into shared memory with bounds checking
+        // threadCol is consecutive for coalesced memory access
+        if (global_row < num_rows_a && (tile_idx + thread_col) < num_cols_a) {
+            tile_a[thread_row * BLOCKSIZE + thread_col] =
+                matrix_a[thread_row * num_cols_a + thread_col];
+        } else {
+            tile_a[thread_row * BLOCKSIZE + thread_col] = 0.0f;
         }
+
+        // Load tile from matrix B into shared memory with bounds checking
+        // threadCol is consecutive for coalesced memory access
+        if ((tile_idx + thread_row) < num_cols_a && global_col < num_cols_b) {
+            tile_b[thread_row * BLOCKSIZE + thread_col] =
+                matrix_b[thread_row * num_cols_b + thread_col];
+        } else {
+            tile_b[thread_row * BLOCKSIZE + thread_col] = 0.0f;
+        }
+
+        // Block threads until cache is fully populated
         __syncthreads();
 
-        A += BLOCKSIZE;
-        B += BLOCKSIZE * N;
+        // Advance pointers to next tile
+        matrix_a += BLOCKSIZE;
+        matrix_b += BLOCKSIZE * num_cols_b;
+
+        // Compute partial dot product using shared memory
+        for (int dot_idx = 0; dot_idx < BLOCKSIZE; ++dot_idx)
+        {
+            accumulator += tile_a[thread_row * BLOCKSIZE + dot_idx] *
+                          tile_b[dot_idx * BLOCKSIZE + thread_col];
+        }
+
+        // Sync again to avoid faster threads fetching next block before slower threads finish
+        __syncthreads();
     }
-    C[threadRow * N + threadCol] = alpha * tmp + beta * C[threadRow * N + threadCol];
 }
 ```
 
-### Memory Hierarchy
+#### Caller
 
-GPUs have multiple levels of memory:
+```cpp
+void sgemm_shared_mem(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
+                      torch::Tensor &output_matrix, float alpha, float beta)
+{
+    // Validate inputs
+    TORCH_CHECK(matrix_a.device().is_cuda(), "Matrix A must be on CUDA device");
+    TORCH_CHECK(matrix_b.device().is_cuda(), "Matrix B must be on CUDA device");
+    TORCH_CHECK(matrix_a.dtype() == torch::kFloat32, "Matrix A must be float32");
+    TORCH_CHECK(matrix_b.dtype() == torch::kFloat32, "Matrix B must be float32");
+    TORCH_CHECK(matrix_a.dim() == 2, "Matrix A must be 2D");
+    TORCH_CHECK(matrix_b.dim() == 2, "Matrix B must be 2D");
 
-| Memory Type | Size | Latency | Bandwidth |
-|------------|------|---------|-----------|
-| Registers | KB | 1 cycle | Highest |
-| Shared Memory | KB | ~20 cycles | ~19 TB/s |
-| L1/L2 Cache | MB | ~80 cycles | ~9 TB/s |
-| Global Memory | GB | ~400 cycles | ~768 GB/s |
+    const int num_rows_a = static_cast<int>(matrix_a.size(0));
+    const int num_cols_a = static_cast<int>(matrix_a.size(1));
+    const int num_cols_b = static_cast<int>(matrix_b.size(1));
+
+    TORCH_CHECK(matrix_b.size(0) == num_cols_a, "Matrix dimensions must match: A is MxK, B must be KxN");
+
+    TORCH_CHECK(output_matrix.device().is_cuda(), "Matrix C must be on CUDA device");
+    TORCH_CHECK(output_matrix.dtype() == torch::kFloat32, "Matrix C must be float32");
+    TORCH_CHECK(output_matrix.size(0) == num_rows_a && output_matrix.size(1) == num_cols_b, "Matrix C must be MxN");
+
+    // Get raw device pointers
+    const float *d_matrix_a = matrix_a.data_ptr<float>();
+    const float *d_matrix_b = matrix_b.data_ptr<float>();
+    float *d_output_matrix = output_matrix.data_ptr<float>();
+
+    // Configure kernel launch: 1D blocks with BLOCKSIZE^2 threads (32x32 = 1024 threads per block)
+    dim3 block_dim(BLOCKSIZE * BLOCKSIZE);
+    dim3 grid_dim(CEIL_DIV(num_rows_a, BLOCKSIZE),
+                  CEIL_DIV(num_cols_b, BLOCKSIZE));
+
+    // Launch kernel
+    sgemm_shared_mem_kernel<<<grid_dim, block_dim>>>(
+        num_rows_a, num_cols_b, num_cols_a,
+        alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix);
+}
+```
 
 <div id="shared-memory-viz"></div>
 
-### Triton Implementation
-
-```python
-@triton.jit
-def matmul_kernel_shared(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
-
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-
-    offs_k = tl.arange(0, BLOCK_SIZE_K)
-
-    # Initialize accumulator
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-
-    # Loop over K dimension in tiles
-    for k in range(0, K, BLOCK_SIZE_K):
-        # Load tile of A into "shared memory" (Triton handles this automatically)
-        a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
-                          (k + offs_k[None, :]) * stride_ak)
-        a = tl.load(a_ptrs, mask=(offs_am[:, None] < M) &
-                    ((k + offs_k[None, :]) < K), other=0.0)
-
-        # Load tile of B
-        b_ptrs = b_ptr + ((k + offs_k[:, None]) * stride_bk +
-                          offs_bn[None, :] * stride_bn)
-        b = tl.load(b_ptrs, mask=((k + offs_k[:, None]) < K) &
-                    (offs_bn[None, :] < N), other=0.0)
-
-        # Compute partial result - tiles stay in fast memory
-        accumulator += tl.dot(a, b)
-
-    c = accumulator.to(tl.float32)
-
-    # Store result
-    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
-    mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)
-    tl.store(c_ptrs, c, mask=mask)
-
-def matmul_shared(a, b):
-    M, K = a.shape
-    K, N = b.shape
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-
-    BLOCK_SIZE_M = 32
-    BLOCK_SIZE_N = 32
-    BLOCK_SIZE_K = 32
-
-    grid = lambda META: (
-        triton.cdiv(M, BLOCK_SIZE_M),
-        triton.cdiv(N, BLOCK_SIZE_N),
-    )
-
-    matmul_kernel_shared[grid](
-        a, b, c,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K,
-    )
-    return c
-```
-
-**Triton's Implicit Shared Memory**:
-- No explicit `__shared__` declaration needed
-- Triton compiler automatically promotes frequently accessed data to shared memory
-- `tl.dot()` internally uses shared memory for efficient computation
-- Loop over K with tiling pattern triggers automatic caching
-
 ### Performance Analysis
 
-- **Performance**: 2,980 GFLOPs (1.5× improvement)
-- **Shared Memory Usage**: 8 KB per block (2 × 32×32 float arrays)
-- **Global Memory Reads**: Reduced by BLOCKSIZE factor
-- **Limitation**: Each thread still computes only one output
+Running the shared memory kernel for M = N = K = 4096:
+
+```
+────────────────────────────────────────────────────────────────────────────────
+2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:766 - 📊 Comparison (baseline: PyTorch)
+2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:767 - ────────────────────────────────────────────────────────────────────────────────
+2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:791 - PyTorch             : 1.00× (baseline) 🎯
+2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:794 - CUDA Naive          : 0.01× 🐢
+2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:794 - CUDA Coalesced      : 0.06× 🐢
+2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:794 - CUDA Shared Mem     : 0.09× 🐢
+2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:796 -
+
+2025-10-08 06:57:47.544 | INFO     | __main__:run_benchmarks:675 - ================================================================================
+2025-10-08 06:57:47.544 | INFO     | __main__:run_benchmarks:676 - 📐 Matrix dimensions: (4096, 4096) @ (4096, 4096) = (4096, 4096)
+2025-10-08 06:57:47.544 | INFO     | __main__:run_benchmarks:681 - 💾 Expected memory usage: 0.20 GB (0.07 GB per matrix)
+2025-10-08 06:57:47.544 | INFO     | __main__:run_benchmarks:684 - ================================================================================
+2025-10-08 06:57:47.545 | INFO     | __main__:run_benchmarks:721 -
+🔵 Benchmarking PyTorch...
+2025-10-08 06:57:47.743 | INFO     | __main__:run_benchmarks:734 -    ⏱️  Time: 1.7483 ms (min: 1.6170, max: 2.0234)
+2025-10-08 06:57:47.743 | SUCCESS  | __main__:run_benchmarks:737 -    💪 Performance: 78.61 TFLOPS
+2025-10-08 06:57:47.743 | SUCCESS  | __main__:run_benchmarks:738 -    🌊 Bandwidth: 115.16 GB/s
+2025-10-08 06:57:47.743 | INFO     | __main__:run_benchmarks:721 -
+🔴 Benchmarking CUDA Naive...
+2025-10-08 06:58:11.687 | INFO     | __main__:run_benchmarks:734 -    ⏱️  Time: 214.7259 ms (min: 209.7582, max: 226.1811)
+2025-10-08 06:58:11.687 | SUCCESS  | __main__:run_benchmarks:737 -    💪 Performance: 0.64 TFLOPS
+2025-10-08 06:58:11.687 | SUCCESS  | __main__:run_benchmarks:738 -    🌊 Bandwidth: 0.94 GB/s
+2025-10-08 06:58:11.687 | INFO     | __main__:run_benchmarks:721 -
+🟢 Benchmarking CUDA Coalesced...
+2025-10-08 06:58:14.762 | INFO     | __main__:run_benchmarks:734 -    ⏱️  Time: 27.8368 ms (min: 26.9005, max: 29.5887)
+2025-10-08 06:58:14.762 | SUCCESS  | __main__:run_benchmarks:737 -    💪 Performance: 4.94 TFLOPS
+2025-10-08 06:58:14.762 | SUCCESS  | __main__:run_benchmarks:738 -    🌊 Bandwidth: 7.23 GB/s
+2025-10-08 06:58:14.762 | INFO     | __main__:run_benchmarks:721 -
+🟣 Benchmarking CUDA Shared Mem...
+2025-10-08 06:58:17.257 | INFO     | __main__:run_benchmarks:734 -    ⏱️  Time: 22.5301 ms (min: 21.8061, max: 24.0466)
+2025-10-08 06:58:17.257 | SUCCESS  | __main__:run_benchmarks:737 -    💪 Performance: 6.10 TFLOPS
+2025-10-08 06:58:17.257 | SUCCESS  | __main__:run_benchmarks:738 -    🌊 Bandwidth: 8.94 GB/s
+2025-10-08 06:58:17.257 | INFO     | __main__:run_benchmarks:765 -
+────────────────────────────────────────────────────────────────────────────────
+```
+
+> **Performance Improvement:**
+> - **1.24× TFLOPS improvement** over coalesced (4.94 → 6.10 TFLOPS)
+> - **1.24× bandwidth improvement** (7.23 → 8.94 GB/s)
+> - **9.5× faster than naive** (0.64 → 6.10 TFLOPS)
+> - Still only **7.8% of PyTorch's performance**, indicating more optimization needed
+>
+> **Key Insight:**
+> - Shared memory caching provides modest improvement (~24%) over just coalescing
+> - The relatively small gain suggests we're not yet effectively hiding memory latency
+> - Need additional optimizations like thread-level tiling to improve arithmetic intensity
+{: .prompt-info}
+
+Below are all the results from the benchmarking:
+
+![Kernel with shared mem](/assets/explore_gemm_shared_mem.png)
+
 
 ## Kernel 4: 1D Block Tiling
 
@@ -1368,6 +1448,8 @@ Starting from a naive implementation at ~300 GFLOPs (1.3% of cuBLAS), we'll prog
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize all visualizations (only if div exists)
     if (document.getElementById('naive-viz')) new NaiveKernelViz('naive-viz');
+    if (document.getElementById('coalesced-matrix-viz')) new CoalescedMatrixViz('coalesced-matrix-viz');
+    if (document.getElementById('memory-hierarchy-viz')) new MemoryHierarchyViz('memory-hierarchy-viz');
     if (document.getElementById('index-transform-viz')) new IndexTransformViz('index-transform-viz');
     if (document.getElementById('shared-memory-viz')) new SharedMemoryViz('shared-memory-viz');
     if (document.getElementById('1d-tiling-viz')) new Tiling1DViz('1d-tiling-viz');
