@@ -139,6 +139,10 @@ For block (1,1):
 * `blockDim`: Number of threads per block
 * `gridDim`: (Optional) Number of blocks in the grid
 
+## 🎮 Interactive CUDA Execution Visualizer
 
+Below is an interactive visualization showing how CUDA grids, blocks, warps, and threads execute in parallel on a GPU. This demonstrates a simple vector addition kernel with 4 blocks (2×2 grid) and 128 threads per block (16×8).
 
+<div id="cuda-visualizer" style="margin: 2rem 0;"></div>
+<script src="/assets/js/cuda-visualizer.js"></script>
 
