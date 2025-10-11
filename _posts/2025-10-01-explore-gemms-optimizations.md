@@ -53,6 +53,108 @@ Full implementation of all kernels discussed in this post:
 
 <div class="github-card" data-user="gpusgobrr" data-repo="explore-gemm" data-width="100%" data-height="" data-theme="default"></div>
 
+## Hardware Specifications
+
+All benchmarks in this post were run on an **NVIDIA GeForce RTX 4090** 🚀. Below are the key specifications:
+
+<div style="overflow-x: auto; margin: 20px 0;">
+  <table style="width: 100%; border-collapse: collapse; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 10px; overflow: hidden;">
+    <thead>
+      <tr style="background: linear-gradient(90deg, #76b900 0%, #53a401 100%);">
+        <th style="padding: 15px; text-align: left; color: white; font-weight: 600; border-bottom: 2px solid #76b900;">⚡ Specification</th>
+        <th style="padding: 15px; text-align: left; color: white; font-weight: 600; border-bottom: 2px solid #76b900;">🎯 RTX 4090 (Ada Lovelace)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="background: rgba(118, 185, 0, 0.05);">
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🏗️ <strong>Architecture</strong></td>
+        <td style="padding: 12px; color: #76b900; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">Ada Lovelace (TSMC 4nm)</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🔢 <strong>CUDA Cores</strong></td>
+        <td style="padding: 12px; color: #4fc3f7; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">16,384</td>
+      </tr>
+      <tr style="background: rgba(118, 185, 0, 0.05);">
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🎛️ <strong>Streaming Multiprocessors (SMs)</strong></td>
+        <td style="padding: 12px; color: #4fc3f7; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">128</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">⚡ <strong>GPU Boost Clock</strong></td>
+        <td style="padding: 12px; color: #ffb74d; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">2,520 MHz</td>
+      </tr>
+      <tr style="background: rgba(255, 193, 7, 0.1);">
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">💪 <strong>FP32 Performance</strong></td>
+        <td style="padding: 12px; color: #ffc107; font-weight: 700; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,0.1);">82.6 TFLOPS 🔥</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🧠 <strong>Tensor Cores</strong></td>
+        <td style="padding: 12px; color: #ba68c8; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">512 (4th Gen)</td>
+      </tr>
+      <tr style="background: rgba(118, 185, 0, 0.05);">
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🚀 <strong>Tensor Performance (FP8)</strong></td>
+        <td style="padding: 12px; color: #ba68c8; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">660.6 TFLOPS</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">✨ <strong>RT Cores</strong></td>
+        <td style="padding: 12px; color: #81c784; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">128 (3rd Gen)</td>
+      </tr>
+      <tr style="background: rgba(33, 150, 243, 0.1);">
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">💾 <strong>Memory Size</strong></td>
+        <td style="padding: 12px; color: #42a5f5; font-weight: 700; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,0.1);">24 GB GDDR6X</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">⏱️ <strong>Memory Clock</strong></td>
+        <td style="padding: 12px; color: #42a5f5; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">21 Gbps</td>
+      </tr>
+      <tr style="background: rgba(33, 150, 243, 0.1);">
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🌊 <strong>Memory Bandwidth</strong></td>
+        <td style="padding: 12px; color: #42a5f5; font-weight: 700; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,0.1);">1,008 GB/s 💨</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">📦 <strong>L1 Cache / Shared Memory (Total)</strong></td>
+        <td style="padding: 12px; color: #ff7043; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">16,384 KB (16 MB)</td>
+      </tr>
+      <tr style="background: rgba(118, 185, 0, 0.05);">
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🗄️ <strong>L2 Cache</strong></td>
+        <td style="padding: 12px; color: #ff7043; font-weight: 700; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,0.1);">72 MB 📈</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🔧 <strong>Shared Memory per SM</strong></td>
+        <td style="padding: 12px; color: #ff7043; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">128 KB</td>
+      </tr>
+      <tr style="background: rgba(118, 185, 0, 0.05);">
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">📝 <strong>Registers per SM</strong></td>
+        <td style="padding: 12px; color: #ff7043; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">256 KB</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">⚡ <strong>TGP</strong></td>
+        <td style="padding: 12px; color: #f57c00; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">450 W</td>
+      </tr>
+      <tr style="background: rgba(118, 185, 0, 0.05);">
+        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🔬 <strong>Transistor Count</strong></td>
+        <td style="padding: 12px; color: #9575cd; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">76.3 Billion</td>
+      </tr>
+      <tr>
+        <td style="padding: 12px; color: #e0e0e0;">📏 <strong>Die Size</strong></td>
+        <td style="padding: 12px; color: #9575cd; font-weight: 600;">608.5 mm²</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+> **Key Takeaways for GEMM Performance:**
+> - **128 SMs** with 128 KB shared memory each = massive parallelism opportunity
+> - **82.6 TFLOPS FP32** theoretical peak (our target to approach)
+> - **1,008 GB/s** memory bandwidth = need to minimize global memory access
+> - **72 MB L2 cache** = excellent data reuse potential
+> - **16,384 KB total L1/shared memory** across all SMs = critical for tiling strategies
+{: .prompt-tip}
+
+### SM Architecture
+
+![SM architecture](/assets/4090_sm.png)
+
+*Source: [NVIDIA Ada GPU Architecture Whitepaper](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf)*
 
 ## Kernel 1: Naive Implementation
 
@@ -359,8 +461,6 @@ Below are the full benchmark results comparing the naive CUDA kernel against PyT
 
 We can see that performance improved but still way slower than the pytorch version.
 
-
-
 ## Kernel 3: Shared Memory Caching
 
 ### GPU Memory Hierarchy
@@ -369,9 +469,6 @@ Before diving into shared memory optimization, let's understand the RTX 4090's m
 
 <div id="memory-hierarchy-viz"></div>
 
-### SM Architecture
-
-![SM architecture](/assets/4090_sm.png)
 
 Shared memory provides **bandwidth advantage** compared to global memory:
 
@@ -579,8 +676,151 @@ Below are all the results from the benchmarking:
 
 ![Kernel with shared mem](/assets/explore_gemm_shared_mem.png)
 
+## Understanding GPU Occupancy
+
+Before diving into more advanced optimizations, we need to understand **occupancy**—a critical metric that determines how well we utilize the GPU's resources.
+
+### What is Occupancy?
+
+**Occupancy** is the ratio of active warps to the maximum number of possible warps per SM:
+
+$$\text{Occupancy} = \frac{\text{Active Warps per SM}}{\text{Maximum Warps per SM}}$$
+
+For the RTX 4090 (Compute Capability 8.9):
+- **Maximum warps per SM**: 48 warps
+- **Maximum threads per SM**: 1,536 threads (48 warps × 32 threads/warp)
+- **Maximum thread blocks per SM**: 32 blocks
+
+### Why Occupancy Matters
+
+GPUs hide memory latency through **massive parallelism**. When one warp waits for memory, the SM immediately switches to execute another warp—with **zero overhead** (no register state swapping).
+
+> **Key Insight:** Higher occupancy → More warps available → Better latency hiding → Higher performance
+{: .prompt-tip}
+
+However, **occupancy is not everything**. A kernel with 100% occupancy but poor memory access patterns will still perform poorly. 
+
+### Factors Limiting Occupancy
+
+Occupancy is limited by three hardware resources per SM:
+
+#### 1. **Registers (256 KB per SM on RTX 4090)**
+
+Each thread gets registers from the SM's register file. More registers per thread → fewer concurrent threads.
+
+**Maximum threads calculation:**
+
+$$\text{Max Threads} = \min\left(\frac{65536 \text{ registers/SM}}{\text{registers per thread}}, 1536\right)$$
+
+| Registers/Thread | Max Threads | Active Warps | Occupancy | Status |
+|------------------|-------------|--------------|-----------|--------|
+| 32 | 1,536 (limited by max) | 48 | 100% | ✅ Optimal |
+| 64 | 1,024 | 32 | 66.7% | ⚠️ Good |
+| 128 | 512 | 16 | 33.3% | ❌ Poor |
+
+#### 2. **Shared Memory (128 KB per SM on RTX 4090)**
+
+Shared memory is partitioned among thread blocks on the same SM.
+
+**Maximum blocks calculation:**
+
+$$\text{Max Blocks} = \min\left(\frac{131072 \text{ bytes/SM}}{\text{shared memory per block}}, \underbrace{32}_{\text{hardware limit}}\right)$$
+
+> Note: 32 is **maximum resident blocks per SM** (hardware limit for RTX 4090)
+{: .prompt-info}
+
+| Shared Memory/Block | Max Blocks | Notes | Status |
+|---------------------|------------|-------|--------|
+| 0 KB | 32 | No shared memory usage | ✅ Maximum blocks |
+| 32 KB | 4 | Good for moderate tiling | ✅ Good |
+| 64 KB | 2 | Large tiles, fewer blocks | ⚠️ Acceptable |
+| 96 KB | 1 | Very large tiles, single block | ❌ Poor if block is small |
+
+#### 3. **Thread Block Size**
+
+The number of threads per block affects how many blocks can fit on an SM.
+
+| Threads/Block | Warps/Block | Max Blocks/SM | Active Warps | Occupancy | Status |
+|---------------|-------------|---------------|--------------|-----------|--------|
+| 128 | 4 | 12 | 48 | 100% | ✅ Optimal |
+| 256 | 8 | 6 | 48 | 100% | ✅ Optimal |
+| 512 | 16 | 3 | 48 | 100% | ✅ Optimal |
+| 1024 | 32 | 1 | 32 | 66.7% | ⚠️ Limited by block size |
+
+### Calculating Occupancy for Our Shared Memory Kernel
+
+Let's analyze our current shared memory kernel:
+
+```cuda
+constexpr uint BLOCKSIZE = 32;
+dim3 block_dim(BLOCKSIZE * BLOCKSIZE);  // 1024 threads per block
+```
+
+**Shared memory usage:**
+```cuda
+__shared__ float tile_a[32 * 32];  // 4 KB
+__shared__ float tile_b[32 * 32];  // 4 KB
+// Total: 8 KB per block
+```
+
+**Occupancy calculation:**
+
+1. **Threads per block**: 1,024 threads (32 warps)
+2. **Blocks per SM (thread limit)**: $\lfloor 1536 / 1024 \rfloor = 1$ block
+3. **Blocks per SM (shared memory limit)**: $\lfloor 131072 / 8192 \rfloor = 16$ blocks
+4. **Blocks per SM (block limit)**: 32 blocks (max)
+5. **Actual blocks per SM**: $\min(1, 16, 32) = 1$ block
+
+**Active warps**: $1 \text{ block} \times 32 \text{ warps/block} = 32 \text{ warps}$
+
+**Occupancy**: $\frac{32}{48} = 66.7\%$ ⚠️
+
+> **Problem**: Our large block size (1,024 threads) limits us to only 1 block per SM, resulting in just 66.7% occupancy. 66.7% occupancy is not necessarily bad but let's see more details using nsight-compute
+{: .prompt-warning}
+
+### Nsight Compute Profiling
+
+First let's confirm our occupancy calculation and it matches. 
+
+![shared_mem_occupancy](/assets/explore_gemm_shared_mem_occupancy.png)
+
+Now, looking at the summary - it provides some ideas on why the kernel is still slow:
+
+![ncu summary shared mem](/assets/explore_gemm_summary_shared_mem_ncu.png)
+
+Next, looking at the instruction mix, we can see that LDS dominates the instruction mix -- LDS = load within shared memory window -- **which is not good.**
+
+![LDS Too much](/assets/explore_gemm_lds_too_much.png)
+
+> NVIDIA provides [`cudaOccupancyMaxActiveBlocksPerMultiprocessor()`](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__HIGHLEVEL.html#group__CUDART__HIGHLEVEL_1g5a5d67a3c907371559ba692195e8a38c) to calculate theoretical occupancy at runtime. Most profilers (Nsight Compute) also report achieved occupancy.
+{: .prompt-tip}
+
+### Strategy for 1D Block Tiling
+
+In the next kernel, we'll address the occupancy issue while increasing arithmetic intensity:
+
+1. **Reduce threads per block**: From 1,024 → 256 threads
+   - Allows multiple blocks per SM
+   - Increases occupancy to 100%
+
+2. **Increase work per thread**: Each thread computes TM outputs (TM = 4-8)
+   - Amortizes memory access cost
+   - Improves arithmetic intensity
+
+3. **Balance shared memory**: Keep tile sizes reasonable
+   - More shared memory → more data reuse
+   - But too much → limits blocks per SM
+
+**Target configuration for 1D tiling:**
+- Block size: 256 threads (8 warps)
+- Threads per SM: $6 \times 256 = 1536$ threads (6 blocks per SM)
+- Occupancy: $\frac{48}{48} = 100\%$ ✅
+- Each thread computes TM=8 outputs → 8× more arithmetic intensity
+
 
 ## Kernel 4: 1D Block Tiling
+
+
 
 ### Concept
 
