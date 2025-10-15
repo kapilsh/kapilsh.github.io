@@ -1595,7 +1595,7 @@ The vectorized kernel shows **mixed results** — performance **degrades** compa
 
 After optimizing thread-level and block-level tiling, the next step is **warp-level tiling**—exploiting the natural 32-thread warp execution unit in NVIDIA GPUs to achieve better register reuse and computation efficiency.
 
-#### What is Warp Tiling? Tiling Hierarchy in CUTLASS
+### What is Warp Tiling? Tiling Hierarchy in CUTLASS
 
 A **warp** is the fundamental execution unit in NVIDIA GPUs consisting of 32 threads that execute in SIMT (Single Instruction, Multiple Thread) fashion. Warp tiling introduces an additional level in the memory hierarchy:
 
@@ -1612,172 +1612,96 @@ The NVIDIA CUTLASS library implements a sophisticated tiling strategy that mirro
 4. **Thread-level GEMM**: Individual threads compute on register data
 5. **Instruction-level**: Hardware instructions (e.g., Tensor Cores on modern GPUs)
 
-#### Why Warp Tiling Matters
-
-{: .prompt-info }
-> **Performance Rationale**: Warp tiling reduces **shared memory bandwidth** as a bottleneck by maximizing **register-level data reuse**. Fragments are kept small in the K dimension to maximize compute intensity relative to data movement.
-
-**Benefits:**
-
-1. **Register Fragment Reuse**: Each warp loads small matrix fragments (typically 16×16 or 8×8) from shared memory into registers and reuses them across multiple computations
-2. **Reduced Shared Memory Pressure**: By keeping fragments small in K dimension, warps maximize computation per byte loaded from shared memory
-3. **Better Instruction-Level Parallelism (ILP)**: Warps can issue independent math instructions to CUDA cores while simultaneously loading next fragments
-4. **Double Buffering**: Warps maintain two register fragment sets—one for current computation, one for prefetching next data
-
-#### Tiling Hierarchy Example
-
-For a typical CUTLASS GEMM configuration:
+### Concept
 
 ```
-Threadblock Tile: 128×128×8  (BM=128, BN=128, BK=8)
-    ├─ Warp Tile: 64×64×8     (4 warps process this threadblock)
-    │   └─ Thread Tile: 8×8   (Each of 32 threads in warp computes 8×8)
+Without Warp Tiling (2D Block Tiling):
+  For each K iteration:
+    Each thread: Load 1 element from As, 1 element from Bs → Compute TM×TN FMAs
+    Shared memory accesses: O(NUM_THREADS) per K iteration
+
+With Warp Tiling:
+  For each K iteration:
+    Each warp: Load WSUBM×WSUBN fragment → Store in registers
+    Each thread in warp: Compute TM×TN FMAs using register data
+    Repeat for all warp subtiles
+    Shared memory accesses: O(NUM_THREADS) per K iteration, but higher compute per access
 ```
 
-**Compute Intensity Calculation:**
-
-- **Without warp tiling**: Each element loaded from shared memory → used once
-- **With warp tiling**: Each element loaded → reused across 8×8 thread tile = 64 FMA operations per load
-- **Result**: ~64× improvement in compute intensity
-
-#### Implementation Challenges
-
-1. **Register Pressure**: Warp tiles require significant register storage (e.g., 8×8 float tile = 64 registers per thread)
-2. **Warp Synchronization**: Requires explicit `__syncwarp()` or implicit warp-synchronous execution
-3. **Fragment Loading**: Must carefully orchestrate loads from shared memory to avoid bank conflicts
-4. **Complexity**: Adds another dimension to autotuning (warp tile sizes on top of block/thread tiles)
-
-#### Modern Extensions: Warp Specialization
-
-In NVIDIA's latest CUTLASS implementations (Hopper GPUs), **warp specialization** takes this further:
-
-- **Producer warps**: Dedicated to loading data from global → shared memory (using TMA - Tensor Memory Accelerator)
-- **Consumer warps**: Dedicated to computation using WGMMA (Warp Group Matrix Multiply-Accumulate)
-- **Asynchronous pipelining**: Producer and consumer warps operate concurrently with minimal synchronization
-
-This represents the state-of-the-art in GEMM optimization, achieving >90% of theoretical peak performance on modern hardware.
+The critical difference: with warp tiling, each shared memory load is amortized over more computation because the data stays in registers for the entire warp tile processing loop.
 
 {: .prompt-tip }
-> **Further Reading**: For implementation details, see [NVIDIA CUTLASS Documentation](https://docs.nvidia.com/cutlass/media/docs/cpp/efficient_gemm.html) and the [Colfax CUTLASS Tutorial](https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/).
+> [NVIDIA CUTLASS Documentation](https://docs.nvidia.com/cutlass/media/docs/cpp/efficient_gemm.html) has a lot more details and is pretty comprehensive in explaining different layers of tiling.
 
-#### Implementation: From 2D Block Tiling to Warp Tiling
+### Kernel
 
-Let's extend our previous 2D block tiling kernel to incorporate warp-level tiling. The key difference is adding an intermediate warp-level processing layer between block tiles and thread tiles.
+```cuda
+constexpr int WARPSIZE = 32;
 
-**Evolution of the Tiling Hierarchy:**
+// ==================== HELPER FUNCTIONS ====================
 
-```
-Previous (2D Block Tiling):
-Threadblock Tile (BM×BN) → Thread Tile (TM×TN)
-                ↓
-         All threads cooperate
-
-New (Warp Tiling):
-Threadblock Tile (BM×BN) → Warp Tile (WM×WN) → Warp Subtile (WSUBM×WSUBN) → Thread Tile (TM×TN)
-                ↓                    ↓                      ↓
-           All warps          Single warp (32 threads)    Individual threads
-```
-
-**Template Parameters:**
-
-```cpp
-template <const int BM,      // Block tile M dimension (e.g., 128)
-          const int BN,      // Block tile N dimension (e.g., 128)
-          const int BK,      // Block tile K dimension (e.g., 16)
-          const int WM,      // Warp tile M dimension (e.g., 64)
-          const int WN,      // Warp tile N dimension (e.g., 64)
-          const int WNITER,  // Warp subtile iterations in N (e.g., 4)
-          const int TM,      // Thread tile M dimension (e.g., 8)
-          const int TN,      // Thread tile N dimension (e.g., 4)
-          const int NUM_THREADS> // Threads per block (e.g., 128)
-```
-
-**Computed Values:**
-
-```cpp
-// Number of warp subtile iterations in M dimension
-WMITER = (WM * WN) / (WARPSIZE * TM * TN * WNITER)
-
-// Warp subtile dimensions
-WSUBM = WM / WMITER  // Height of each warp subtile
-WSUBN = WN / WNITER  // Width of each warp subtile
-```
-
-**Example Configuration:**
-
-For `BM=128, BN=128, WM=64, WN=64` with `NUM_THREADS=128`:
-- **Warps per block**: `(BM/WM) × (BN/WN) = 2 × 2 = 4 warps`
-- **Threads needed**: `4 warps × 32 threads/warp = 128 threads` ✓
-
-#### Key Implementation Details
-
-**1. Warp Placement Within Block**
-
-Each thread determines which warp it belongs to and where that warp sits in the block tile:
-
-```cpp
-const uint warp_idx = threadIdx.x / WARPSIZE;       // Which warp [0-3 for 128 threads]
-const uint warp_col = warp_idx % (BN / WN);         // Warp's column in block
-const uint warp_row = warp_idx / (BN / WN);         // Warp's row in block
-```
-
-**2. Thread Placement Within Warp Subtile**
-
-Each thread determines its position within the warp's subtile:
-
-```cpp
-const uint thread_idx_in_warp = threadIdx.x % WARPSIZE;           // [0-31]
-const uint thread_col_in_warp = thread_idx_in_warp % (WSUBN / TN); // Column index
-const uint thread_row_in_warp = thread_idx_in_warp / (WSUBN / TN); // Row index
-```
-
-For `WSUBN=16, TN=4`: each row has `16/4 = 4 threads`, so 32 threads fill `32/4 = 8 rows`.
-
-**3. Warp-Level Register Caching**
-
-The critical optimization—each warp loads **entire warp tile fragments** into registers:
-
-```cpp
-// Thread-local storage
-float thread_results[WMITER * TM * WNITER * TN] = {0.0f};  // Final accumulation
-float register_m[WMITER * TM] = {0.0f};                     // Cache for A fragments
-float register_n[WNITER * TN] = {0.0f};                     // Cache for B fragments
-```
-
-For `WMITER=2, TM=8, WNITER=4, TN=4`:
-- `thread_results`: `2×8×4×4 = 256 floats`
-- `register_m`: `2×8 = 16 floats` (covers both M subtiles)
-- `register_n`: `4×4 = 16 floats` (covers all 4 N subtiles)
-
-**4. Warp Tile Processing**
-
-The core computation processes the entire warp tile by iterating over warp subtiles:
-
-```cpp
-template <...>
-__device__ void process_warp_tile(...)
+// Load data from global memory to shared memory with vectorized access
+template <const int BM, const int BN, const int BK, const int row_stride_a, const int row_stride_b>
+__device__ void load_from_gmem(int num_cols_b, int num_cols_a,
+                               const float *matrix_a, const float *matrix_b,
+                               float *tile_a, float *tile_b,
+                               int inner_row_a, int inner_col_a,
+                               int inner_row_b, int inner_col_b)
 {
+    // Load tile_a with float4 vectorized loads and transpose
+    for (uint offset = 0; offset + row_stride_a <= BM; offset += row_stride_a) {
+        const float4 tmp_a = reinterpret_cast<const float4*>(
+            &matrix_a[(inner_row_a + offset) * num_cols_a + inner_col_a * 4])[0];
+        // Transpose while storing to shared memory
+        tile_a[(inner_col_a * 4 + 0) * BM + inner_row_a + offset] = tmp_a.x;
+        tile_a[(inner_col_a * 4 + 1) * BM + inner_row_a + offset] = tmp_a.y;
+        tile_a[(inner_col_a * 4 + 2) * BM + inner_row_a + offset] = tmp_a.z;
+        tile_a[(inner_col_a * 4 + 3) * BM + inner_row_a + offset] = tmp_a.w;
+    }
+
+    // Load tile_b with float4 vectorized loads
+    for (uint offset = 0; offset + row_stride_b <= BK; offset += row_stride_b) {
+        reinterpret_cast<float4*>(
+            &tile_b[(inner_row_b + offset) * BN + inner_col_b * 4])[0] =
+            reinterpret_cast<const float4*>(
+                &matrix_b[(inner_row_b + offset) * num_cols_b + inner_col_b * 4])[0];
+    }
+}
+
+// Process warptile: compute using warp subtiling
+template <const int BM, const int BN, const int BK, const int WM, const int WN,
+          const int WMITER, const int WNITER, const int WSUBM, const int WSUBN,
+          const int TM, const int TN>
+__device__ void process_warp_tile(float *register_m, float *register_n, float *thread_results,
+                                   const float *tile_a, const float *tile_b,
+                                   const uint warp_row, const uint warp_col,
+                                   const uint thread_row_in_warp, const uint thread_col_in_warp)
+{
+    // Loop over BK dimension
     for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
-        // Load all warp subtile fragments for this K slice
+        // Populate registers for entire warptile
+        // Load WMITER * TM elements from tile_a (covers all warp subtiles in M dimension)
         for (uint wsub_row_idx = 0; wsub_row_idx < WMITER; ++wsub_row_idx) {
             for (uint i = 0; i < TM; ++i) {
                 register_m[wsub_row_idx * TM + i] =
-                    tile_a[(dot_idx * BM) + warp_row * WM +
-                           wsub_row_idx * WSUBM + thread_row_in_warp * TM + i];
+                    tile_a[(dot_idx * BM) + warp_row * WM + wsub_row_idx * WSUBM +
+                           thread_row_in_warp * TM + i];
             }
         }
 
+        // Load WNITER * TN elements from tile_b (covers all warp subtiles in N dimension)
         for (uint wsub_col_idx = 0; wsub_col_idx < WNITER; ++wsub_col_idx) {
             for (uint i = 0; i < TN; ++i) {
                 register_n[wsub_col_idx * TN + i] =
-                    tile_b[(dot_idx * BN) + warp_col * WN +
-                           wsub_col_idx * WSUBN + thread_col_in_warp * TN + i];
+                    tile_b[(dot_idx * BN) + warp_col * WN + wsub_col_idx * WSUBN +
+                           thread_col_in_warp * TN + i];
             }
         }
 
-        // Compute outer product across all warp subtiles
+        // Execute warptile matmul across all warp subtiles
         for (uint wsub_row_idx = 0; wsub_row_idx < WMITER; ++wsub_row_idx) {
             for (uint wsub_col_idx = 0; wsub_col_idx < WNITER; ++wsub_col_idx) {
+                // Calculate per-thread results for this warp subtile
                 for (uint res_idx_m = 0; res_idx_m < TM; ++res_idx_m) {
                     for (uint res_idx_n = 0; res_idx_n < TN; ++res_idx_n) {
                         thread_results[(wsub_row_idx * TM + res_idx_m) * (WNITER * TN) +
@@ -1790,106 +1714,229 @@ __device__ void process_warp_tile(...)
         }
     }
 }
-```
 
-**Why This Works:**
+// ==================== WARPTILING KERNEL ====================
 
-1. **Shared Memory to Register Ratio**: Each element loaded from shared memory is reused across `TM × TN` operations
-2. **Warp-Level Cooperation**: All 32 threads in a warp load complementary fragments simultaneously
-3. **Register Reuse**: Fragments stay in registers across the entire BK iteration, minimizing shared memory traffic
-4. **ILP Opportunity**: The nested loops expose instruction-level parallelism for the compiler
+template <const int BM, const int BN, const int BK, const int WM, const int WN,
+          const int WNITER, const int TM, const int TN, const int NUM_THREADS>
+__global__ void __launch_bounds__(NUM_THREADS)
+sgemm_warptiling_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
+                        float alpha, const float *matrix_a, const float *matrix_b,
+                        float beta, float *matrix_c)
+{
+    const uint block_row = blockIdx.y;
+    const uint block_col = blockIdx.x;
 
-**5. Visualization of Warp Subtiling**
+    // Warp-level placement within threadblock
+    const uint warp_idx = threadIdx.x / WARPSIZE;          // Which warp this thread belongs to
+    const uint warp_col = warp_idx % (BN / WN);            // Warp's column in block tile
+    const uint warp_row = warp_idx / (BN / WN);            // Warp's row in block tile
 
-For a concrete example with `WM=64, WN=64, WMITER=2, WNITER=4`:
+    // Warp subtile dimensions
+    // WMITER: number of subtile iterations in M dimension per warp
+    // Formula: total warp work (WM*WN) / work per thread per iteration (WARPSIZE*TM*TN*WNITER)
+    constexpr uint WMITER = (WM * WN) / (WARPSIZE * TM * TN * WNITER);
+    constexpr uint WSUBM = WM / WMITER;  // Warp subtile height
+    constexpr uint WSUBN = WN / WNITER;  // Warp subtile width
 
-```
-Warp Tile (64×64)
-┌─────────────────┬─────────────────┬─────────────────┬─────────────────┐
-│  Subtile 0,0    │  Subtile 0,1    │  Subtile 0,2    │  Subtile 0,3    │
-│   (32×16)       │   (32×16)       │   (32×16)       │   (32×16)       │
-│  WSUBM=32       │                 │                 │                 │
-│  WSUBN=16       │                 │                 │                 │
-├─────────────────┼─────────────────┼─────────────────┼─────────────────┤
-│  Subtile 1,0    │  Subtile 1,1    │  Subtile 1,2    │  Subtile 1,3    │
-│   (32×16)       │   (32×16)       │   (32×16)       │   (32×16)       │
-│                 │                 │                 │                 │
-│                 │                 │                 │                 │
-└─────────────────┴─────────────────┴─────────────────┴─────────────────┘
-     ↑
-     Each subtile processed by 32 threads with TM=8, TN=4 thread tiles
-     Thread layout: 4 threads/row × 8 rows = 32 threads per subtile
-```
+    // Thread placement within warp subtile
+    const uint thread_idx_in_warp = threadIdx.x % WARPSIZE;           // [0, 31]
+    const uint thread_col_in_warp = thread_idx_in_warp % (WSUBN / TN); // Column within subtile
+    const uint thread_row_in_warp = thread_idx_in_warp / (WSUBN / TN); // Row within subtile
 
-#### Comparison: 2D Block Tiling vs Warp Tiling
+    // Shared memory for block tiles
+    __shared__ float tile_a[BM * BK];
+    __shared__ float tile_b[BK * BN];
 
-| Aspect | 2D Block Tiling | Warp Tiling |
-|--------|----------------|-------------|
-| **Granularity** | Thread-level only | Warp-level + Thread-level |
-| **Register Usage** | `TM × TN` per thread | `WMITER × TM × WNITER × TN` per thread |
-| **Shared Memory Reuse** | Each load → `TM × TN` reuse | Each load → `TM × TN` reuse (better ILP) |
-| **Code Complexity** | Moderate | High (3-level hierarchy) |
-| **Performance** | Good | Better (especially on larger matrices) |
-| **Flexibility** | 2 tuning parameters (TM, TN) | 4 tuning parameters (WM, WN, WMITER, WNITER) |
+    // Position matrix pointers at start of this block's tile
+    matrix_a += block_row * BM * num_cols_a;
+    matrix_b += block_col * BN;
+    // Position output pointer at this warp's tile
+    matrix_c += (block_row * BM + warp_row * WM) * num_cols_b + block_col * BN + warp_col * WN;
 
-The warp tiling approach exposes more optimization opportunities but requires careful tuning of additional parameters to balance register pressure, shared memory bandwidth, and instruction throughput.
+    // Thread indices for loading data into shared memory
+    // Load 4 floats at a time using float4
+    const uint inner_row_a = threadIdx.x / (BK / 4);
+    const uint inner_col_a = threadIdx.x % (BK / 4);
+    constexpr uint row_stride_a = (NUM_THREADS * 4) / BK;
 
-## CUDA vs Triton: A Comprehensive Comparison
+    const uint inner_row_b = threadIdx.x / (BN / 4);
+    const uint inner_col_b = threadIdx.x % (BN / 4);
+    constexpr uint row_stride_b = NUM_THREADS / (BN / 4);
 
-### Programming Model
+    // Thread-local storage in registers
+    float thread_results[WMITER * TM * WNITER * TN] = {0.0f};
+    // Cache for warptile computation
+    float register_m[WMITER * TM] = {0.0f};
+    float register_n[WNITER * TN] = {0.0f};
 
-| Aspect | CUDA | Triton |
-|--------|------|--------|
-| **Abstraction Level** | Low-level, explicit control | High-level, compiler-managed |
-| **Thread Management** | Manual `threadIdx`, `blockIdx` | Implicit via `program_id` |
-| **Memory Management** | Explicit `__shared__`, `__syncthreads()` | Automatic shared memory promotion |
-| **Vectorization** | Manual `float4`, alignment | Automatic compiler optimization |
-| **Register Allocation** | Manual arrays, explicit indexing | Compiler-managed |
-| **Code Verbosity** | ~200-300 lines for optimized kernel | ~50-80 lines for same performance |
+    // Outer loop over block tiles along K dimension
+    for (uint block_k_idx = 0; block_k_idx < num_cols_a; block_k_idx += BK) {
+        // Load block tile from global memory to shared memory
+        load_from_gmem<BM, BN, BK, row_stride_a, row_stride_b>(
+            num_cols_b, num_cols_a, matrix_a, matrix_b, tile_a, tile_b,
+            inner_row_a, inner_col_a, inner_row_b, inner_col_b);
 
-### Example: Loading a Tile
+        __syncthreads();
 
-**CUDA**:
-```cuda
-__shared__ float As[BLOCK_SIZE * BLOCK_SIZE];
-int tx = threadIdx.x;
-int ty = threadIdx.y;
+        // Process warptile from shared memory
+        process_warp_tile<BM, BN, BK, WM, WN, WMITER, WNITER, WSUBM, WSUBN, TM, TN>(
+            register_m, register_n, thread_results, tile_a, tile_b,
+            warp_row, warp_col, thread_row_in_warp, thread_col_in_warp);
 
-// Each thread loads one element
-As[ty * BLOCK_SIZE + tx] = A[globalRow * K + globalCol];
-__syncthreads();
+        // Advance to next block tile
+        matrix_a += BK;
+        matrix_b += BK * num_cols_b;
 
-// Use shared memory
-for (int k = 0; k < BLOCK_SIZE; k++) {
-    sum += As[ty * BLOCK_SIZE + k] * Bs[k * BLOCK_SIZE + tx];
+        __syncthreads();
+    }
+
+    // ==================== WRITE RESULTS TO GLOBAL MEMORY ====================
+
+    // Write results for each warp subtile with vectorized stores
+    for (uint wsub_row_idx = 0; wsub_row_idx < WMITER; ++wsub_row_idx) {
+        for (uint wsub_col_idx = 0; wsub_col_idx < WNITER; ++wsub_col_idx) {
+            // Move pointer to current warp subtile
+            float *matrix_c_interim = matrix_c + (wsub_row_idx * WSUBM) * num_cols_b +
+                                     wsub_col_idx * WSUBN;
+
+            for (uint res_idx_m = 0; res_idx_m < TM; res_idx_m += 1) {
+                for (uint res_idx_n = 0; res_idx_n < TN; res_idx_n += 4) {
+                    // Load C vector into registers
+                    float4 tmp_c = reinterpret_cast<float4*>(
+                        &matrix_c_interim[(thread_row_in_warp * TM + res_idx_m) * num_cols_b +
+                                         thread_col_in_warp * TN + res_idx_n])[0];
+
+                    // Perform GEMM update in registers
+                    const int res_idx = (wsub_row_idx * TM + res_idx_m) * (WNITER * TN) +
+                                       wsub_col_idx * TN + res_idx_n;
+                    tmp_c.x = alpha * thread_results[res_idx + 0] + beta * tmp_c.x;
+                    tmp_c.y = alpha * thread_results[res_idx + 1] + beta * tmp_c.y;
+                    tmp_c.z = alpha * thread_results[res_idx + 2] + beta * tmp_c.z;
+                    tmp_c.w = alpha * thread_results[res_idx + 3] + beta * tmp_c.w;
+
+                    // Write back with vectorized store
+                    reinterpret_cast<float4*>(
+                        &matrix_c_interim[(thread_row_in_warp * TM + res_idx_m) * num_cols_b +
+                                         thread_col_in_warp * TN + res_idx_n])[0] = tmp_c;
+                }
+            }
+        }
+    }
 }
 ```
 
-**Triton**:
-```python
-# Load tile - Triton handles shared memory automatically
-offs_m = pid_m * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-offs_k = k + tl.arange(0, BLOCK_SIZE)
-a_ptrs = a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
-a = tl.load(a_ptrs, mask=...)
+### Caller
 
-# Compute - shared memory and synchronization handled automatically
-accumulator += tl.dot(a, b)
+```
+template <const int BM, const int BN, const int BK, const int WM, const int WN,
+          const int WNITER, const int TM, const int TN, const int NUM_THREADS>
+void sgemm_warptiling(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
+                      torch::Tensor &output_matrix, float alpha, float beta)
+{
+    // Validate inputs
+    TORCH_CHECK(matrix_a.device().is_cuda(), "Matrix A must be on CUDA device");
+    TORCH_CHECK(matrix_b.device().is_cuda(), "Matrix B must be on CUDA device");
+    TORCH_CHECK(matrix_a.dtype() == torch::kFloat32, "Matrix A must be float32");
+    TORCH_CHECK(matrix_b.dtype() == torch::kFloat32, "Matrix B must be float32");
+    TORCH_CHECK(matrix_a.dim() == 2, "Matrix A must be 2D");
+    TORCH_CHECK(matrix_b.dim() == 2, "Matrix B must be 2D");
+
+    const int num_rows_a = static_cast<int>(matrix_a.size(0));
+    const int num_cols_a = static_cast<int>(matrix_a.size(1));
+    const int num_cols_b = static_cast<int>(matrix_b.size(1));
+
+    TORCH_CHECK(matrix_b.size(0) == num_cols_a,
+                "Matrix dimensions must match: A is MxK, B must be KxN");
+
+    TORCH_CHECK(output_matrix.device().is_cuda(), "Matrix C must be on CUDA device");
+    TORCH_CHECK(output_matrix.dtype() == torch::kFloat32, "Matrix C must be float32");
+    TORCH_CHECK(output_matrix.size(0) == num_rows_a && output_matrix.size(1) == num_cols_b,
+                "Matrix C must be MxN");
+
+    // Validate dimensions are multiples of tile sizes
+    TORCH_CHECK(num_rows_a % BM == 0, "Matrix A rows must be multiple of ", BM);
+    TORCH_CHECK(num_cols_a % BK == 0, "Matrix A cols must be multiple of ", BK);
+    TORCH_CHECK(num_cols_b % BN == 0, "Matrix B cols must be multiple of ", BN);
+
+    // Validate warptiling constraints
+    constexpr int WMITER = (WM * WN) / (WARPSIZE * TM * TN * WNITER);
+    constexpr int WSUBM = WM / WMITER;
+    constexpr int WSUBN = WN / WNITER;
+    static_assert(WMITER * WSUBM == WM, "WMITER * WSUBM must equal WM");
+    static_assert(WNITER * WSUBN == WN, "WNITER * WSUBN must equal WN");
+    static_assert((BM % WM == 0) && (BN % WN == 0), "Block tile must be divisible by warp tile");
+    static_assert((WSUBM % TM == 0) && (WSUBN % TN == 0), "Warp subtile must be divisible by thread tile");
+
+    // Get raw device pointers
+    const float *d_matrix_a = matrix_a.data_ptr<float>();
+    const float *d_matrix_b = matrix_b.data_ptr<float>();
+    float *d_output_matrix = output_matrix.data_ptr<float>();
+
+    // Configure kernel launch
+    dim3 block_dim(NUM_THREADS);
+    dim3 grid_dim(CEIL_DIV(num_cols_b, BN), CEIL_DIV(num_rows_a, BM));
+
+    // Launch kernel
+    sgemm_warptiling_kernel<BM, BN, BK, WM, WN, WNITER, TM, TN, NUM_THREADS>
+        <<<grid_dim, block_dim>>>(
+            num_rows_a, num_cols_b, num_cols_a,
+            alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix);
+}
+
+// Default configuration wrapper
+void sgemm_warptiling_default(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
+                               torch::Tensor &output_matrix, float alpha, float beta)
+{
+    // Default configuration: BM=128, BN=128, BK=16, WM=64, WN=64, WNITER=4, TM=8, TN=4, NUM_THREADS=128
+    // This gives: WMITER=2, WSUBM=32, WSUBN=16
+    // Warps per block: (128*128)/(64*64) = 4 warps
+    // Threads needed: 4 warps * 32 threads/warp = 128 threads
+    sgemm_warptiling<128, 128, 16, 64, 64, 4, 8, 4, 128>(
+        matrix_a, matrix_b, output_matrix, alpha, beta);
+}
+
 ```
 
+### Performance Analysis
+
+The warp tiling kernel demonstrates **impressive performance gains** at large matrix sizes, achieving the **best performance of all our hand-written kernels**. However, it shows **interesting complexity tradeoffs** at smaller sizes.
+
+> **Performance at 4096×4096:**
+> - **1.17× TFLOPS improvement** over vectorized kernel (39.07 → 45.82 TFLOPS)
+> - **1.17× bandwidth improvement** (57.24 → 67.12 GB/s)
+> - **54.4% of PyTorch's performance** (84.19 TFLOPS)
+> - **70.1× faster than naive** (0.654 → 45.82 TFLOPS)
+{: .prompt-info}
+
+**Comparison vs Previous Kernels (4096×4096):**
+
+| Kernel | Time (ms) | TFLOPS | Bandwidth (GB/s) | vs PyTorch | Speedup over Naive |
+|--------|-----------|---------|------------------|------------|-------------------|
+| Naive | 210.29 | 0.65 | 0.96 | 0.8% | 1.0× |
+| Coalesced | 26.95 | 5.10 | 7.47 | 6.1% | 7.8× |
+| Shared Memory | 22.40 | 6.14 | 8.99 | 7.3% | 9.4× |
+| 1D Block Tiling | 7.42 | 18.52 | 27.13 | 22.0% | 28.3× |
+| 2D Block Tiling | 4.45 | 30.89 | 45.25 | 36.7% | 47.2× |
+| Vectorized | 3.52 | 39.07 | 57.24 | 46.4% | 59.8× |
+| **Warp Tiling** | **3.00** | **45.82** | **67.12** | **54.4%** | **70.1×** |
+| PyTorch | 1.63 | 84.19 | 123.33 | 100% | 128.8× |
 
 
-## Performance Summary
+### Performance Across Matrix Sizes
 
-<div id="performance-comparison"></div>
+![Across matrices warptiling](/assets/explore_gemm_warptiling_performance.png)
 
-### Why cuBLAS is Still Faster
 
-1. **Tensor Cores**: Hardware-accelerated matrix operations (for FP16/INT8)
-2. **Warp-level Primitives**: Direct warp shuffle and cooperative operations
-3. **Advanced Scheduling**: Better handling of memory latency
-4. **Assembly Optimization**: Hand-tuned PTX/SASS code
-5. **Architecture-specific Tuning**: Optimized per GPU generation
+| Matrix Size | Time (ms) | TFLOPS | vs PyTorch | Speedup vs 2D Tiling |
+|-------------|-----------|---------|------------|---------------------|
+| 128×128 | 0.021 | 0.20 | 40.2% | 0.81× |
+| 512×512 | 0.058 | 4.60 | 18.9% | 0.79× |
+| 1024×1024 | 0.103 | 20.77 | 29.8% | 0.90× |
+| 2048×2048 | 0.396 | 43.38 | 52.6% | 1.14× |
+| 4096×4096 | 3.00 | 45.82 | 54.4% | 1.17× |
+| 8192×8192 | 25.69 | 42.80 | 50.9% | 1.12× |
+
 
 ## Further Optimizations
 
