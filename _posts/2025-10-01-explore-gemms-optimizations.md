@@ -795,643 +795,1044 @@ Next, looking at the instruction mix, we can see that LDS dominates the instruct
 > NVIDIA provides [`cudaOccupancyMaxActiveBlocksPerMultiprocessor()`](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__HIGHLEVEL.html#group__CUDART__HIGHLEVEL_1g5a5d67a3c907371559ba692195e8a38c) to calculate theoretical occupancy at runtime. Most profilers (Nsight Compute) also report achieved occupancy.
 {: .prompt-tip}
 
-### Strategy for 1D Block Tiling
-
-In the next kernel, we'll address the occupancy issue while increasing arithmetic intensity:
-
-1. **Reduce threads per block**: From 1,024 → 256 threads
-   - Allows multiple blocks per SM
-   - Increases occupancy to 100%
-
-2. **Increase work per thread**: Each thread computes TM outputs (TM = 4-8)
-   - Amortizes memory access cost
-   - Improves arithmetic intensity
-
-3. **Balance shared memory**: Keep tile sizes reasonable
-   - More shared memory → more data reuse
-   - But too much → limits blocks per SM
-
-**Target configuration for 1D tiling:**
-- Block size: 256 threads (8 warps)
-- Threads per SM: $6 \times 256 = 1536$ threads (6 blocks per SM)
-- Occupancy: $\frac{48}{48} = 100\%$ ✅
-- Each thread computes TM=8 outputs → 8× more arithmetic intensity
-
-
 ## Kernel 4: 1D Block Tiling
 
+Now that we understand that in Kernel 3, each thread was computing a single output element of matrix C, meaning each thread needed to load elements from shared memory repeatedly, with memory accesses dominating the execution time. Next, instead of each thread computing exactly one output element of the tile, each thread computes multiple output elements along one dimension. To support this, we fetch some data from SMEM into registers (for reuse) within each thread, reducing repeated SMEM loads. 
 
 
-### Concept
+> In essence, we are trying to improve the arithmetic intensity of the kernel, which effectively means computing more results per thread with the same loaded data i.e. increase FLOPS/byte
+{: .prompt-tip}
 
-Have each thread compute multiple output elements to increase arithmetic intensity (FLOPs per byte loaded).
+
+### Kernel
 
 ```cuda
-#define BM 64
-#define BN 64
-#define BK 8
-#define TM 8  // Each thread computes TM results
+template <const int BM, const int BN, const int BK, const int TM>
+__global__ void sgemm_blocktiling_1d_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
+                                            float alpha, const float *matrix_a,
+                                            const float *matrix_b, float beta,
+                                            float *matrix_c)
+{
+    const uint block_row = blockIdx.x;
+    const uint block_col = blockIdx.y;
 
-__global__ void sgemm_1d_blocktiling(int M, int N, int K,
-                                     float alpha, const float *A,
-                                     const float *B, float beta,
-                                     float *C) {
-    __shared__ float As[BM * BK];
-    __shared__ float Bs[BK * BN];
+    __shared__ float tile_a[BM * BK];
+    __shared__ float tile_b[BK * BN];
 
-    // Thread-local cache for results
-    float threadResults[TM] = {0.0};
-    float regM[TM];
-    float regN;
+    const uint thread_row = threadIdx.x / BN;
+    const uint thread_col = threadIdx.x % BN;
 
-    const uint threadRow = threadIdx.x / BN;
-    const uint threadCol = threadIdx.x % BN;
+    // Calculate global row and column indices for this thread
+    const int global_row = block_row * BM + thread_row * TM;
+    const int global_col = block_col * BN + thread_col;
 
-    // Outer loop over K dimension
-    for (int bkIdx = 0; bkIdx < K; bkIdx += BK) {
-        // Load tiles into shared memory
-        // ... (loading code)
+    // Move pointers to the starting position for this block
+    matrix_a += block_row * BM * num_cols_a;  // row=block_row, col=0
+    matrix_b += block_col * BN;               // row=0, col=block_col
+    matrix_c += block_row * BM * num_cols_b + block_col * BN;
+
+    // Allocate thread-local cache for results in registerfile
+    float thread_results[TM] = {0.0f};
+
+    // Loop over all tiles along K dimension
+    for (int tile_idx = 0; tile_idx < num_cols_a; tile_idx += BK)
+    {
+        // Load tile from matrix A into shared memory with bounds checking
+        // Each thread loads one element from A
+        const uint a_row = threadIdx.x / BK;
+        const uint a_col = threadIdx.x % BK;
+        if ((block_row * BM + a_row) < num_rows_a && (tile_idx + a_col) < num_cols_a) {
+            tile_a[a_row * BK + a_col] = matrix_a[a_row * num_cols_a + a_col];
+        } else {
+            tile_a[a_row * BK + a_col] = 0.0f;
+        }
+
+        // Load tile from matrix B into shared memory with bounds checking
+        // Each thread loads one element from B
+        const uint b_row = threadIdx.x / BN;
+        const uint b_col = threadIdx.x % BN;
+        if ((tile_idx + b_row) < num_cols_a && (block_col * BN + b_col) < num_cols_b) {
+            tile_b[b_row * BN + b_col] = matrix_b[b_row * num_cols_b + b_col];
+        } else {
+            tile_b[b_row * BN + b_col] = 0.0f;
+        }
 
         __syncthreads();
 
-        // Inner loop: compute TM results per thread
-        for (int dotIdx = 0; dotIdx < BK; ++dotIdx) {
-            // Load TM elements from A into registers
-            for (int i = 0; i < TM; ++i) {
-                regM[i] = As[(threadRow * TM + i) * BK + dotIdx];
-            }
-            regN = Bs[dotIdx * BN + threadCol];
+        // Advance pointers to next tile
+        matrix_a += BK;
+        matrix_b += BK * num_cols_b;
 
-            // Compute outer product
-            for (int i = 0; i < TM; ++i) {
-                threadResults[i] += regM[i] * regN;
+        // Calculate per-thread results
+        for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
+            // We make the dotproduct loop the outside loop, which facilitates
+            // reuse of the tile_b entry, which we can cache in a tmp var.
+            float b_tmp = tile_b[dot_idx * BN + thread_col];
+            for (uint res_idx = 0; res_idx < TM; ++res_idx) {
+                thread_results[res_idx] +=
+                    tile_a[(thread_row * TM + res_idx) * BK + dot_idx] * b_tmp;
             }
         }
+
         __syncthreads();
     }
 
-    // Write results
-    for (int i = 0; i < TM; ++i) {
-        C[(threadRow * TM + i) * N + threadCol] =
-            alpha * threadResults[i] +
-            beta * C[(threadRow * TM + i) * N + threadCol];
+    // Write results to global memory: C = α*(A@B)+β*C
+    for (uint res_idx = 0; res_idx < TM; ++res_idx) {
+        int row = global_row + res_idx;
+        if (row < num_rows_a && global_col < num_cols_b) {
+            matrix_c[(thread_row * TM + res_idx) * num_cols_b + thread_col] =
+                alpha * thread_results[res_idx] +
+                beta * matrix_c[(thread_row * TM + res_idx) * num_cols_b + thread_col];
+        }
     }
 }
 ```
 
-### Arithmetic Intensity
+### Caller
 
-**Before (1 result/thread)**:
-- Load: 2K elements
-- Compute: 2K FLOPs
-- Intensity: 1 FLOP/element
+```cuda
 
-**After (TM results/thread)**:
-- Load: K + K×TM elements
-- Compute: 2K×TM FLOPs
-- Intensity: $\frac{2K \times TM}{K(1 + TM)} \approx 2$ FLOPs/element (for large TM)
+void sgemm_blocktiling_1d(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
+                          torch::Tensor &output_matrix, float alpha, float beta)
+{
+    // Validate inputs
+    TORCH_CHECK(matrix_a.device().is_cuda(), "Matrix A must be on CUDA device");
+    TORCH_CHECK(matrix_b.device().is_cuda(), "Matrix B must be on CUDA device");
+    TORCH_CHECK(matrix_a.dtype() == torch::kFloat32, "Matrix A must be float32");
+    TORCH_CHECK(matrix_b.dtype() == torch::kFloat32, "Matrix B must be float32");
+    TORCH_CHECK(matrix_a.dim() == 2, "Matrix A must be 2D");
+    TORCH_CHECK(matrix_b.dim() == 2, "Matrix B must be 2D");
+
+    const int num_rows_a = static_cast<int>(matrix_a.size(0));
+    const int num_cols_a = static_cast<int>(matrix_a.size(1));
+    const int num_cols_b = static_cast<int>(matrix_b.size(1));
+
+    TORCH_CHECK(matrix_b.size(0) == num_cols_a, "Matrix dimensions must match: A is MxK, B must be KxN");
+
+    TORCH_CHECK(output_matrix.device().is_cuda(), "Matrix C must be on CUDA device");
+    TORCH_CHECK(output_matrix.dtype() == torch::kFloat32, "Matrix C must be float32");
+    TORCH_CHECK(output_matrix.size(0) == num_rows_a && output_matrix.size(1) == num_cols_b, "Matrix C must be MxN");
+
+    // Get raw device pointers
+    const float *d_matrix_a = matrix_a.data_ptr<float>();
+    const float *d_matrix_b = matrix_b.data_ptr<float>();
+    float *d_output_matrix = output_matrix.data_ptr<float>();
+
+    // Template parameters for kernel
+    constexpr int BM = 64;
+    constexpr int BN = 64;
+    constexpr int BK = 8;
+    constexpr int TM = 8;
+
+    // Configure kernel launch
+    // Number of threads = (BM / TM) * BN = (64 / 8) * 64 = 512 threads per block
+    dim3 block_dim((BM / TM) * BN);
+    dim3 grid_dim(CEIL_DIV(num_rows_a, BM),
+                  CEIL_DIV(num_cols_b, BN));
+
+    // Launch kernel
+    sgemm_blocktiling_1d_kernel<BM, BN, BK, TM><<<grid_dim, block_dim>>>(
+        num_rows_a, num_cols_b, num_cols_a,
+        alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix);
+}
+
+```
 
 <div id="1d-tiling-viz"></div>
 
-### Triton Implementation
+<!-- ### Memory Hierarchy Pipeline
 
-```python
-@triton.jit
-def matmul_kernel_1d_tiling(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+The visualization below shows the complete data flow through the GPU memory hierarchy for 1D block tiling:
 
-    # Block-level offsets
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+<div id="1d-pipeline-viz"></div> -->
 
-    # Initialize accumulator - each element represents multiple outputs
-    # Triton automatically handles register allocation
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+### Performance Results
 
-    # Loop over K dimension with tiles
-    for k in range(0, K, BLOCK_SIZE_K):
-        offs_k = k + tl.arange(0, BLOCK_SIZE_K)
-
-        # Load tiles - Triton handles efficient register/shared memory usage
-        a_ptrs = a_ptr + offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
-        a = tl.load(a_ptrs, mask=(offs_am[:, None] < M) &
-                    (offs_k[None, :] < K), other=0.0)
-
-        b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
-        b = tl.load(b_ptrs, mask=(offs_k[:, None] < K) &
-                    (offs_bn[None, :] < N), other=0.0)
-
-        # Accumulate - each "thread" computes multiple outputs implicitly
-        # tl.dot implements efficient outer product with register tiling
-        accumulator += tl.dot(a, b)
-
-    c = accumulator.to(tl.float32)
-
-    # Store results
-    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
-    mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)
-    tl.store(c_ptrs, c, mask=mask)
-
-def matmul_1d_tiling(a, b):
-    M, K = a.shape
-    K, N = b.shape
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-
-    # Larger block sizes for better arithmetic intensity
-    BLOCK_SIZE_M = 64
-    BLOCK_SIZE_N = 64
-    BLOCK_SIZE_K = 32
-
-    grid = lambda META: (
-        triton.cdiv(M, BLOCK_SIZE_M),
-        triton.cdiv(N, BLOCK_SIZE_N),
-    )
-
-    matmul_kernel_1d_tiling[grid](
-        a, b, c,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K,
-    )
-    return c
+```
+🟠 Benchmarking CUDA 1D Block Tiling...
+2025-10-11 07:30:59.509 | INFO     | __main__:run_benchmarks:755 -    ⏱️  Time: 7.4340 ms (min: 7.4025, max: 7.4721)
+2025-10-11 07:30:59.509 | SUCCESS  | __main__:run_benchmarks:758 -    💪 Performance: 18.49 TFLOPS
+2025-10-11 07:30:59.509 | SUCCESS  | __main__:run_benchmarks:759 -    🌊 Bandwidth: 27.08 GB/s
 ```
 
-**Triton's Automatic Thread-Level Tiling**:
-- Triton abstracts away explicit thread indexing
-- Block size parameters control implicit per-thread workload
-- Compiler automatically determines optimal register allocation
-- Higher-level programming model vs manual CUDA register management
+> **Performance Improvement:**
+> - **3.03× TFLOPS improvement** over shared memory (6.10 → 18.49 TFLOPS)
+> - **3.03× bandwidth improvement** (8.94 → 27.08 GB/s)
+> - **28.9× faster than naive** (0.64 → 18.49 TFLOPS)
+> - Achieved **21.8% of PyTorch's performance** (84.62 TFLOPS)
+>
+> **Key Insight:**
+> - Register-level tiling provides **3× improvement** by increasing arithmetic intensity
+> - By caching `b_tmp` in registers and reusing it TM times, we reduce shared memory traffic by ~37.5%
+> - Each thread now computes TM=8 outputs instead of 1, amortizing memory access costs
+{: .prompt-info}
 
-### Performance Analysis
+**Comparison vs Previous Kernels:**
 
-- **Performance**: 8,475 GFLOPs (2.8× improvement)
-- **Register Usage**: TM registers per thread
-- **Arithmetic Intensity**: 2-3× higher
-- **Key Insight**: Amortize memory access cost over more computation
+| Kernel | Time (ms) | TFLOPS | vs PyTorch | Speedup over Naive |
+|--------|-----------|---------|------------|-------------------|
+| Naive | 214.24 | 0.64 | 0.8% | 1.0× |
+| Coalesced | 28.62 | 4.80 | 5.7% | 7.5× |
+| Shared Memory | 22.52 | 6.10 | 7.2% | 9.5× |
+| **1D Block Tiling** | **7.43** | **18.49** | **21.8%** | **28.9×** |
+| PyTorch  | 1.62 | 84.62 | 100% | 132.1× |
+
+Let's look at overall performance across several batch sizes
+
+![1D block tiling performance](/assets/explore_gemm_id_blocktiling_performance.png)
+
+### NCU profiling
+
+Now, let's look at how things have changed and confirm our results using ncu!
+
+#### NCU Summary Stats
+
+![NCU summary stats](/assets/explore_gemm_1d_tiling_ncu_1.png)
+
+> We can see the warning related to MIO Throttle Stalls and Shared Store Bank Conflicts are gone now
+{: .prompt-tip}
+
+#### NCU Instruction Mix
+
+![NCU execution mix](/assets/explore_gemm_1d_tiling_ncu_2.png)
+
+> LDS is no longer the majority of instruction mix. 
+{: .prompt-tip}
+
+#### Memory Charts Comparison
+
+The shared memory bandwidth used is also showed in the memory charts. See the comparison below:
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0;">
+  <div>
+    <img src="/assets/explore_gemm_1d_smem_ncu_memory.png" alt="Shared Memory Kernel - NCU Memory Profile" style="width: 100%; border-radius: 8px;">
+    <p style="text-align: center; margin-top: 10px; font-size: 14px; color: #666;"><strong>Shared Memory Kernel</strong> - Higher SMEM traffic, lower throughput</p>
+  </div>
+  <div>
+    <img src="/assets/explore_gemm_1d_block_tiling_ncu_memory.png" alt="1D Block Tiling Kernel - NCU Memory Profile" style="width: 100%; border-radius: 8px;">
+    <p style="text-align: center; margin-top: 10px; font-size: 14px; color: #666;"><strong>1D Block Tiling Kernel</strong> - Register caching reduces SMEM traffic, 3× faster</p>
+  </div>
+</div>
+
+> Key takeaway from 1D blocktiling approach is as we calculate more values per thread, we reduce the number of loads/stores per result i.e. increase arithmetic intensity
+{: .prompt-tip}
 
 ## Kernel 5: 2D Block Tiling
 
 ### Concept
 
-Extend tiling to 2D: each thread computes a TM×TN grid of outputs using register caches for both dimensions.
+2D block tiling extends the 1D approach by having each thread compute a **TM × TN tile** of outputs instead of just TM outputs. This creates bidirectional register reuse:
+- Each value from A (loaded into `register_m[TM]`) is reused across **TN computations**
+- Each value from B (loaded into `register_n[TN]`) is reused across **TM computations**
+- This forms an **outer product** pattern that dramatically increases arithmetic intensity
+
+**Key Improvement over 1D Tiling:**
+- 1D tiling: Each thread computes TM outputs (e.g., 8 outputs)
+- 2D tiling: Each thread computes TM × TN outputs (e.g., 8 × 8 = 64 outputs)
+- Result: **8× more computation per thread** with only marginally more register usage
+
+We implement **two separate kernels** such that a **Main Kernel** (No Bounds Checking) handles all **interior blocks** where every memory access is guaranteed to be in-bounds -- which helps with zero thread divergence since all threads can execute the same logic. An **Edge Kernel** (With Bounds Checking) handles **boundary blocks** at the right edge, bottom edge, and corner. 
+
+
+### Kernel
+
+We show just the main kernel -- I had Claude put a bunch of comments on this kernel so steps are clear. 
 
 ```cuda
-#define BM 128
-#define BN 128
-#define BK 8
-#define TM 8
-#define TN 8
+// ==================== MAIN KERNEL (NO BOUNDS CHECKING) ====================
+// This kernel handles all interior blocks where we know all memory accesses are in-bounds
+// No thread divergence, maximum performance
+template <const int BM, const int BN, const int BK, const int TM, const int TN>
+__global__ void sgemm_blocktiling_2d_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
+                                            float alpha, const float *matrix_a,
+                                            const float *matrix_b, float beta,
+                                            float *matrix_c)
+{
+    const uint block_row = blockIdx.x;
+    const uint block_col = blockIdx.y;
 
-__global__ void sgemm_2d_blocktiling(int M, int N, int K,
-                                     float alpha, const float *A,
-                                     const float *B, float beta,
-                                     float *C) {
-    __shared__ float As[BM * BK];
-    __shared__ float Bs[BK * BN];
+    // Shared memory tiles for A and B
+    __shared__ float tile_a[BM * BK];
+    __shared__ float tile_b[BK * BN];
 
-    // Thread-local cache for results (TM x TN)
-    float threadResults[TM * TN] = {0.0};
-    float regM[TM];
-    float regN[TN];
+    // Calculate thread position within the block
+    // Each thread is responsible for computing a TM x TN output tile
+    // Total threads per block = (BM / TM) * (BN / TN)
+    const uint thread_row = threadIdx.x / (BN / TN); // Which row of thread tiles
+    const uint thread_col = threadIdx.x % (BN / TN); // Which column of thread tiles
 
-    const uint threadRow = threadIdx.x / (BN / TN);
-    const uint threadCol = threadIdx.x % (BN / TN);
+    // Thread count and loading strategy
+    // We have (BM/TM) * (BN/TN) = 64 threads
+    // tile_a needs BM * BK = 64 * 8 = 512 elements
+    // tile_b needs BK * BN = 8 * 64 = 512 elements
+    // Each thread must load 512/64 = 8 elements from each tile
+    const uint num_threads = (BM / TM) * (BN / TN);
 
-    for (int bkIdx = 0; bkIdx < K; bkIdx += BK) {
-        // Load tiles
-        // ... (loading code)
+    // Position input/output matrix pointers at the start of this block's tile
+    matrix_a += block_row * BM * num_cols_a;
+    matrix_b += block_col * BN;
+    matrix_c += block_row * BM * num_cols_b + block_col * BN;
+
+    // Allocate thread-local storage in registers for:
+    // 1. Final results: TM x TN output values this thread computes
+    // 2. register_m: TM values from matrix A (reused across TN computations)
+    // 3. register_n: TN values from matrix B (reused across TM computations)
+    float thread_results[TM * TN] = {0.0f};
+    float register_m[TM] = {0.0f};
+    float register_n[TN] = {0.0f};
+
+    // Outer loop over block tiles along K dimension
+    for (uint block_k_idx = 0; block_k_idx < num_cols_a; block_k_idx += BK)
+    {
+// ==================== LOAD TILES INTO SHARED MEMORY ====================
+
+// Load tile from matrix A into shared memory
+// Layout: tile_a is BM x BK (64 x 8 = 512 elements)
+// With 64 threads, each thread loads 512/64 = 8 elements
+// NO BOUNDS CHECKING - assumes all accesses are in-bounds
+#pragma unroll
+        for (uint load_offset = 0; load_offset < BM * BK; load_offset += num_threads)
+        {
+            uint load_idx = threadIdx.x + load_offset;
+            uint a_row = load_idx / BK;
+            uint a_col = load_idx % BK;
+            tile_a[load_idx] = matrix_a[a_row * num_cols_a + a_col];
+        }
+
+// Load tile from matrix B into shared memory
+// Layout: tile_b is BK x BN (8 x 64 = 512 elements)
+// With 64 threads, each thread loads 512/64 = 8 elements
+// NO BOUNDS CHECKING - assumes all accesses are in-bounds
+#pragma unroll
+        for (uint load_offset = 0; load_offset < BK * BN; load_offset += num_threads)
+        {
+            uint load_idx = threadIdx.x + load_offset;
+            uint b_row = load_idx / BN;
+            uint b_col = load_idx % BN;
+            tile_b[load_idx] = matrix_b[b_row * num_cols_b + b_col];
+        }
 
         __syncthreads();
 
-        // Compute TM x TN outer product
-        for (int dotIdx = 0; dotIdx < BK; ++dotIdx) {
-            // Load TM elements from A
-            for (int i = 0; i < TM; ++i) {
-                regM[i] = As[(threadRow * TM + i) * BK + dotIdx];
-            }
-            // Load TN elements from B
-            for (int i = 0; i < TN; ++i) {
-                regN[i] = Bs[dotIdx * BN + threadCol * TN + i];
+        // Advance block tile pointers for next iteration
+        matrix_a += BK;
+        matrix_b += BK * num_cols_b;
+
+        // ==================== COMPUTE USING REGISTER BLOCKING ====================
+
+        // For each element along the K dimension of the current block tile
+        for (uint dot_idx = 0; dot_idx < BK; ++dot_idx)
+        {
+            // Load TM elements from tile_a into registers
+            // These are the elements in column dot_idx, rows [thread_row*TM : thread_row*TM+TM)
+            // We load these once and reuse them for all TN columns
+            for (uint i = 0; i < TM; ++i)
+            {
+                register_m[i] = tile_a[(thread_row * TM + i) * BK + dot_idx];
             }
 
-            // Compute outer product: TM x TN results
-            for (int resIdxM = 0; resIdxM < TM; ++resIdxM) {
-                for (int resIdxN = 0; resIdxN < TN; ++resIdxN) {
-                    threadResults[resIdxM * TN + resIdxN] +=
-                        regM[resIdxM] * regN[resIdxN];
+            // Load TN elements from tile_b into registers
+            // These are the elements in row dot_idx, columns [thread_col*TN : thread_col*TN+TN)
+            // We load these once and reuse them for all TM rows
+            for (uint i = 0; i < TN; ++i)
+            {
+                register_n[i] = tile_b[dot_idx * BN + thread_col * TN + i];
+            }
+
+            // Compute outer product of register_m and register_n, accumulating into thread_results
+            // This is the key 2D blocking: we compute TM x TN results using cached values
+            // For each result position (res_m, res_n), compute: result += register_m[res_m] * register_n[res_n]
+            for (uint res_idx_m = 0; res_idx_m < TM; ++res_idx_m)
+            {
+                for (uint res_idx_n = 0; res_idx_n < TN; ++res_idx_n)
+                {
+                    // Store in row-major order: thread_results[res_idx_m * TN + res_idx_n]
+                    thread_results[res_idx_m * TN + res_idx_n] +=
+                        register_m[res_idx_m] * register_n[res_idx_n];
                 }
             }
         }
+
         __syncthreads();
     }
 
-    // Write TM x TN results
-    for (int resIdxM = 0; resIdxM < TM; ++resIdxM) {
-        for (int resIdxN = 0; resIdxN < TN; ++resIdxN) {
-            C[(threadRow * TM + resIdxM) * N +
-              threadCol * TN + resIdxN] =
-                alpha * threadResults[resIdxM * TN + resIdxN] +
-                beta * C[(threadRow * TM + resIdxM) * N +
-                         threadCol * TN + resIdxN];
+// ==================== WRITE RESULTS TO GLOBAL MEMORY ====================
+
+// Write the TM x TN tile of results computed by this thread back to global memory
+// Apply scaling: C = alpha * (A @ B) + beta * C
+// NO BOUNDS CHECKING - assumes all accesses are in-bounds
+#pragma unroll
+    for (uint res_idx_m = 0; res_idx_m < TM; ++res_idx_m)
+    {
+#pragma unroll
+        for (uint res_idx_n = 0; res_idx_n < TN; ++res_idx_n)
+        {
+            const uint c_idx = (thread_row * TM + res_idx_m) * num_cols_b +
+                               (thread_col * TN + res_idx_n);
+            matrix_c[c_idx] = alpha * thread_results[res_idx_m * TN + res_idx_n] +
+                              beta * matrix_c[c_idx];
         }
     }
 }
+
 ```
 
-### Multi-level Tiling Hierarchy
+### Caller
 
-1. **Block-level tiling**: BM×BN block processes BM×BN output
-2. **Warp-level**: Implicit through thread organization
-3. **Thread-level tiling**: Each thread computes TM×TN outputs
-4. **Register-level**: Cache inputs in registers for reuse
+```cuda
+
+void sgemm_blocktiling_2d(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
+                          torch::Tensor &output_matrix, float alpha, float beta)
+{
+    // Validate inputs
+    TORCH_CHECK(matrix_a.device().is_cuda(), "Matrix A must be on CUDA device");
+    TORCH_CHECK(matrix_b.device().is_cuda(), "Matrix B must be on CUDA device");
+    TORCH_CHECK(matrix_a.dtype() == torch::kFloat32, "Matrix A must be float32");
+    TORCH_CHECK(matrix_b.dtype() == torch::kFloat32, "Matrix B must be float32");
+    TORCH_CHECK(matrix_a.dim() == 2, "Matrix A must be 2D");
+    TORCH_CHECK(matrix_b.dim() == 2, "Matrix B must be 2D");
+
+    const int num_rows_a = static_cast<int>(matrix_a.size(0));
+    const int num_cols_a = static_cast<int>(matrix_a.size(1));
+    const int num_cols_b = static_cast<int>(matrix_b.size(1));
+
+    TORCH_CHECK(matrix_b.size(0) == num_cols_a, "Matrix dimensions must match: A is MxK, B must be KxN");
+
+    TORCH_CHECK(output_matrix.device().is_cuda(), "Matrix C must be on CUDA device");
+    TORCH_CHECK(output_matrix.dtype() == torch::kFloat32, "Matrix C must be float32");
+    TORCH_CHECK(output_matrix.size(0) == num_rows_a && output_matrix.size(1) == num_cols_b, "Matrix C must be MxN");
+
+    // Get raw device pointers
+    const float *d_matrix_a = matrix_a.data_ptr<float>();
+    const float *d_matrix_b = matrix_b.data_ptr<float>();
+    float *d_output_matrix = output_matrix.data_ptr<float>();
+
+    // Template parameters for kernel
+    // BM, BN: Block tile dimensions (64x64 output block per thread block)
+    // BK: Inner dimension block size (8 elements processed per iteration)
+    // TM, TN: Thread tile dimensions (8x8 output tile per thread)
+    constexpr int BM = 64;
+    constexpr int BN = 64;
+    constexpr int BK = 8;
+    constexpr int TM = 8;
+    constexpr int TN = 8;
+
+    // Configure kernel launch
+    // Number of threads = (BM / TM) * (BN / TN) = (64 / 8) * (64 / 8) = 8 * 8 = 64 threads per block
+    dim3 block_dim((BM / TM) * (BN / TN));
+
+    // Calculate number of complete blocks and edge blocks
+    const int num_blocks_m = CEIL_DIV(num_rows_a, BM);
+    const int num_blocks_n = CEIL_DIV(num_cols_b, BN);
+    const int main_blocks_m = num_rows_a / BM; // Complete blocks in M dimension
+    const int main_blocks_n = num_cols_b / BN; // Complete blocks in N dimension
+
+    // Launch main kernel for interior blocks (no bounds checking needed)
+    if (main_blocks_m > 0 && main_blocks_n > 0)
+    {
+        dim3 main_grid(main_blocks_m, main_blocks_n);
+        sgemm_blocktiling_2d_kernel<BM, BN, BK, TM, TN><<<main_grid, block_dim>>>(
+            num_rows_a, num_cols_b, num_cols_a,
+            alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix);
+    }
+
+    // Launch edge kernel for right edge (last column of blocks)
+    if (main_blocks_m > 0 && num_blocks_n > main_blocks_n)
+    {
+        dim3 edge_right_grid(main_blocks_m, 1);
+        sgemm_blocktiling_2d_edge_kernel<BM, BN, BK, TM, TN><<<edge_right_grid, block_dim>>>(
+            num_rows_a, num_cols_b, num_cols_a,
+            alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix,
+            0, main_blocks_n);
+    }
+
+    // Launch edge kernel for bottom edge (last row of blocks)
+    if (num_blocks_m > main_blocks_m && main_blocks_n > 0)
+    {
+        dim3 edge_bottom_grid(1, main_blocks_n);
+        sgemm_blocktiling_2d_edge_kernel<BM, BN, BK, TM, TN><<<edge_bottom_grid, block_dim>>>(
+            num_rows_a, num_cols_b, num_cols_a,
+            alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix,
+            main_blocks_m, 0);
+    }
+
+    // Launch edge kernel for bottom-right corner (if both edges exist)
+    if (num_blocks_m > main_blocks_m && num_blocks_n > main_blocks_n)
+    {
+        dim3 edge_corner_grid(1, 1);
+        sgemm_blocktiling_2d_edge_kernel<BM, BN, BK, TM, TN><<<edge_corner_grid, block_dim>>>(
+            num_rows_a, num_cols_b, num_cols_a,
+            alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix,
+            main_blocks_m, main_blocks_n);
+    }
+}
+
+```
 
 <div id="2d-tiling-viz"></div>
 
-### Triton Implementation
+### Performance Results
 
-```python
-@triton.jit
-def matmul_kernel_2d_tiling(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+Looking at the benchmark results for 4096×4096 matrices, the 2D block tiling kernel shows furthre performance gains:
 
-    # Compute block offsets
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
 
-    # Initialize accumulators for 2D tile
-    # Each element in this array represents a result value
-    # Triton manages the register tiling automatically
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    # Iterate over K dimension in blocks
-    for k in range(0, K, BLOCK_SIZE_K):
-        offs_k = k + tl.arange(0, BLOCK_SIZE_K)
+> **Performance Improvement:**
+> - **1.66× TFLOPS improvement** over 1D block tiling (18.40 → 30.55 TFLOPS)
+> - **1.66× bandwidth improvement** (26.96 → 44.75 GB/s)
+> - **38.7% of PyTorch's performance** (79.00 TFLOPS)
+> - **46.9× faster than naive** (0.652 → 30.55 TFLOPS)
+{: .prompt-info}
 
-        # Load 2D tiles from A and B
-        # The 2D array structure enables 2D register tiling
-        a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
-                          offs_k[None, :] * stride_ak)
-        a = tl.load(a_ptrs, mask=(offs_am[:, None] < M) &
-                    (offs_k[None, :] < K), other=0.0)
+**Comparison vs Previous Kernels (4096×4096):**
 
-        b_ptrs = b_ptr + (offs_k[:, None] * stride_bk +
-                          offs_bn[None, :] * stride_bn)
-        b = tl.load(b_ptrs, mask=(offs_k[:, None] < K) &
-                    (offs_bn[None, :] < N), other=0.0)
+| Kernel | Time (ms) | TFLOPS | Bandwidth (GB/s) | vs PyTorch | Speedup over Naive |
+|--------|-----------|---------|------------------|------------|-------------------|
+| Naive | 210.75 | 0.65 | 0.96 | 0.8% | 1.0× |
+| Coalesced | 26.96 | 5.10 | 7.47 | 6.5% | 7.8× |
+| Shared Memory | 22.67 | 6.06 | 8.88 | 7.7% | 9.3× |
+| 1D Block Tiling | 7.47 | 18.40 | 26.96 | 23.3% | 28.2× |
+| **2D Block Tiling** | **4.50** | **30.55** | **44.75** | **38.7%** | **46.9×** |
+| PyTorch | 1.74 | 79.00 | 115.73 | 100% | 121.2× |
 
-        # Compute outer product with 2D tiling
-        # tl.dot performs optimized matrix multiplication with:
-        # - 2D register blocking
-        # - Efficient outer product computation
-        # - Automatic register allocation
-        accumulator += tl.dot(a, b)
+### Performance Across Matrix Sizes
 
-    c = accumulator.to(tl.float32)
+![2D block tiling performance](/assets/explore_gemm_2d_blocktiling_performance.png)
 
-    # Write 2D tile to output
-    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
-    mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)
-    tl.store(c_ptrs, c, mask=mask)
+As next steps, when we check our kernel in Nsight compute, we get more pointers to improve performance:
 
-def matmul_2d_tiling(a, b):
-    M, K = a.shape
-    K, N = b.shape
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
+> - **L1TEX Global Store Access Pattern:** The memory access pattern for global stores to L1TEX might not be optimal. On average, only 4.0 of the 32 bytes transmitted per sector are utilized by each thread. This could possibly be caused by a stride between threads. Check the Source Counters section for uncoalesced global stores.
+> - **Shared Load Bank Conflicts:** The memory access pattern for shared loads might not be optimal and causes on average a 5.6 - way bank conflict across all 167772160 shared load requests.This results in 503316480 bank conflicts, which represent 53.57% of the overall 939534036 wavefronts for shared loads. Check the Source Counters section for uncoalesced shared loads.
+> - **Uncoalesced Shared Accesses:** This kernel has uncoalesced shared accesses resulting in a total of 369098752 excessive wavefronts (37% of the total 1006632960 wavefronts). Check the L1 Wavefronts Shared Excessive table for the primary source locations. The CUDA Best Practices Guide has an example on optimizing shared memory accesses.
 
-    # Larger blocks for 2D tiling
-    BLOCK_SIZE_M = 128
-    BLOCK_SIZE_N = 128
-    BLOCK_SIZE_K = 32
-
-    grid = lambda META: (
-        triton.cdiv(M, BLOCK_SIZE_M),
-        triton.cdiv(N, BLOCK_SIZE_N),
-    )
-
-    matmul_kernel_2d_tiling[grid](
-        a, b, c,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K,
-    )
-    return c
-```
-
-**Triton's 2D Tiling Abstraction**:
-- 2D arrays (`accumulator`, `a`, `b`) naturally express 2D tiling
-- `tl.dot()` internally implements optimal 2D register blocking
-- No manual thread-level indexing required
-- Compiler generates efficient outer product code with register reuse
-
-### Performance Analysis
-
-- **Performance**: 15,972 GFLOPs (1.9× improvement)
-- **Register Pressure**: TM×TN + TM + TN registers
-- **Arithmetic Intensity**: Further improved through 2D reuse
-- **Thread Occupancy**: May decrease due to register usage
+![NCU After 2D Tiling](/assets/explore_gemm_ncu_after_2d_tiling.png)
 
 ## Kernel 6: Vectorized Memory Access
 
 ### Concept
 
-Use vector types (`float4`) to load 128 bits in a single instruction instead of four separate 32-bit loads.
+Many CUDA kernels are **bandwidth-bound**, meaning their performance is limited by memory transfer speed rather than compute throughput. One powerful optimization is to use **vectorized memory operations** to increase effective bandwidth utilization.
+
+CUDA provides built-in vector types (`float2`, `float4`, `int2`, `int4`) that enable loading or storing multiple values in a single instruction. Instead of issuing four separate 32-bit loads, a single `float4` load can fetch **128 bits (16 bytes)** at once.
+
+> Good reference for Vectorized Memory Access for Performance: [CUDA Pro Tip: Increase Performance with Vectorized Memory Access](https://developer.nvidia.com/blog/cuda-pro-tip-increase-performance-with-vectorized-memory-access/)
+{: .prompt-tip}
+
+In our 2D block tiling kernel, each thread loads elements from shared memory to registers. Currently, these loads happen as individual 32-bit transactions:
 
 ```cuda
-#define BM 128
-#define BN 128
-#define BK 8
-#define TM 8
-#define TN 8
-
-__global__ void sgemm_vectorized(int M, int N, int K,
-                                 float alpha, const float *A,
-                                 const float *B, float beta,
-                                 float *C) {
-    __shared__ float As[BM * BK];
-    __shared__ float Bs[BK * BN];
-
-    float threadResults[TM * TN] = {0.0};
-
-    // Vectorized loading
-    for (int bkIdx = 0; bkIdx < K; bkIdx += BK) {
-        // Load 4 floats at once using float4
-        float4 tmp = reinterpret_cast<const float4*>(
-            &A[...])[loadOffset];
-        As[...] = tmp.x;
-        As[...] = tmp.y;
-        As[...] = tmp.z;
-        As[...] = tmp.w;
-
-        // Similar for B
-        // ...
-
-        __syncthreads();
-
-        // Computation (same as before)
-        // ...
+// Current approach: scalar loads
+for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
+    // Load TM elements from tile_a into registers
+    for (uint i = 0; i < TM; ++i) {
+        register_m[i] = tile_a[(thread_row * TM + i) * BK + dot_idx];  // 32-bit load
     }
 
-    // Vectorized storing
-    reinterpret_cast<float4*>(&C[...])[storeOffset] =
-        make_float4(threadResults[0], threadResults[1],
-                    threadResults[2], threadResults[3]);
+    // Load TN elements from tile_b into registers
+    for (uint i = 0; i < TN; ++i) {
+        register_n[i] = tile_b[dot_idx * BN + thread_col * TN + i];  // 32-bit load
+    }
+
+    // ... compute outer product
 }
 ```
 
-### Vector Memory Access Benefits
+If `TM=8`, we're issuing 8 separate load instructions. With vectorization, we can combine these into 2 loads of `float4`:
 
-**Scalar load** (4× float):
 ```cuda
-float a = A[i];
-float b = A[i+1];
-float c = A[i+2];
-float d = A[i+3];
-```
-- 4 instructions
-- Potentially 4 memory transactions
+// Vectorized approach: load 4 elements at once
+for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
+    // Load 8 elements from tile_a using 2× float4 instead of 8× float
+    *reinterpret_cast<float4*>(&register_m[0]) =
+        *reinterpret_cast<const float4*>(&tile_a[(thread_row * TM) * BK + dot_idx]);
+    *reinterpret_cast<float4*>(&register_m[4]) =
+        *reinterpret_cast<const float4*>(&tile_a[(thread_row * TM + 4) * BK + dot_idx]);
 
-**Vector load** (1× float4):
+    // Load 8 elements from tile_b using 2× float4 instead of 8× float
+    *reinterpret_cast<float4*>(&register_n[0]) =
+        *reinterpret_cast<const float4*>(&tile_b[dot_idx * BN + thread_col * TN]);
+    *reinterpret_cast<float4*>(&register_n[4]) =
+        *reinterpret_cast<const float4*>(&tile_b[dot_idx * BN + thread_col * TN + 4]);
+}
+```
+
+### How Vector Loads Work
+
+When you load a `float4`, the compiler emits a **128-bit vectorized instruction** (`LDG.E.128`) instead of four 32-bit loads (`LDG.E`):
+
+| Load Type | Size | Instruction | Elements | Instructions Needed |
+|-----------|------|-------------|----------|---------------------|
+| `float` | 32 bits | `LDG.E` | 1 | 4 (for 4 elements) |
+| `float2` | 64 bits | `LDG.E.64` | 2 | 2 (for 4 elements) |
+| `float4` | 128 bits | `LDG.E.128` | 4 | 1 (for 4 elements) |
+
+
+> Vectorized loads only work efficiently when data is properly aligned to vector size e.g. 16 bytes for `float4` and access patterns respect alignment boundaries
+{: .prompt-info}
+
 ```cuda
-float4 vec = *reinterpret_cast<const float4*>(&A[i]);
-```
-- 1 instruction
-- 1 memory transaction (if aligned)
-- Guaranteed consecutive access
+// ✅ Valid: base pointer from cudaMalloc is aligned
+float4* vec_ptr = reinterpret_cast<float4*>(device_array);
+float4 data = vec_ptr[i];  // OK if i maintains alignment
 
-<div id="vectorized-viz"></div>
-
-### Triton Implementation
-
-```python
-@triton.jit
-def matmul_kernel_vectorized(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
-
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-
-    for k in range(0, K, BLOCK_SIZE_K):
-        offs_k = k + tl.arange(0, BLOCK_SIZE_K)
-
-        # Triton automatically vectorizes memory accesses
-        # When loading contiguous data, the compiler generates
-        # vectorized load instructions (e.g., 128-bit loads)
-        a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
-                          offs_k[None, :] * stride_ak)
-        a = tl.load(a_ptrs, mask=(offs_am[:, None] < M) &
-                    (offs_k[None, :] < K), other=0.0)
-
-        b_ptrs = b_ptr + (offs_k[:, None] * stride_bk +
-                          offs_bn[None, :] * stride_bn)
-        b = tl.load(b_ptrs, mask=(offs_k[:, None] < K) &
-                    (offs_bn[None, :] < N), other=0.0)
-
-        accumulator += tl.dot(a, b)
-
-    c = accumulator.to(tl.float32)
-
-    # Vectorized stores happen automatically
-    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
-    mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)
-    tl.store(c_ptrs, c, mask=mask)
-
-def matmul_vectorized(a, b):
-    M, K = a.shape
-    K, N = b.shape
-    c = torch.empty((M, N), device=a.device, dtype=a.dtype)
-
-    BLOCK_SIZE_M = 128
-    BLOCK_SIZE_N = 128
-    BLOCK_SIZE_K = 32
-
-    grid = lambda META: (
-        triton.cdiv(M, BLOCK_SIZE_M),
-        triton.cdiv(N, BLOCK_SIZE_N),
-    )
-
-    matmul_kernel_vectorized[grid](
-        a, b, c,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K,
-    )
-    return c
+// ❌ Invalid: offset breaks alignment
+float* offset_ptr = device_array + 1;  // Now only 4-byte aligned
+float4* bad_vec = reinterpret_cast<float4*>(offset_ptr);  // Misaligned!
 ```
 
-**Triton's Automatic Vectorization**:
-- No explicit `float4` or vector types needed
-- Compiler automatically detects vectorization opportunities
-- Generates optimal load/store instructions (ldg.128, stg.128)
-- Handles alignment automatically based on pointer analysis
-- Simplifies code while maintaining performance
+#### Vectorized load example:
+```cuda
+/*
+- 1 vectorized load instruction
+- Guaranteed single 128-bit memory transaction
+- Hardware-enforced coalescing
+*/
+float4 vec = *reinterpret_cast<const float4*>(&A[i]);  // LDG.E.128 (128-bit)
+float a = vec.x;
+float b = vec.y;
+float c = vec.z;
+float d = vec.w;
+```
 
-**Key Difference**: In CUDA, you manually manage vectorization with `float4`, alignment hints, and pointer casting. Triton's compiler does this optimization automatically.
+> **Trade-Offs**: Vectorized `float4` loads reduce memory transactions but increase register pressure (potentially lowering occupancy), require tail handling for non-divisible sizes, and may not benefit shared memory accesses with strided layouts without restructuring.
+>
+> **NOTE: In our case, we will skip the tail handling and assume the inputs is aligned to the block sizes used in the kernel just to simplify the kernel**
+{: .prompt-info }
+
+### Kernel
+
+```cuda
+template <const int BM, const int BN, const int BK, const int TM, const int TN>
+__global__ void sgemm_vectorize_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
+                                       float alpha, const float *matrix_a,
+                                       const float *matrix_b, float beta,
+                                       float *matrix_c)
+{
+    const uint block_row = blockIdx.y;
+    const uint block_col = blockIdx.x;
+
+    // Thread indices for computing output tile
+    const uint thread_col = threadIdx.x % (BN / TN);
+    const uint thread_row = threadIdx.x / (BN / TN);
+
+    // Shared memory tiles - stored in column-major for A to enable coalescing
+    __shared__ float tile_a[BM * BK];
+    __shared__ float tile_b[BK * BN];
+
+    // Position matrix pointers at the start of this block's tile
+    matrix_a += block_row * BM * num_cols_a;
+    matrix_b += block_col * BN;
+    matrix_c += block_row * BM * num_cols_b + block_col * BN;
+
+    // Thread indices for vectorized loading
+    // Load 4 floats at a time using float4
+    const uint inner_row_a = threadIdx.x / (BK / 4);
+    const uint inner_col_a = threadIdx.x % (BK / 4);
+    const uint inner_row_b = threadIdx.x / (BN / 4);
+    const uint inner_col_b = threadIdx.x % (BN / 4);
+
+    // Allocate register storage
+    float thread_results[TM * TN] = {0.0f};
+    float register_m[TM] = {0.0f};
+    float register_n[TN] = {0.0f};
+
+    // Outer loop over K dimension
+    for (uint block_k_idx = 0; block_k_idx < num_cols_a; block_k_idx += BK) {
+        // ==================== VECTORIZED LOAD FROM GLOBAL MEMORY ====================
+
+        // Load tile_a using float4 vectorized loads
+        // Store in transposed layout: tile_a[col][row] for coalesced shared memory access
+        float4 tmp_a = reinterpret_cast<const float4*>(
+            &matrix_a[inner_row_a * num_cols_a + inner_col_a * 4])[0];
+        tile_a[(inner_col_a * 4 + 0) * BM + inner_row_a] = tmp_a.x;
+        tile_a[(inner_col_a * 4 + 1) * BM + inner_row_a] = tmp_a.y;
+        tile_a[(inner_col_a * 4 + 2) * BM + inner_row_a] = tmp_a.z;
+        tile_a[(inner_col_a * 4 + 3) * BM + inner_row_a] = tmp_a.w;
+
+        // Load tile_b using float4 vectorized loads
+        // Store in row-major layout: tile_b[row][col]
+        float4 tmp_b = reinterpret_cast<const float4*>(
+            &matrix_b[inner_row_b * num_cols_b + inner_col_b * 4])[0];
+        tile_b[inner_row_b * BN + inner_col_b * 4 + 0] = tmp_b.x;
+        tile_b[inner_row_b * BN + inner_col_b * 4 + 1] = tmp_b.y;
+        tile_b[inner_row_b * BN + inner_col_b * 4 + 2] = tmp_b.z;
+        tile_b[inner_row_b * BN + inner_col_b * 4 + 3] = tmp_b.w;
+
+        __syncthreads();
+
+        // Advance pointers for next tile
+        matrix_a += BK;
+        matrix_b += BK * num_cols_b;
+
+        // ==================== COMPUTE USING REGISTER BLOCKING ====================
+
+        for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
+            // Load TM elements from tile_a (transposed layout)
+            #pragma unroll
+            for (uint i = 0; i < TM; ++i) {
+                register_m[i] = tile_a[dot_idx * BM + thread_row * TM + i];
+            }
+
+            // Load TN elements from tile_b
+            #pragma unroll
+            for (uint i = 0; i < TN; ++i) {
+                register_n[i] = tile_b[dot_idx * BN + thread_col * TN + i];
+            }
+
+            // Outer product accumulation
+            #pragma unroll
+            for (uint res_idx_m = 0; res_idx_m < TM; ++res_idx_m) {
+                #pragma unroll
+                for (uint res_idx_n = 0; res_idx_n < TN; ++res_idx_n) {
+                    thread_results[res_idx_m * TN + res_idx_n] +=
+                        register_m[res_idx_m] * register_n[res_idx_n];
+                }
+            }
+        }
+
+        __syncthreads();
+    }
+
+    // ==================== WRITE RESULTS TO GLOBAL MEMORY ====================
+
+    // Write results with alpha/beta scaling
+    #pragma unroll
+    for (uint res_idx_m = 0; res_idx_m < TM; ++res_idx_m) {
+        #pragma unroll
+        for (uint res_idx_n = 0; res_idx_n < TN; ++res_idx_n) {
+            const uint c_idx = (thread_row * TM + res_idx_m) * num_cols_b +
+                               (thread_col * TN + res_idx_n);
+            matrix_c[c_idx] = alpha * thread_results[res_idx_m * TN + res_idx_n] +
+                              beta * matrix_c[c_idx];
+        }
+    }
+}
+```
+
+### Caller
+
+```cuda
+void sgemm_vectorize(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
+                     torch::Tensor &output_matrix, float alpha, float beta)
+{
+    // Validate inputs
+    TORCH_CHECK(matrix_a.device().is_cuda(), "Matrix A must be on CUDA device");
+    TORCH_CHECK(matrix_b.device().is_cuda(), "Matrix B must be on CUDA device");
+    TORCH_CHECK(matrix_a.dtype() == torch::kFloat32, "Matrix A must be float32");
+    TORCH_CHECK(matrix_b.dtype() == torch::kFloat32, "Matrix B must be float32");
+    TORCH_CHECK(matrix_a.dim() == 2, "Matrix A must be 2D");
+    TORCH_CHECK(matrix_b.dim() == 2, "Matrix B must be 2D");
+
+    const int num_rows_a = static_cast<int>(matrix_a.size(0));
+    const int num_cols_a = static_cast<int>(matrix_a.size(1));
+    const int num_cols_b = static_cast<int>(matrix_b.size(1));
+
+    TORCH_CHECK(matrix_b.size(0) == num_cols_a, "Matrix dimensions must match: A is MxK, B must be KxN");
+
+    TORCH_CHECK(output_matrix.device().is_cuda(), "Matrix C must be on CUDA device");
+    TORCH_CHECK(output_matrix.dtype() == torch::kFloat32, "Matrix C must be float32");
+    TORCH_CHECK(output_matrix.size(0) == num_rows_a && output_matrix.size(1) == num_cols_b, "Matrix C must be MxN");
+
+    // Get raw device pointers
+    const float *d_matrix_a = matrix_a.data_ptr<float>();
+    const float *d_matrix_b = matrix_b.data_ptr<float>();
+    float *d_output_matrix = output_matrix.data_ptr<float>();
+
+    // Template parameters for kernel
+    constexpr int BM = 128;
+    constexpr int BN = 128;
+    constexpr int BK = 8;
+    constexpr int TM = 8;
+    constexpr int TN = 8;
+
+    // Validate dimensions are multiples of tile sizes
+    TORCH_CHECK(num_rows_a % BM == 0, "Matrix A rows must be multiple of ", BM);
+    TORCH_CHECK(num_cols_a % BK == 0, "Matrix A cols must be multiple of ", BK);
+    TORCH_CHECK(num_cols_b % BN == 0, "Matrix B cols must be multiple of ", BN);
+
+    // Configure kernel launch
+    dim3 block_dim((BM / TM) * (BN / TN));
+    dim3 grid_dim(num_cols_b / BN, num_rows_a / BM);
+
+    // Launch kernel
+    sgemm_vectorize_kernel<BM, BN, BK, TM, TN><<<grid_dim, block_dim>>>(
+        num_rows_a, num_cols_b, num_cols_a,
+        alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix);
+}
+```
 
 ### Performance Analysis
 
-- **Performance**: 18,237 GFLOPs (1.14× improvement)
-- **Memory Instructions**: Reduced by 4×
-- **Alignment Requirements**: Must align to 16-byte boundaries
-- **Instruction-level Parallelism**: Improved
+The vectorized kernel shows **mixed results** — performance **degrades** compared to 2D block tiling for small to medium matrices but shows **significant improvements** at larger sizes.
 
-## Kernel 7: Autotuning
+> **Performance at 4096×4096:**
+> - **1.27× TFLOPS improvement** over 2D block tiling (30.85 → 39.00 TFLOPS)
+> - **1.26× bandwidth improvement** (45.19 → 57.14 GB/s)
+> - **46.3% of PyTorch's performance** (84.23 TFLOPS)
+> - **59.7× faster than naive** (0.653 → 39.00 TFLOPS)
+{: .prompt-info}
 
-### Concept
+**Comparison vs Previous Kernels (4096×4096):**
 
-Systematically explore the parameter space to find optimal configuration:
-- Block sizes: BM, BN, BK
-- Thread tile sizes: TM, TN
-- Number of threads per block
+| Kernel | Time (ms) | TFLOPS | Bandwidth (GB/s) | vs PyTorch | Speedup over Naive |
+|--------|-----------|---------|------------------|------------|-------------------|
+| Naive | 210.33 | 0.65 | 0.96 | 0.8% | 1.0× |
+| Coalesced | 26.92 | 5.11 | 7.48 | 6.1% | 7.8× |
+| Shared Memory | 22.42 | 6.13 | 8.98 | 7.3% | 9.4× |
+| 1D Block Tiling | 7.44 | 18.48 | 27.07 | 21.9% | 28.3× |
+| 2D Block Tiling | 4.46 | 30.85 | 45.19 | 36.6% | 47.3× |
+| **Vectorized** | **3.52** | **39.00** | **57.14** | **46.3%** | **59.7×** |
+| PyTorch | 1.63 | 84.23 | 123.38 | 100% | 129.0× |
 
-### Parameter Space
+### Performance Across Matrix Sizes
 
-Example configurations tested:
+![Vectorized performance](/assets/explore_gemm_performance_vectorized.png)
 
-| BM | BN | BK | TM | TN | Threads | GFLOPs |
-|----|----|----|----|----|---------|--------|
-| 64 | 64 | 8 | 8 | 8 | 64 | 15,234 |
-| 128 | 128 | 8 | 8 | 8 | 256 | 18,237 |
-| 128 | 128 | 16 | 8 | 8 | 256 | 19,721 |
-| 64 | 64 | 16 | 8 | 8 | 64 | 17,892 |
 
-### Autotuning Strategy
+## WarpTiling
 
-**CUDA Approach**:
-```python
-def autotune_gemm():
-    best_config = None
-    best_perf = 0
 
-    for BM in [64, 128, 256]:
-        for BN in [64, 128, 256]:
-            for BK in [8, 16, 32]:
-                for TM in [4, 8, 16]:
-                    for TN in [4, 8, 16]:
-                        if is_valid_config(BM, BN, BK, TM, TN):
-                            perf = benchmark_config(BM, BN, BK, TM, TN)
-                            if perf > best_perf:
-                                best_perf = perf
-                                best_config = (BM, BN, BK, TM, TN)
+After optimizing thread-level and block-level tiling, the next step is **warp-level tiling**—exploiting the natural 32-thread warp execution unit in NVIDIA GPUs to achieve better register reuse and computation efficiency.
 
-    return best_config, best_perf
+#### What is Warp Tiling? Tiling Hierarchy in CUTLASS
+
+A **warp** is the fundamental execution unit in NVIDIA GPUs consisting of 32 threads that execute in SIMT (Single Instruction, Multiple Thread) fashion. Warp tiling introduces an additional level in the memory hierarchy:
+
+The NVIDIA CUTLASS library implements a sophisticated tiling strategy that mirrors the GPU's memory hierarchy at multiple levels:
+
+![CUTLASS Memory Hierarchy](/assets/explore_gemm_cutlass_hierarchy.png)
+*Source: [NVIDIA CUTLASS Blog](https://developer.nvidia.com/blog/cutlass-linear-algebra-cuda/)*
+
+**Key Levels:**
+
+1. **Device-level GEMM**: Operates on entire matrices in global memory
+2. **Threadblock-level GEMM**: Each block loads tiles into shared memory (our current 2D block tiling)
+3. **Warp-level GEMM**: Each warp loads fragments from shared memory into registers
+4. **Thread-level GEMM**: Individual threads compute on register data
+5. **Instruction-level**: Hardware instructions (e.g., Tensor Cores on modern GPUs)
+
+#### Why Warp Tiling Matters
+
+{: .prompt-info }
+> **Performance Rationale**: Warp tiling reduces **shared memory bandwidth** as a bottleneck by maximizing **register-level data reuse**. Fragments are kept small in the K dimension to maximize compute intensity relative to data movement.
+
+**Benefits:**
+
+1. **Register Fragment Reuse**: Each warp loads small matrix fragments (typically 16×16 or 8×8) from shared memory into registers and reuses them across multiple computations
+2. **Reduced Shared Memory Pressure**: By keeping fragments small in K dimension, warps maximize computation per byte loaded from shared memory
+3. **Better Instruction-Level Parallelism (ILP)**: Warps can issue independent math instructions to CUDA cores while simultaneously loading next fragments
+4. **Double Buffering**: Warps maintain two register fragment sets—one for current computation, one for prefetching next data
+
+#### Tiling Hierarchy Example
+
+For a typical CUTLASS GEMM configuration:
+
+```
+Threadblock Tile: 128×128×8  (BM=128, BN=128, BK=8)
+    ├─ Warp Tile: 64×64×8     (4 warps process this threadblock)
+    │   └─ Thread Tile: 8×8   (Each of 32 threads in warp computes 8×8)
 ```
 
-**Triton Approach** (Built-in):
-```python
-@triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64},
-                      num_stages=3, num_warps=8),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32},
-                      num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32},
-                      num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32},
-                      num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32},
-                      num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32},
-                      num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32},
-                      num_stages=5, num_warps=2),
-        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32},
-                      num_stages=5, num_warps=2),
-    ],
-    key=['M', 'N', 'K'],
-)
-@triton.jit
-def matmul_kernel_autotuned(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-):
-    # Same kernel code as before
-    # Triton will automatically benchmark all configs
-    # and choose the fastest for each (M, N, K) combination
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+**Compute Intensity Calculation:**
 
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+- **Without warp tiling**: Each element loaded from shared memory → used once
+- **With warp tiling**: Each element loaded → reused across 8×8 thread tile = 64 FMA operations per load
+- **Result**: ~64× improvement in compute intensity
 
-    for k in range(0, K, BLOCK_SIZE_K):
-        offs_k = k + tl.arange(0, BLOCK_SIZE_K)
+#### Implementation Challenges
 
-        a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
-                          offs_k[None, :] * stride_ak)
-        a = tl.load(a_ptrs, mask=(offs_am[:, None] < M) &
-                    (offs_k[None, :] < K), other=0.0)
+1. **Register Pressure**: Warp tiles require significant register storage (e.g., 8×8 float tile = 64 registers per thread)
+2. **Warp Synchronization**: Requires explicit `__syncwarp()` or implicit warp-synchronous execution
+3. **Fragment Loading**: Must carefully orchestrate loads from shared memory to avoid bank conflicts
+4. **Complexity**: Adds another dimension to autotuning (warp tile sizes on top of block/thread tiles)
 
-        b_ptrs = b_ptr + (offs_k[:, None] * stride_bk +
-                          offs_bn[None, :] * stride_bn)
-        b = tl.load(b_ptrs, mask=(offs_k[:, None] < K) &
-                    (offs_bn[None, :] < N), other=0.0)
+#### Modern Extensions: Warp Specialization
 
-        accumulator += tl.dot(a, b)
+In NVIDIA's latest CUTLASS implementations (Hopper GPUs), **warp specialization** takes this further:
 
-    c = accumulator.to(tl.float32)
-    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
-    mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)
-    tl.store(c_ptrs, c, mask=mask)
+- **Producer warps**: Dedicated to loading data from global → shared memory (using TMA - Tensor Memory Accelerator)
+- **Consumer warps**: Dedicated to computation using WGMMA (Warp Group Matrix Multiply-Accumulate)
+- **Asynchronous pipelining**: Producer and consumer warps operate concurrently with minimal synchronization
+
+This represents the state-of-the-art in GEMM optimization, achieving >90% of theoretical peak performance on modern hardware.
+
+{: .prompt-tip }
+> **Further Reading**: For implementation details, see [NVIDIA CUTLASS Documentation](https://docs.nvidia.com/cutlass/media/docs/cpp/efficient_gemm.html) and the [Colfax CUTLASS Tutorial](https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/).
+
+#### Implementation: From 2D Block Tiling to Warp Tiling
+
+Let's extend our previous 2D block tiling kernel to incorporate warp-level tiling. The key difference is adding an intermediate warp-level processing layer between block tiles and thread tiles.
+
+**Evolution of the Tiling Hierarchy:**
+
+```
+Previous (2D Block Tiling):
+Threadblock Tile (BM×BN) → Thread Tile (TM×TN)
+                ↓
+         All threads cooperate
+
+New (Warp Tiling):
+Threadblock Tile (BM×BN) → Warp Tile (WM×WN) → Warp Subtile (WSUBM×WSUBN) → Thread Tile (TM×TN)
+                ↓                    ↓                      ↓
+           All warps          Single warp (32 threads)    Individual threads
 ```
 
-**Triton Autotuning Features**:
-- Built-in `@triton.autotune` decorator
-- Automatically benchmarks all configurations
-- Caches results for different input sizes (`key=['M', 'N', 'K']`)
-- Additional parameters: `num_stages` (pipelining), `num_warps` (parallelism)
-- No need to recompile or manually manage configuration selection
+**Template Parameters:**
 
-### Performance Analysis
+```cpp
+template <const int BM,      // Block tile M dimension (e.g., 128)
+          const int BN,      // Block tile N dimension (e.g., 128)
+          const int BK,      // Block tile K dimension (e.g., 16)
+          const int WM,      // Warp tile M dimension (e.g., 64)
+          const int WN,      // Warp tile N dimension (e.g., 64)
+          const int WNITER,  // Warp subtile iterations in N (e.g., 4)
+          const int TM,      // Thread tile M dimension (e.g., 8)
+          const int TN,      // Thread tile N dimension (e.g., 4)
+          const int NUM_THREADS> // Threads per block (e.g., 128)
+```
 
-- **Performance**: 19,721 GFLOPs (1.08× improvement)
-- **Configuration**: BM=128, BN=128, BK=16, TM=8, TN=8
-- **% of cuBLAS**: 84.8%
-- **Remaining Gap**: cuBLAS uses more advanced techniques (warp-level primitives, tensor cores)
+**Computed Values:**
+
+```cpp
+// Number of warp subtile iterations in M dimension
+WMITER = (WM * WN) / (WARPSIZE * TM * TN * WNITER)
+
+// Warp subtile dimensions
+WSUBM = WM / WMITER  // Height of each warp subtile
+WSUBN = WN / WNITER  // Width of each warp subtile
+```
+
+**Example Configuration:**
+
+For `BM=128, BN=128, WM=64, WN=64` with `NUM_THREADS=128`:
+- **Warps per block**: `(BM/WM) × (BN/WN) = 2 × 2 = 4 warps`
+- **Threads needed**: `4 warps × 32 threads/warp = 128 threads` ✓
+
+#### Key Implementation Details
+
+**1. Warp Placement Within Block**
+
+Each thread determines which warp it belongs to and where that warp sits in the block tile:
+
+```cpp
+const uint warp_idx = threadIdx.x / WARPSIZE;       // Which warp [0-3 for 128 threads]
+const uint warp_col = warp_idx % (BN / WN);         // Warp's column in block
+const uint warp_row = warp_idx / (BN / WN);         // Warp's row in block
+```
+
+**2. Thread Placement Within Warp Subtile**
+
+Each thread determines its position within the warp's subtile:
+
+```cpp
+const uint thread_idx_in_warp = threadIdx.x % WARPSIZE;           // [0-31]
+const uint thread_col_in_warp = thread_idx_in_warp % (WSUBN / TN); // Column index
+const uint thread_row_in_warp = thread_idx_in_warp / (WSUBN / TN); // Row index
+```
+
+For `WSUBN=16, TN=4`: each row has `16/4 = 4 threads`, so 32 threads fill `32/4 = 8 rows`.
+
+**3. Warp-Level Register Caching**
+
+The critical optimization—each warp loads **entire warp tile fragments** into registers:
+
+```cpp
+// Thread-local storage
+float thread_results[WMITER * TM * WNITER * TN] = {0.0f};  // Final accumulation
+float register_m[WMITER * TM] = {0.0f};                     // Cache for A fragments
+float register_n[WNITER * TN] = {0.0f};                     // Cache for B fragments
+```
+
+For `WMITER=2, TM=8, WNITER=4, TN=4`:
+- `thread_results`: `2×8×4×4 = 256 floats`
+- `register_m`: `2×8 = 16 floats` (covers both M subtiles)
+- `register_n`: `4×4 = 16 floats` (covers all 4 N subtiles)
+
+**4. Warp Tile Processing**
+
+The core computation processes the entire warp tile by iterating over warp subtiles:
+
+```cpp
+template <...>
+__device__ void process_warp_tile(...)
+{
+    for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
+        // Load all warp subtile fragments for this K slice
+        for (uint wsub_row_idx = 0; wsub_row_idx < WMITER; ++wsub_row_idx) {
+            for (uint i = 0; i < TM; ++i) {
+                register_m[wsub_row_idx * TM + i] =
+                    tile_a[(dot_idx * BM) + warp_row * WM +
+                           wsub_row_idx * WSUBM + thread_row_in_warp * TM + i];
+            }
+        }
+
+        for (uint wsub_col_idx = 0; wsub_col_idx < WNITER; ++wsub_col_idx) {
+            for (uint i = 0; i < TN; ++i) {
+                register_n[wsub_col_idx * TN + i] =
+                    tile_b[(dot_idx * BN) + warp_col * WN +
+                           wsub_col_idx * WSUBN + thread_col_in_warp * TN + i];
+            }
+        }
+
+        // Compute outer product across all warp subtiles
+        for (uint wsub_row_idx = 0; wsub_row_idx < WMITER; ++wsub_row_idx) {
+            for (uint wsub_col_idx = 0; wsub_col_idx < WNITER; ++wsub_col_idx) {
+                for (uint res_idx_m = 0; res_idx_m < TM; ++res_idx_m) {
+                    for (uint res_idx_n = 0; res_idx_n < TN; ++res_idx_n) {
+                        thread_results[(wsub_row_idx * TM + res_idx_m) * (WNITER * TN) +
+                                      (wsub_col_idx * TN) + res_idx_n] +=
+                            register_m[wsub_row_idx * TM + res_idx_m] *
+                            register_n[wsub_col_idx * TN + res_idx_n];
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+**Why This Works:**
+
+1. **Shared Memory to Register Ratio**: Each element loaded from shared memory is reused across `TM × TN` operations
+2. **Warp-Level Cooperation**: All 32 threads in a warp load complementary fragments simultaneously
+3. **Register Reuse**: Fragments stay in registers across the entire BK iteration, minimizing shared memory traffic
+4. **ILP Opportunity**: The nested loops expose instruction-level parallelism for the compiler
+
+**5. Visualization of Warp Subtiling**
+
+For a concrete example with `WM=64, WN=64, WMITER=2, WNITER=4`:
+
+```
+Warp Tile (64×64)
+┌─────────────────┬─────────────────┬─────────────────┬─────────────────┐
+│  Subtile 0,0    │  Subtile 0,1    │  Subtile 0,2    │  Subtile 0,3    │
+│   (32×16)       │   (32×16)       │   (32×16)       │   (32×16)       │
+│  WSUBM=32       │                 │                 │                 │
+│  WSUBN=16       │                 │                 │                 │
+├─────────────────┼─────────────────┼─────────────────┼─────────────────┤
+│  Subtile 1,0    │  Subtile 1,1    │  Subtile 1,2    │  Subtile 1,3    │
+│   (32×16)       │   (32×16)       │   (32×16)       │   (32×16)       │
+│                 │                 │                 │                 │
+│                 │                 │                 │                 │
+└─────────────────┴─────────────────┴─────────────────┴─────────────────┘
+     ↑
+     Each subtile processed by 32 threads with TM=8, TN=4 thread tiles
+     Thread layout: 4 threads/row × 8 rows = 32 threads per subtile
+```
+
+#### Comparison: 2D Block Tiling vs Warp Tiling
+
+| Aspect | 2D Block Tiling | Warp Tiling |
+|--------|----------------|-------------|
+| **Granularity** | Thread-level only | Warp-level + Thread-level |
+| **Register Usage** | `TM × TN` per thread | `WMITER × TM × WNITER × TN` per thread |
+| **Shared Memory Reuse** | Each load → `TM × TN` reuse | Each load → `TM × TN` reuse (better ILP) |
+| **Code Complexity** | Moderate | High (3-level hierarchy) |
+| **Performance** | Good | Better (especially on larger matrices) |
+| **Flexibility** | 2 tuning parameters (TM, TN) | 4 tuning parameters (WM, WN, WMITER, WNITER) |
+
+The warp tiling approach exposes more optimization opportunities but requires careful tuning of additional parameters to balance register pressure, shared memory bandwidth, and instruction throughput.
 
 ## CUDA vs Triton: A Comprehensive Comparison
 
@@ -1476,94 +1877,7 @@ a = tl.load(a_ptrs, mask=...)
 accumulator += tl.dot(a, b)
 ```
 
-### Performance Characteristics
 
-| Optimization | CUDA Effort | Triton Effort | Performance Gap |
-|--------------|-------------|---------------|-----------------|
-| Naive | Low | Low | ~Same |
-| Coalescing | Medium (manual thread mapping) | Low (automatic) | ~Same |
-| Shared Memory | High (explicit management) | Low (implicit) | ~Same |
-| 1D/2D Tiling | High (manual indexing) | Medium (block sizes) | ~Same |
-| Vectorization | High (float4, alignment) | None (automatic) | ~Same |
-| Autotuning | Very High (custom framework) | Low (built-in) | ~Same |
-
-**Key Finding**: Triton achieves 95-100% of hand-optimized CUDA performance with 3-4× less code.
-
-### Learning Curve
-
-**CUDA**:
-- Requires deep understanding of:
-  - Thread hierarchy (thread, warp, block, grid)
-  - Memory hierarchy (registers, shared, L1/L2, global)
-  - Synchronization primitives
-  - Warp-level operations
-  - PTX/SASS assembly (for debugging)
-- Months to master optimization techniques
-
-**Triton**:
-- Requires understanding of:
-  - Block-level programming model
-  - Memory access patterns (coalescing)
-  - Basic tiling concepts
-- Compiler handles low-level details
-- Weeks to become productive
-
-### When to Use CUDA
-
-✅ **Use CUDA when**:
-- Need absolute maximum performance (last 5-10%)
-- Targeting specific GPU architecture with custom optimizations
-- Using warp-level primitives (shuffle, vote)
-- Implementing algorithms not well-suited to Triton's model
-- Working on GPU architecture research
-
-### When to Use Triton
-
-✅ **Use Triton when**:
-- Rapid prototyping and iteration
-- Custom fused operations for deep learning
-- Don't need every last percent of performance
-- Want portable code across GPU architectures
-- Team has limited GPU programming expertise
-- Need built-in autotuning
-
-### Code Maintainability
-
-**CUDA Challenges**:
-- Manual memory management → more bugs
-- Explicit synchronization → race conditions
-- Architecture-specific code → portability issues
-- Verbose code → harder to understand and modify
-
-**Triton Advantages**:
-- Compiler catches many memory errors
-- Automatic synchronization → fewer bugs
-- Architecture-agnostic code
-- Concise code → easier to maintain
-- Built-in debugging tools
-
-### Real-World Example: Fused Operation
-
-**Task**: Fuse matrix multiplication with ReLU and bias addition: `C = ReLU(A @ B + bias)`
-
-**CUDA**: ~300 lines with manual kernel fusion, shared memory management, and thread coordination.
-
-**Triton**: ~60 lines:
-```python
-@triton.jit
-def fused_matmul_relu_bias(a_ptr, b_ptr, bias_ptr, c_ptr, M, N, K, ...):
-    # ... (load and compute as before)
-    accumulator += tl.dot(a, b)
-
-    # Load bias
-    bias = tl.load(bias_ptr + offs_bn, mask=offs_bn < N)
-
-    # Add bias and apply ReLU
-    c = tl.maximum(accumulator + bias[None, :], 0)
-
-    # Store
-    tl.store(c_ptrs, c, mask=mask)
-```
 
 ## Performance Summary
 
@@ -1576,69 +1890,6 @@ def fused_matmul_relu_bias(a_ptr, b_ptr, bias_ptr, c_ptr, M, N, K, ...):
 3. **Advanced Scheduling**: Better handling of memory latency
 4. **Assembly Optimization**: Hand-tuned PTX/SASS code
 5. **Architecture-specific Tuning**: Optimized per GPU generation
-
-## Key Takeaways
-
-### 1. Memory Access Patterns Dominate Performance
-
-Going from naive (309 GFLOPs) to coalesced (1,987 GFLOPs) gave 6.4× speedup just by changing how threads access memory.
-
-### 2. Memory Hierarchy is Critical
-
-- **Registers**: Fastest, limited per thread
-- **Shared Memory**: Fast, limited per block
-- **Global Memory**: Slow, abundant
-
-Optimal kernels exploit all levels.
-
-### 3. Arithmetic Intensity Matters
-
-$$\text{Arithmetic Intensity} = \frac{\text{FLOPs}}{\text{Bytes Transferred}}$$
-
-Higher intensity → less memory-bound → better performance
-
-### 4. Tiling Enables Reuse
-
-- **Block tiling**: Share data across threads
-- **Thread tiling**: Reuse data in registers
-- **Multi-level tiling**: Combine hierarchies
-
-### 5. Hardware Features Must Be Exploited
-
-- Coalescing for memory bandwidth
-- Vectorization for instruction throughput
-- Occupancy for latency hiding
-
-### 6. Autotuning is Essential
-
-Optimal parameters depend on:
-- Matrix sizes
-- GPU architecture
-- Memory hierarchy
-- Register availability
-
-## Practical Implications
-
-### When to Write Custom GEMM Kernels
-
-✅ **Good reasons:**
-- Learning GPU programming
-- Fused operations (GEMM + activation)
-- Custom data types
-- Extreme memory constraints
-
-❌ **Bad reasons:**
-- General-purpose GEMM (use cuBLAS/rocBLAS)
-- One-off computation
-- Without profiling bottlenecks
-
-### Modern Deep Learning Frameworks
-
-Frameworks like PyTorch and TensorFlow use:
-- cuBLAS/cuDNN for standard operations
-- Custom fused kernels for specific patterns
-- Triton for easy custom kernel development
-- Tensor cores when available
 
 ## Further Optimizations
 
@@ -1670,18 +1921,8 @@ Beyond what we covered:
 - [NVIDIA Performance Guidelines](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/) - Best practices for CUDA optimization
 - [GPU Gems 3](https://developer.nvidia.com/gpugems/gpugems3/contributors) - Advanced GPU programming techniques
 - [Understanding GPU Memory](https://developer.nvidia.com/blog/how-access-global-memory-efficiently-cuda-c-kernels/) - Memory coalescing explained
+- [Shared Memory](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#shared-memory)
 
-## [TO DELETE] Performance Journey Overview
-
-Starting from a naive implementation at ~300 GFLOPs (1.3% of cuBLAS), we'll progressively optimize to reach ~20,000 GFLOPs (84.8% of cuBLAS) through:
-
-1. **Naive Implementation** - 309 GFLOPs (1.3%)
-2. **Global Memory Coalescing** - 1,987 GFLOPs (8.5%)
-3. **Shared Memory Caching** - 2,980 GFLOPs (12.8%)
-4. **1D Block Tiling** - 8,475 GFLOPs (36.5%)
-5. **2D Block Tiling** - 15,972 GFLOPs (68.7%)
-6. **Vectorized Memory Access** - 18,237 GFLOPs (78.4%)
-7. **Autotuning** - 19,721 GFLOPs (84.8%)
 
 <script src="/assets/js/gemm-optimization-visualizer.js"></script>
 <script>
@@ -1693,6 +1934,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (document.getElementById('index-transform-viz')) new IndexTransformViz('index-transform-viz');
     if (document.getElementById('shared-memory-viz')) new SharedMemoryViz('shared-memory-viz');
     if (document.getElementById('1d-tiling-viz')) new Tiling1DViz('1d-tiling-viz');
+    if (document.getElementById('1d-pipeline-viz')) new Tiling1DPipelineViz('1d-pipeline-viz');
     if (document.getElementById('2d-tiling-viz')) new Tiling2DViz('2d-tiling-viz');
     if (document.getElementById('vectorized-viz')) new VectorizedViz('vectorized-viz');
     if (document.getElementById('performance-comparison')) new PerformanceComparison('performance-comparison');

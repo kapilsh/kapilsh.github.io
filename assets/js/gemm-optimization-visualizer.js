@@ -858,6 +858,16 @@ class SharedMemoryViz {
                     <button class="viz-btn" id="sharedAnimate">Animate Tiling</button>
                     <button class="viz-btn" id="sharedReset">Reset</button>
                 </div>
+                <div class="viz-info" style="margin-bottom: 15px;">
+                    <h4>How Tiling Works:</h4>
+                    <ol style="margin: 10px 0; padding-left: 20px; line-height: 1.8;">
+                        <li><strong>Load tiles</strong> from global memory into fast shared memory</li>
+                        <li><strong>Compute each C element</strong> one at a time using the cached tiles</li>
+                        <li><strong>Slide to next K tile</strong> and accumulate partial results</li>
+                        <li><strong>Move to next output tile</strong> and repeat</li>
+                    </ol>
+                    <p style="margin-top: 10px; color: #FFA726;"><strong>Key:</strong> Each C element requires multiple K tiles - we accumulate partial sums!</p>
+                </div>
                 <div class="viz-canvas" id="sharedCanvas"></div>
                 <div class="viz-info">
                     <div id="sharedStats"></div>
@@ -865,15 +875,23 @@ class SharedMemoryViz {
                 <div class="legend">
                     <div class="legend-item">
                         <div class="legend-box" style="background: #9C27B0;"></div>
-                        <span>Current Tile</span>
+                        <span>Loading Tile</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-box" style="background: #FF9800;"></div>
-                        <span>Shared Memory</span>
+                        <span>In Shared Memory</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #4CAF50;"></div>
+                        <span>Computing</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #FF6B6B;"></div>
+                        <span>Partial Result</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-box" style="background: #2196F3;"></div>
-                        <span>Computed Output</span>
+                        <span>Complete Result</span>
                     </div>
                 </div>
             </div>
@@ -916,66 +934,111 @@ class SharedMemoryViz {
 
         let globalLoads = 0;
         let tilesProcessed = 0;
+        let computationsCompleted = 0;
         const numTiles = Math.ceil(this.matrixSize / this.tileSize);
 
-        for (let tileRow = 0; tileRow < numTiles; tileRow++) {
-            for (let tileCol = 0; tileCol < numTiles; tileCol++) {
-                // Highlight tiles being loaded
-                for (let i = 0; i < this.tileSize; i++) {
-                    for (let j = 0; j < this.tileSize; j++) {
-                        const row = tileRow * this.tileSize + i;
-                        const col = tileCol * this.tileSize + j;
+        // For each output tile
+        for (let blockRow = 0; blockRow < numTiles; blockRow++) {
+            for (let blockCol = 0; blockCol < numTiles; blockCol++) {
 
-                        if (row < this.matrixSize && col < this.matrixSize) {
-                            const cellA = this.matrixA.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-                            const cellB = this.matrixB.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                // Loop over K dimension in tiles
+                for (let tileK = 0; tileK < numTiles; tileK++) {
+                    // Highlight tile from A being loaded
+                    for (let i = 0; i < this.tileSize; i++) {
+                        for (let k = 0; k < this.tileSize; k++) {
+                            const row = blockRow * this.tileSize + i;
+                            const col = tileK * this.tileSize + k;
 
-                            if (cellA) cellA.style.background = '#9C27B0';
-                            if (cellB) cellB.style.background = '#9C27B0';
+                            if (row < this.matrixSize && col < this.matrixSize) {
+                                const cellA = this.matrixA.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                                if (cellA) cellA.style.background = '#9C27B0';
+                            }
                         }
                     }
-                }
 
-                await sleep(300);
+                    // Highlight tile from B being loaded
+                    for (let k = 0; k < this.tileSize; k++) {
+                        for (let j = 0; j < this.tileSize; j++) {
+                            const row = tileK * this.tileSize + k;
+                            const col = blockCol * this.tileSize + j;
 
-                // Show data in shared memory
-                for (let i = 0; i < this.tileSize; i++) {
-                    for (let j = 0; j < this.tileSize; j++) {
-                        const sharedCellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${j}"]`);
-                        const sharedCellB = this.sharedB.querySelector(`[data-row="${i}"][data-col="${j}"]`);
-
-                        sharedCellA.style.background = '#FF9800';
-                        sharedCellB.style.background = '#FF9800';
-                    }
-                }
-
-                globalLoads += 2 * this.tileSize * this.tileSize;
-
-                await sleep(300);
-
-                // Compute output tile
-                for (let i = 0; i < this.tileSize; i++) {
-                    for (let j = 0; j < this.tileSize; j++) {
-                        const row = tileRow * this.tileSize + i;
-                        const col = tileCol * this.tileSize + j;
-
-                        if (row < this.matrixSize && col < this.matrixSize) {
-                            const cellC = this.matrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-                            if (cellC) cellC.style.background = '#2196F3';
+                            if (row < this.matrixSize && col < this.matrixSize) {
+                                const cellB = this.matrixB.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                                if (cellB) cellB.style.background = '#9C27B0';
+                            }
                         }
                     }
+
+                    await sleep(300);
+
+                    // Show data in shared memory
+                    for (let i = 0; i < this.tileSize; i++) {
+                        for (let j = 0; j < this.tileSize; j++) {
+                            const sharedCellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                            const sharedCellB = this.sharedB.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+
+                            sharedCellA.style.background = '#FF9800';
+                            sharedCellB.style.background = '#FF9800';
+                        }
+                    }
+
+                    globalLoads += 2 * this.tileSize * this.tileSize;
+
+                    await sleep(300);
+
+                    // Compute each element of the output tile one at a time
+                    for (let i = 0; i < this.tileSize; i++) {
+                        for (let j = 0; j < this.tileSize; j++) {
+                            const row = blockRow * this.tileSize + i;
+                            const col = blockCol * this.tileSize + j;
+
+                            if (row < this.matrixSize && col < this.matrixSize) {
+                                // Highlight the row in shared memory A
+                                for (let k = 0; k < this.tileSize; k++) {
+                                    const cellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${k}"]`);
+                                    if (cellA) cellA.classList.add('active');
+                                }
+
+                                // Highlight the column in shared memory B
+                                for (let k = 0; k < this.tileSize; k++) {
+                                    const cellB = this.sharedB.querySelector(`[data-row="${k}"][data-col="${j}"]`);
+                                    if (cellB) cellB.classList.add('active');
+                                }
+
+                                await sleep(150);
+
+                                // Update the output cell
+                                const cellC = this.matrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                                if (cellC) {
+                                    // Color it partially complete if not the last K tile
+                                    if (tileK < numTiles - 1) {
+                                        cellC.style.background = '#FF6B6B'; // Red/orange for partial
+                                    } else {
+                                        cellC.style.background = '#2196F3'; // Bright blue for complete
+                                    }
+                                }
+
+                                computationsCompleted++;
+
+                                // Clear active highlights
+                                this.sharedA.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
+                                this.sharedB.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
+                            }
+                        }
+                    }
+
+                    this.updateSharedStats(tilesProcessed, globalLoads, computationsCompleted, tileK + 1, numTiles);
+
+                    await sleep(300);
+
+                    // Clear shared memory visualization
+                    this.sharedA.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
+                    this.sharedB.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
+                    this.matrixA.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
+                    this.matrixB.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
                 }
 
                 tilesProcessed++;
-                this.updateSharedStats(tilesProcessed, globalLoads);
-
-                await sleep(300);
-
-                // Clear shared memory visualization
-                this.sharedA.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
-                this.sharedB.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
-                this.matrixA.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
-                this.matrixB.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
             }
         }
 
@@ -983,16 +1046,25 @@ class SharedMemoryViz {
         this.isAnimating = false;
     }
 
-    updateSharedStats(tilesProcessed, globalLoads) {
+    updateSharedStats(tilesProcessed, globalLoads, computationsCompleted, currentKTile, totalKTiles) {
         const totalTiles = Math.pow(Math.ceil(this.matrixSize / this.tileSize), 2);
         const naiveLoads = this.matrixSize * this.matrixSize * 2 * this.matrixSize;
         const reduction = ((naiveLoads - globalLoads) / naiveLoads * 100).toFixed(1);
+        const totalComputations = this.matrixSize * this.matrixSize;
 
         document.getElementById('sharedStats').innerHTML = `
             <div class="viz-stats">
                 <div class="viz-stat">
-                    <div class="viz-stat-label">Tiles Processed</div>
+                    <div class="viz-stat-label">Output Tiles</div>
                     <div class="viz-stat-value">${tilesProcessed}/${totalTiles}</div>
+                </div>
+                <div class="viz-stat">
+                    <div class="viz-stat-label">K Dimension Progress</div>
+                    <div class="viz-stat-value">${currentKTile}/${totalKTiles}</div>
+                </div>
+                <div class="viz-stat">
+                    <div class="viz-stat-label">C Elements Computed</div>
+                    <div class="viz-stat-value">${computationsCompleted} partial sums</div>
                 </div>
                 <div class="viz-stat">
                     <div class="viz-stat-label">Global Memory Loads</div>
@@ -1023,7 +1095,8 @@ class Tiling1DViz {
             return;
         }
         this.isAnimating = false;
-        this.threadTileSize = 4; // TM = 4
+        this.tileSize = 4; // Shared memory tile size (like before)
+        this.TM = 4; // Each thread computes TM outputs
         this.matrixSize = 8;
         this.init();
     }
@@ -1031,35 +1104,68 @@ class Tiling1DViz {
     init() {
         this.container.innerHTML = commonStyles + `
             <div class="viz-container">
-                <div class="viz-title">1D Block Tiling: Multiple Outputs Per Thread</div>
+                <div class="viz-title">1D Block Tiling: Register-Level Optimization</div>
+                <div class="viz-info" style="margin-bottom: 15px;">
+                    <h4>Building on Shared Memory:</h4>
+                    <p style="margin: 10px 0; line-height: 1.8;">
+                        We still use shared memory tiles (<code>tile_a</code>, <code>tile_b</code>), but now each thread computes <strong>TM = ${this.TM} outputs</strong> instead of just 1!
+                    </p>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0; padding: 15px; background: #2a2a2a; border-radius: 8px;">
+                        <div style="border-right: 2px solid #444; padding-right: 15px;">
+                            <div style="font-weight: 600; color: #FF9800; margin-bottom: 10px;">❌ Previous (Shared Memory Only)</div>
+                            <ul style="margin: 0; padding-left: 20px; line-height: 1.8; font-size: 13px;">
+                                <li>Load 1 value from <code>tile_b</code></li>
+                                <li>Load 1 value from <code>tile_a</code></li>
+                                <li>Compute 1 output</li>
+                                <li><strong style="color: #FF6B6B;">No register reuse!</strong></li>
+                            </ul>
+                            <div style="margin-top: 10px; padding: 8px; background: #1a1a1a; border-radius: 4px; font-size: 12px;">
+                                <strong>Ratio:</strong> 2 SMEM reads → 1 output<br>
+                                <strong>Efficiency:</strong> 0.5 outputs/read
+                            </div>
+                        </div>
+                        <div style="padding-left: 15px;">
+                            <div style="font-weight: 600; color: #4CAF50; margin-bottom: 10px;">✅ Now (1D Block Tiling)</div>
+                            <ul style="margin: 0; padding-left: 20px; line-height: 1.8; font-size: 13px;">
+                                <li>Load 1 value into <code style="color: #00BCD4;">b_tmp</code> register</li>
+                                <li>Load TM values from <code>tile_a</code></li>
+                                <li><strong style="color: #8BC34A;">Compute TM outputs!</strong></li>
+                                <li><strong style="color: #00BCD4;">b_tmp reused ${this.TM}×</strong></li>
+                            </ul>
+                            <div style="margin-top: 10px; padding: 8px; background: #1a1a1a; border-radius: 4px; font-size: 12px;">
+                                <strong>Ratio:</strong> (1+TM) SMEM reads → TM outputs<br>
+                                <strong>Efficiency:</strong> ${(this.TM / (1 + this.TM)).toFixed(2)} outputs/read (${((this.TM / (1 + this.TM)) / 0.5).toFixed(1)}× better!)
+                            </div>
+                        </div>
+                    </div>
+
+                    <p style="margin-top: 10px; color: #FFA726;"><strong>Key Insight:</strong> By caching <code>b_tmp</code> in a register and reusing it ${this.TM} times, we reduce shared memory traffic and increase arithmetic intensity!</p>
+                </div>
                 <div class="viz-controls">
                     <button class="viz-btn" id="tiling1dAnimate">Animate</button>
                     <button class="viz-btn" id="tiling1dReset">Reset</button>
                 </div>
                 <div class="viz-canvas" id="tiling1dCanvas"></div>
                 <div class="viz-info">
-                    <h4>Thread-Level Tiling</h4>
-                    <p>Each thread now computes multiple output elements (TM = ${this.threadTileSize}):</p>
-                    <ul style="margin: 10px 0; padding-left: 20px;">
-                        <li>Load TM elements from matrix A into registers</li>
-                        <li>Load 1 element from matrix B</li>
-                        <li>Compute TM outputs using the same B element</li>
-                        <li>Higher arithmetic intensity (more compute per byte loaded)</li>
-                    </ul>
                     <div id="tiling1dStats"></div>
                 </div>
                 <div class="legend">
                     <div class="legend-item">
-                        <div class="legend-box" style="background: #E91E63;"></div>
-                        <span>Thread Working</span>
+                        <div class="legend-box" style="background: #FF9800;"></div>
+                        <span>tile_a[], tile_b[] (Shared Memory)</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-box" style="background: #00BCD4;"></div>
-                        <span>Register Cache</span>
+                        <span>b_tmp (Register)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #E91E63;"></div>
+                        <span>Computing</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-box" style="background: #8BC34A;"></div>
-                        <span>Computed Outputs</span>
+                        <span>thread_results[] (Complete)</span>
                     </div>
                 </div>
             </div>
@@ -1074,41 +1180,78 @@ class Tiling1DViz {
 
     renderMatrices() {
         this.canvas.innerHTML = `
-            <div style="display: flex; justify-content: space-around; align-items: flex-start; flex-wrap: wrap;">
-                <div id="tiling1dMatrixA"></div>
-                <div style="display: flex; flex-direction: column; align-items: center;">
-                    <div style="font-size: 12px; color: #999; margin-bottom: 10px;">Thread Registers</div>
-                    <div id="tiling1dRegisters"></div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 20px;">
+                <!-- Previous Kernel (Shared Memory Only) -->
+                <div style="border: 2px solid #FF6B6B; border-radius: 8px; padding: 15px; background: #1a1a1a;">
+                    <div style="text-align: center; margin-bottom: 15px;">
+                        <div style="font-size: 16px; font-weight: 700; color: #FF6B6B; margin-bottom: 5px;">❌ Previous: Shared Memory Only</div>
+                        <div style="font-size: 12px; color: #999;">Each thread computes 1 output</div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                        <div style="display: flex; gap: 15px;">
+                            <div>
+                                <div style="font-size: 11px; color: #FF9800; margin-bottom: 5px; text-align: center;">tile_a</div>
+                                <div id="prevSharedA"></div>
+                            </div>
+                            <div>
+                                <div style="font-size: 11px; color: #FF9800; margin-bottom: 5px; text-align: center;">tile_b</div>
+                                <div id="prevSharedB"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="font-size: 11px; color: #999; margin-bottom: 5px; text-align: center;">Output (1 per thread)</div>
+                            <div id="prevMatrixC"></div>
+                        </div>
+                    </div>
                 </div>
-                <div id="tiling1dMatrixB"></div>
-                <div id="tiling1dMatrixC"></div>
+
+                <!-- Current Kernel (1D Block Tiling) -->
+                <div style="border: 2px solid #4CAF50; border-radius: 8px; padding: 15px; background: #1a1a1a;">
+                    <div style="text-align: center; margin-bottom: 15px;">
+                        <div style="font-size: 16px; font-weight: 700; color: #4CAF50; margin-bottom: 5px;">✅ Now: 1D Block Tiling</div>
+                        <div style="font-size: 12px; color: #999;">Each thread computes TM=${this.TM} outputs</div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                        <div style="display: flex; gap: 15px;">
+                            <div>
+                                <div style="font-size: 11px; color: #FF9800; margin-bottom: 5px; text-align: center;">tile_a</div>
+                                <div id="tiling1dSharedA"></div>
+                            </div>
+                            <div>
+                                <div style="font-size: 11px; color: #FF9800; margin-bottom: 5px; text-align: center;">tile_b</div>
+                                <div id="tiling1dSharedB"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="font-size: 11px; color: #00BCD4; margin-bottom: 5px; text-align: center;">Registers (b_tmp)</div>
+                            <div id="tiling1dRegisters" style="display: flex; gap: 5px;"></div>
+                        </div>
+                        <div>
+                            <div style="font-size: 11px; color: #8BC34A; margin-bottom: 5px; text-align: center;">Output (TM per thread)</div>
+                            <div id="tiling1dMatrixC"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
         `;
 
-        this.matrixA = createMatrixGrid(this.matrixSize, this.matrixSize, 35, 'Matrix A', document.getElementById('tiling1dMatrixA'));
-        this.matrixB = createMatrixGrid(this.matrixSize, this.matrixSize, 35, 'Matrix B', document.getElementById('tiling1dMatrixB'));
-        this.matrixC = createMatrixGrid(this.matrixSize, this.matrixSize, 35, 'Matrix C', document.getElementById('tiling1dMatrixC'));
+        // Previous kernel visualization (smaller)
+        this.prevSharedA = createMatrixGrid(this.tileSize, this.tileSize, 30, '', document.getElementById('prevSharedA'));
+        this.prevSharedB = createMatrixGrid(this.tileSize, this.tileSize, 30, '', document.getElementById('prevSharedB'));
+        this.prevMatrixC = createMatrixGrid(this.tileSize, this.tileSize, 30, '', document.getElementById('prevMatrixC'));
 
-        // Create register visualization
+        // Current kernel visualization
+        this.sharedA = createMatrixGrid(this.tileSize, this.tileSize, 30, '', document.getElementById('tiling1dSharedA'));
+        this.sharedB = createMatrixGrid(this.tileSize, this.tileSize, 30, '', document.getElementById('tiling1dSharedB'));
+        this.matrixC = createMatrixGrid(this.tileSize, this.tileSize, 30, '', document.getElementById('tiling1dMatrixC'));
+
+        // Create register visualization - simpler for comparison view
         const regContainer = document.getElementById('tiling1dRegisters');
-        regContainer.innerHTML = '';
-        for (let i = 0; i < this.threadTileSize; i++) {
-            const reg = document.createElement('div');
-            reg.id = `reg-${i}`;
-            reg.style.width = '80px';
-            reg.style.height = '40px';
-            reg.style.background = '#333';
-            reg.style.border = '2px solid #555';
-            reg.style.borderRadius = '6px';
-            reg.style.margin = '5px';
-            reg.style.display = 'flex';
-            reg.style.alignItems = 'center';
-            reg.style.justifyContent = 'center';
-            reg.style.fontSize = '11px';
-            reg.style.transition = 'all 0.3s';
-            reg.textContent = `regM[${i}]`;
-            regContainer.appendChild(reg);
-        }
+        regContainer.innerHTML = `
+            <div id="regN" style="width: 80px; height: 30px; background: #333; border: 2px solid #555;
+                 border-radius: 6px; display: flex; align-items: center; justify-content: center;
+                 font-size: 10px; transition: all 0.3s;">b_tmp</div>
+        `;
     }
 
     async animate() {
@@ -1119,85 +1262,186 @@ class Tiling1DViz {
         document.getElementById('tiling1dAnimate').disabled = true;
         document.getElementById('tiling1dStats').innerHTML = '';
 
-        const numThreads = Math.ceil(this.matrixSize / this.threadTileSize);
-        let threadsCompleted = 0;
-        let totalOutputs = 0;
+        let prevSMEMReads = 0;
+        let currentSMEMReads = 0;
+        let computationsCompleted = 0;
 
-        for (let threadIdx = 0; threadIdx < numThreads; threadIdx++) {
-            for (let col = 0; col < this.matrixSize; col++) {
-                // Highlight TM rows being loaded into registers
-                for (let i = 0; i < this.threadTileSize; i++) {
-                    const row = threadIdx * this.threadTileSize + i;
-                    if (row < this.matrixSize) {
-                        const cellA = this.matrixA.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-                        if (cellA) cellA.style.background = '#E91E63';
+        // Show tiles loaded into shared memory (both sides)
+        for (let i = 0; i < this.tileSize; i++) {
+            for (let j = 0; j < this.tileSize; j++) {
+                // Previous kernel
+                const prevCellA = this.prevSharedA.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                const prevCellB = this.prevSharedB.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                prevCellA.style.background = '#FF9800';
+                prevCellB.style.background = '#FF9800';
 
-                        const reg = document.getElementById(`reg-${i}`);
-                        reg.style.background = '#00BCD4';
-                        reg.style.borderColor = '#00BCD4';
+                // Current kernel
+                const cellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                const cellB = this.sharedB.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                cellA.style.background = '#FF9800';
+                cellB.style.background = '#FF9800';
+            }
+        }
+
+        await sleep(500);
+
+        // Process one column at a time to show comparison
+        const threadsPerRow = this.tileSize / this.TM;
+
+        for (let threadRow = 0; threadRow < threadsPerRow; threadRow++) {
+            for (let col = 0; col < this.tileSize; col++) {
+                for (let k = 0; k < this.tileSize; k++) {
+
+                    // ===== PREVIOUS KERNEL (Left side): Read 2 values, compute 1 output =====
+                    for (let tm = 0; tm < this.TM; tm++) {
+                        const row = threadRow * this.TM + tm;
+
+                        // Read from tile_a
+                        const prevCellA = this.prevSharedA.querySelector(`[data-row="${row}"][data-col="${k}"]`);
+                        if (prevCellA) prevCellA.classList.add('active');
+                        prevSMEMReads++;
+
+                        // Read from tile_b
+                        const prevCellB = this.prevSharedB.querySelector(`[data-row="${k}"][data-col="${col}"]`);
+                        if (prevCellB) prevCellB.classList.add('active');
+                        prevSMEMReads++;
+
+                        await sleep(150);
+
+                        // Compute 1 output
+                        const prevCellC = this.prevMatrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                        if (prevCellC) {
+                            prevCellC.style.background = '#E91E63'; // Computing
+                        }
+
+                        await sleep(80);
+
+                        if (prevCellC) {
+                            if (k < this.tileSize - 1) {
+                                prevCellC.style.background = '#FF6B6B'; // Partial
+                            } else {
+                                prevCellC.style.background = '#4A9B6C'; // Complete (muted green)
+                            }
+                        }
+
+                        // Clear highlights
+                        this.prevSharedA.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
+                        this.prevSharedB.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
                     }
-                }
 
-                // Highlight column element from B
-                const cellB = this.matrixB.querySelector(`[data-row="${col}"][data-col="${col}"]`);
-                if (cellB) cellB.style.background = '#E91E63';
+                    // ===== CURRENT KERNEL (Right side): Cache b_tmp, compute TM outputs =====
+                    // Load TM values from tile_a
+                    for (let tm = 0; tm < this.TM; tm++) {
+                        const row = threadRow * this.TM + tm;
+                        const cellA = this.sharedA.querySelector(`[data-row="${row}"][data-col="${k}"]`);
+                        if (cellA) cellA.classList.add('active');
+                    }
+                    currentSMEMReads += this.TM;
 
-                await sleep(200);
+                    // Load 1 value from tile_b into b_tmp register (REUSED!)
+                    const cellB = this.sharedB.querySelector(`[data-row="${k}"][data-col="${col}"]`);
+                    if (cellB) cellB.classList.add('active');
 
-                // Compute TM outputs
-                for (let i = 0; i < this.threadTileSize; i++) {
-                    const row = threadIdx * this.threadTileSize + i;
-                    if (row < this.matrixSize) {
+                    const regN = document.getElementById('regN');
+                    regN.style.background = '#00BCD4';
+                    regN.style.borderColor = '#00BCD4';
+                    regN.textContent = '🔄 b_tmp';
+
+                    currentSMEMReads += 1;
+
+                    await sleep(200);
+
+                    // Compute TM outputs using the SAME b_tmp (register reuse!)
+                    for (let tm = 0; tm < this.TM; tm++) {
+                        const row = threadRow * this.TM + tm;
                         const cellC = this.matrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+
+                        // Show b_tmp being reused
+                        regN.style.background = '#E91E63';
+                        regN.textContent = `✅ ×${tm + 1}`;
+
                         if (cellC) {
-                            cellC.style.background = '#8BC34A';
-                            totalOutputs++;
+                            cellC.style.background = '#E91E63'; // Computing
+                        }
+
+                        await sleep(100);
+
+                        if (cellC) {
+                            if (k < this.tileSize - 1) {
+                                cellC.style.background = '#FF6B6B'; // Partial
+                            } else {
+                                cellC.style.background = '#8BC34A'; // Complete
+                                if (tm === this.TM - 1) computationsCompleted += this.TM;
+                            }
                         }
                     }
+
+                    // Reset register
+                    regN.style.background = '#333';
+                    regN.style.borderColor = '#555';
+                    regN.textContent = 'b_tmp';
+
+                    // Clear active highlights from shared memory
+                    this.sharedA.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
+                    this.sharedB.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
                 }
 
-                await sleep(200);
-
-                // Clear highlights
-                this.matrixA.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
-                this.matrixB.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
-                for (let i = 0; i < this.threadTileSize; i++) {
-                    const reg = document.getElementById(`reg-${i}`);
-                    reg.style.background = '#333';
-                    reg.style.borderColor = '#555';
-                }
+                this.updateTiling1DStats(prevSMEMReads, currentSMEMReads, computationsCompleted, col + 1);
             }
-
-            threadsCompleted++;
-            this.updateTiling1DStats(threadsCompleted, totalOutputs);
         }
 
         document.getElementById('tiling1dAnimate').disabled = false;
         this.isAnimating = false;
     }
 
-    updateTiling1DStats(threadsCompleted, totalOutputs) {
-        const totalThreads = Math.ceil(this.matrixSize / this.threadTileSize) * this.matrixSize;
-        const outputsPerThread = this.threadTileSize;
-        const arithmeticIntensity = (2 * outputsPerThread).toFixed(1);
+    updateTiling1DStats(prevSMEMReads, currentSMEMReads, outputsComplete, colsProcessed) {
+        const totalOutputs = this.tileSize * this.tileSize;
+        const smemTrafficReduction = prevSMEMReads > 0 ?
+            ((1 - (currentSMEMReads / prevSMEMReads)) * 100).toFixed(1) : 0;
 
         document.getElementById('tiling1dStats').innerHTML = `
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 15px;">
+                <div style="background: #2a2a2a; padding: 12px; border-radius: 6px; border-left: 4px solid #FF6B6B;">
+                    <div style="font-weight: 600; color: #FF6B6B; margin-bottom: 8px;">❌ Previous Kernel</div>
+                    <div style="font-size: 13px; line-height: 1.6;">
+                        <div><strong>SMEM Reads:</strong> ${prevSMEMReads}</div>
+                        <div><strong>Pattern:</strong> 2 reads per output</div>
+                        <div><strong>Outputs:</strong> ${outputsComplete}/${totalOutputs}</div>
+                    </div>
+                </div>
+                <div style="background: #2a2a2a; padding: 12px; border-radius: 6px; border-left: 4px solid #4CAF50;">
+                    <div style="font-weight: 600; color: #4CAF50; margin-bottom: 8px;">✅ Current Kernel</div>
+                    <div style="font-size: 13px; line-height: 1.6;">
+                        <div><strong>SMEM Reads:</strong> ${currentSMEMReads}</div>
+                        <div><strong>Pattern:</strong> 1 b_tmp + ${this.TM} tile_a per ${this.TM} outputs</div>
+                        <div><strong>Outputs:</strong> ${outputsComplete}/${totalOutputs}</div>
+                    </div>
+                </div>
+            </div>
             <div class="viz-stats">
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Threads Used</div>
-                    <div class="viz-stat-value">${threadsCompleted}</div>
+                <div class="viz-stat" style="border-left: 3px solid #FF6B6B;">
+                    <div class="viz-stat-label">Previous SMEM Traffic</div>
+                    <div class="viz-stat-value" style="color: #FF6B6B;">${prevSMEMReads} reads</div>
                 </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Outputs Per Thread</div>
-                    <div class="viz-stat-value">${outputsPerThread}</div>
+                <div class="viz-stat" style="border-left: 3px solid #4CAF50;">
+                    <div class="viz-stat-label">Current SMEM Traffic</div>
+                    <div class="viz-stat-value" style="color: #4CAF50;">${currentSMEMReads} reads</div>
                 </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Total Outputs Computed</div>
-                    <div class="viz-stat-value">${totalOutputs}</div>
+                <div class="viz-stat" style="border-left: 3px solid #00BCD4;">
+                    <div class="viz-stat-label">b_tmp Reuse Factor</div>
+                    <div class="viz-stat-value" style="color: #00BCD4;">${this.TM}× per load</div>
                 </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Arithmetic Intensity</div>
-                    <div class="viz-stat-value">${arithmeticIntensity}× Better</div>
+                <div class="viz-stat" style="border-left: 3px solid #FFA726;">
+                    <div class="viz-stat-label">SMEM Traffic Reduction</div>
+                    <div class="viz-stat-value" style="color: #FFA726;">${smemTrafficReduction}%</div>
+                </div>
+            </div>
+            <div style="margin-top: 15px; padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 4px solid #FFA726;">
+                <div style="font-size: 13px; line-height: 1.6;">
+                    <strong style="color: #FFA726;">📊 Side-by-Side Comparison:</strong><br>
+                    <span style="color: #FF6B6B;">Left (Previous):</span> Reads 2 values, computes 1 output (no register reuse)<br>
+                    <span style="color: #4CAF50;">Right (1D Tiling):</span> Caches <code>b_tmp</code> in register, reuses it ${this.TM}× for ${this.TM} outputs!<br>
+                    <span style="color: #00BCD4;">Result:</span> ${smemTrafficReduction}% less shared memory traffic = faster execution!
                 </div>
             </div>
         `;
@@ -1206,6 +1450,571 @@ class Tiling1DViz {
     reset() {
         this.renderMatrices();
         document.getElementById('tiling1dStats').innerHTML = '';
+    }
+}
+
+// ============================================================================
+// Kernel 4: 1D Block Tiling Pipeline Visualization
+// Full Matrix → Shared Memory → Thread Blocks → Thread Tiles → CUDA Cores
+// ============================================================================
+class Tiling1DPipelineViz {
+    constructor(containerId) {
+        console.log('Tiling1DPipelineViz initializing with containerId:', containerId);
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+        console.log('Tiling1DPipelineViz container found, initializing...');
+        this.isAnimating = false;
+        // Configuration matching typical 1D block tiling
+        this.matrixSizeM = 16;  // Full matrix rows
+        this.matrixSizeN = 16;  // Full matrix cols
+        this.matrixSizeK = 16;  // Common dimension
+        this.BM = 8;  // Block tile M
+        this.BN = 8;  // Block tile N
+        this.BK = 4;  // Block tile K
+        this.TM = 4;  // Thread tile M (each thread computes TM outputs)
+        this.currentStep = 0;
+        this.init();
+    }
+
+    init() {
+        this.container.innerHTML = commonStyles + `
+            <div class="viz-container">
+                <div class="viz-title">1D Block Tiling: Complete Memory Hierarchy Pipeline</div>
+                <div class="viz-info" style="margin-bottom: 15px;">
+                    <h4>Full Data Flow: Global Memory → Shared Memory → Registers → CUDA Cores</h4>
+                    <p style="margin: 10px 0; line-height: 1.8;">
+                        This visualization shows how data flows through the entire GPU memory hierarchy:
+                        <strong>Full Matrices (GMEM)</strong> → <strong>Thread Block Tiles (SMEM)</strong> →
+                        <strong>Thread Tiles (Registers)</strong> → <strong>Computation (CUDA Cores)</strong>
+                    </p>
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 15px 0; padding: 15px; background: #2a2a2a; border-radius: 8px; font-size: 12px;">
+                        <div style="text-align: center; padding: 10px; background: #1a1a1a; border-radius: 6px;">
+                            <div style="font-weight: 600; color: #4CAF50; margin-bottom: 5px;">1️⃣ Global Memory</div>
+                            <div style="color: #999;">Full ${this.matrixSizeM}×${this.matrixSizeK} & ${this.matrixSizeK}×${this.matrixSizeN} matrices</div>
+                        </div>
+                        <div style="text-align: center; padding: 10px; background: #1a1a1a; border-radius: 6px;">
+                            <div style="font-weight: 600; color: #FF9800; margin-bottom: 5px;">2️⃣ Shared Memory</div>
+                            <div style="color: #999;">Block tiles: ${this.BM}×${this.BK} & ${this.BK}×${this.BN}</div>
+                        </div>
+                        <div style="text-align: center; padding: 10px; background: #1a1a1a; border-radius: 6px;">
+                            <div style="font-weight: 600; color: #00BCD4; margin-bottom: 5px;">3️⃣ Registers</div>
+                            <div style="color: #999;">Thread tiles: TM=${this.TM} per thread</div>
+                        </div>
+                        <div style="text-align: center; padding: 10px; background: #1a1a1a; border-radius: 6px;">
+                            <div style="font-weight: 600; color: #E91E63; margin-bottom: 5px;">4️⃣ CUDA Cores</div>
+                            <div style="color: #999;">FMA operations</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="viz-controls">
+                    <button class="viz-btn" id="pipeline1dAnimate">Animate Pipeline</button>
+                    <button class="viz-btn" id="pipeline1dReset">Reset</button>
+                </div>
+                <div class="viz-canvas" id="pipeline1dCanvas"></div>
+                <div class="viz-info">
+                    <div id="pipeline1dStats"></div>
+                </div>
+            </div>
+        `;
+
+        this.canvas = document.getElementById('pipeline1dCanvas');
+        this.renderPipeline();
+
+        document.getElementById('pipeline1dAnimate').addEventListener('click', () => this.animate());
+        document.getElementById('pipeline1dReset').addEventListener('click', () => this.reset());
+    }
+
+    renderPipeline() {
+        this.canvas.innerHTML = `
+            <div style="display: flex; flex-direction: column; gap: 30px;">
+                <!-- Stage 1: Global Memory (Full Matrices) -->
+                <div style="background: #1a1a1a; padding: 20px; border-radius: 8px; border: 2px solid #4CAF50;">
+                    <div style="text-align: center; margin-bottom: 15px;">
+                        <div style="font-size: 16px; font-weight: 700; color: #4CAF50; margin-bottom: 5px;">
+                            1️⃣ Global Memory (GMEM)
+                        </div>
+                        <div style="font-size: 12px; color: #999;">Full matrices stored in GPU DRAM</div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                        <div style="display: flex; align-items: center; gap: 15px;">
+                            <div>
+                                <div style="font-size: 11px; color: #4CAF50; margin-bottom: 5px; text-align: center;">
+                                    Matrix A (${this.matrixSizeM}×${this.matrixSizeK})
+                                </div>
+                                <div id="globalMatrixA"></div>
+                            </div>
+                            <div style="font-size: 20px; color: #666;">×</div>
+                            <div>
+                                <div style="font-size: 11px; color: #4CAF50; margin-bottom: 5px; text-align: center;">
+                                    Matrix B (${this.matrixSizeK}×${this.matrixSizeN})
+                                </div>
+                                <div id="globalMatrixB"></div>
+                            </div>
+                        </div>
+                        <div style="font-size: 20px; color: #666;">‖</div>
+                        <div>
+                            <div style="font-size: 11px; color: #4CAF50; margin-bottom: 5px; text-align: center;">
+                                Matrix C (${this.matrixSizeM}×${this.matrixSizeN})
+                            </div>
+                            <div id="globalMatrixC"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Arrow Down -->
+                <div style="text-align: center; color: #FF9800; font-size: 32px; height: 20px;">↓</div>
+
+                <!-- Stage 2: Shared Memory (Thread Block Tiles) -->
+                <div style="background: #1a1a1a; padding: 20px; border-radius: 8px; border: 2px solid #FF9800;">
+                    <div style="text-align: center; margin-bottom: 15px;">
+                        <div style="font-size: 16px; font-weight: 700; color: #FF9800; margin-bottom: 5px;">
+                            2️⃣ Shared Memory (SMEM) - Thread Block Tiles
+                        </div>
+                        <div style="font-size: 12px; color: #999;">Each thread block loads tiles from global memory</div>
+                    </div>
+                    <div style="display: flex; justify-content: center; align-items: center; gap: 30px;">
+                        <div>
+                            <div style="font-size: 11px; color: #FF9800; margin-bottom: 5px; text-align: center;">
+                                tile_a[${this.BM}×${this.BK}]
+                            </div>
+                            <div id="sharedTileA"></div>
+                        </div>
+                        <div style="font-size: 24px; color: #666;">×</div>
+                        <div>
+                            <div style="font-size: 11px; color: #FF9800; margin-bottom: 5px; text-align: center;">
+                                tile_b[${this.BK}×${this.BN}]
+                            </div>
+                            <div id="sharedTileB"></div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px; text-align: center; font-size: 11px; color: #FFA726;">
+                        <strong>All ${(this.BM / this.TM) * this.BN} threads in block cooperate to load tiles</strong>
+                    </div>
+                </div>
+
+                <!-- Arrow Down -->
+                <div style="text-align: center; color: #00BCD4; font-size: 32px; height: 20px;">↓</div>
+
+                <!-- Stage 3: Registers (Thread Tiles) -->
+                <div style="background: #1a1a1a; padding: 20px; border-radius: 8px; border: 2px solid #00BCD4;">
+                    <div style="text-align: center; margin-bottom: 15px;">
+                        <div style="font-size: 16px; font-weight: 700; color: #00BCD4; margin-bottom: 5px;">
+                            3️⃣ Registers (Thread Tiles) - Per Thread
+                        </div>
+                        <div style="font-size: 12px; color: #999;">Each thread caches data for its TM=${this.TM} outputs</div>
+                    </div>
+                    <div style="display: flex; justify-content: center; align-items: center; gap: 30px;">
+                        <div>
+                            <div style="font-size: 11px; color: #00BCD4; margin-bottom: 5px; text-align: center;">
+                                thread_tile_a[TM=${this.TM}]
+                            </div>
+                            <div id="registerTileA"></div>
+                        </div>
+                        <div style="font-size: 24px; color: #666;">×</div>
+                        <div>
+                            <div style="font-size: 11px; color: #00BCD4; margin-bottom: 5px; text-align: center;">
+                                b_tmp (register)
+                            </div>
+                            <div id="registerB"></div>
+                        </div>
+                        <div style="font-size: 24px; color: #666;">=</div>
+                        <div>
+                            <div style="font-size: 11px; color: #00BCD4; margin-bottom: 5px; text-align: center;">
+                                thread_results[TM=${this.TM}]
+                            </div>
+                            <div id="registerResults"></div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px; text-align: center; font-size: 11px; color: #00BCD4;">
+                        <strong>b_tmp reused ${this.TM}× for ${this.TM} FMA operations</strong>
+                    </div>
+                </div>
+
+                <!-- Arrow Down -->
+                <div style="text-align: center; color: #E91E63; font-size: 32px; height: 20px;">↓</div>
+
+                <!-- Stage 4: CUDA Cores -->
+                <div style="background: #1a1a1a; padding: 20px; border-radius: 8px; border: 2px solid #E91E63;">
+                    <div style="text-align: center; margin-bottom: 15px;">
+                        <div style="font-size: 16px; font-weight: 700; color: #E91E63; margin-bottom: 5px;">
+                            4️⃣ CUDA Cores - Computation
+                        </div>
+                        <div style="font-size: 12px; color: #999;">FMA: result[i] += thread_tile_a[i] * b_tmp</div>
+                    </div>
+                    <div style="display: flex; justify-content: center; align-items: center; gap: 20px;">
+                        <div id="cudaCores" style="display: flex; gap: 10px;"></div>
+                    </div>
+                    <div style="margin-top: 15px; text-align: center; font-size: 11px; color: #E91E63;">
+                        <strong>Each thread executes TM=${this.TM} FMA operations per K iteration</strong>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Render matrices at each stage
+        this.globalA = createMatrixGrid(this.matrixSizeM, this.matrixSizeK, 14, '', document.getElementById('globalMatrixA'));
+        this.globalB = createMatrixGrid(this.matrixSizeK, this.matrixSizeN, 14, '', document.getElementById('globalMatrixB'));
+        this.globalC = createMatrixGrid(this.matrixSizeM, this.matrixSizeN, 14, '', document.getElementById('globalMatrixC'));
+
+        this.sharedA = createMatrixGrid(this.BM, this.BK, 30, '', document.getElementById('sharedTileA'));
+        this.sharedB = createMatrixGrid(this.BK, this.BN, 30, '', document.getElementById('sharedTileB'));
+
+        // Registers - vertical arrays
+        const regAContainer = document.getElementById('registerTileA');
+        regAContainer.style.display = 'flex';
+        regAContainer.style.flexDirection = 'column';
+        regAContainer.style.gap = '5px';
+        for (let i = 0; i < this.TM; i++) {
+            const cell = document.createElement('div');
+            cell.className = 'matrix-cell';
+            cell.style.width = '80px';
+            cell.style.height = '35px';
+            cell.style.background = '#333';
+            cell.style.fontSize = '10px';
+            cell.setAttribute('data-reg-a', i);
+            cell.innerHTML = `<div style="font-weight: 600;">a[${i}]</div><div style="font-size: 9px; color: #999;"></div>`;
+            regAContainer.appendChild(cell);
+        }
+
+        const regBContainer = document.getElementById('registerB');
+        const bCell = document.createElement('div');
+        bCell.className = 'matrix-cell';
+        bCell.style.width = '80px';
+        bCell.style.height = '35px';
+        bCell.style.background = '#333';
+        bCell.style.fontSize = '10px';
+        bCell.setAttribute('data-reg-b', '0');
+        bCell.innerHTML = `<div style="font-weight: 600;">b_tmp</div><div style="font-size: 9px; color: #999;"></div>`;
+        regBContainer.appendChild(bCell);
+
+        const regResultsContainer = document.getElementById('registerResults');
+        regResultsContainer.style.display = 'flex';
+        regResultsContainer.style.flexDirection = 'column';
+        regResultsContainer.style.gap = '5px';
+        for (let i = 0; i < this.TM; i++) {
+            const cell = document.createElement('div');
+            cell.className = 'matrix-cell';
+            cell.style.width = '60px';
+            cell.style.height = '30px';
+            cell.style.background = '#333';
+            cell.setAttribute('data-result', i);
+            cell.textContent = `r[${i}]`;
+            regResultsContainer.appendChild(cell);
+        }
+
+        // CUDA Cores visualization
+        const coresContainer = document.getElementById('cudaCores');
+        for (let i = 0; i < this.TM; i++) {
+            const core = document.createElement('div');
+            core.style.cssText = `
+                width: 50px; height: 50px; background: #333; border-radius: 8px;
+                display: flex; align-items: center; justify-content: center;
+                font-size: 10px; font-weight: 600; color: #999;
+                border: 2px solid #555;
+            `;
+            core.setAttribute('data-core', i);
+            core.textContent = `FMA${i}`;
+            coresContainer.appendChild(core);
+        }
+
+        this.updateStats();
+    }
+
+    async animate() {
+        if (this.isAnimating) return;
+        this.isAnimating = true;
+        document.getElementById('pipeline1dAnimate').disabled = true;
+
+        this.reset();
+        await sleep(500);
+
+        const numKIterations = this.matrixSizeK / this.BK; // 16 / 4 = 4 iterations
+        const totalSteps = numKIterations;
+
+        // Process all K iterations
+        for (let kIter = 0; kIter < numKIterations; kIter++) {
+            const kOffset = kIter * this.BK;
+            const isLastIteration = (kIter === numKIterations - 1);
+
+            this.updateStats(`<strong style="color: #FFA726;">📍 K Iteration ${kIter + 1}/${numKIterations}</strong> - Processing K tiles [${kOffset}:${kOffset + this.BK}]`);
+            await sleep(300);
+
+            // Step 1: Highlight GMEM blocks being loaded
+            this.updateStats(`<strong style="color: #4CAF50;">1️⃣ GMEM → SMEM</strong>: Loading blocks from Global Memory`);
+            await this.highlightGMEMBlocks(kIter);
+            await sleep(700);
+
+            // Step 2: Show blocks loaded in SMEM
+            this.updateStats(`<strong style="color: #FF9800;">2️⃣ SMEM Ready</strong>: tile_a[${this.BM}×${this.BK}] ⊗ tile_b[${this.BK}×${this.BN}]`);
+            await this.loadSharedMemory(kIter);
+            await sleep(700);
+
+            // Step 3: Highlight thread's tile in SMEM and load to registers
+            this.updateStats(`<strong style="color: #00BCD4;">3️⃣ SMEM → Registers</strong>: Thread loads ${this.TM} values + b_tmp`);
+            await this.loadRegisters(kIter);
+            await sleep(900);
+
+            // Step 4: Compute FMA operations
+            this.updateStats(`<strong style="color: #E91E63;">4️⃣ Compute</strong>: ${this.TM} FMA ops (b_tmp reused ${this.TM}×)`);
+            await this.computeCudaCores(kIter);
+            await sleep(700);
+
+            // Step 5: Show partial results (pink) or final results (green)
+            if (!isLastIteration) {
+                this.updateStats(`<strong style="color: #FF1493;">5️⃣ Partial Results</strong>: Accumulating... (${kIter + 1}/${numKIterations} complete)`);
+                await this.showPartialResults(kIter);
+                await sleep(600);
+            } else {
+                this.updateStats(`<strong style="color: #8BC34A;">5️⃣ Final Results</strong>: Writing ${this.TM} outputs to Global Memory`);
+                await this.showFinalResults();
+                await sleep(800);
+            }
+
+            // Mark processed GMEM cells as complete (green)
+            await this.markGMEMComplete(kIter, isLastIteration);
+            await sleep(400);
+        }
+
+        this.updateStats(`✅ <strong>Complete!</strong> All ${numKIterations} K tiles processed. Matrix multiplication done!`);
+
+        this.isAnimating = false;
+        document.getElementById('pipeline1dAnimate').disabled = false;
+    }
+
+    async highlightGMEMBlocks(kIter = 0) {
+        const kOffset = kIter * this.BK;
+
+        // Highlight the block being loaded in global A (rows 0-BM, cols kOffset to kOffset+BK)
+        for (let i = 0; i < this.BM; i++) {
+            for (let j = 0; j < this.BK; j++) {
+                const cell = this.globalA.querySelector(`[data-row="${i}"][data-col="${kOffset + j}"]`);
+                if (cell && cell.style.background !== 'rgb(139, 195, 74)') { // Don't override green (complete)
+                    cell.style.background = '#4CAF50';
+                    cell.style.border = '2px solid #8BC34A';
+                }
+            }
+        }
+
+        // Highlight the block being loaded in global B (rows kOffset to kOffset+BK, cols 0-BN)
+        for (let i = 0; i < this.BK; i++) {
+            for (let j = 0; j < this.BN; j++) {
+                const cell = this.globalB.querySelector(`[data-row="${kOffset + i}"][data-col="${j}"]`);
+                if (cell && cell.style.background !== 'rgb(139, 195, 74)') {
+                    cell.style.background = '#4CAF50';
+                    cell.style.border = '2px solid #8BC34A';
+                }
+            }
+        }
+    }
+
+    async markGMEMComplete(kIter, isLastIteration) {
+        const kOffset = kIter * this.BK;
+
+        // Mark processed cells in A as complete (green)
+        for (let i = 0; i < this.BM; i++) {
+            for (let j = 0; j < this.BK; j++) {
+                const cell = this.globalA.querySelector(`[data-row="${i}"][data-col="${kOffset + j}"]`);
+                if (cell) {
+                    cell.style.background = '#8BC34A';
+                    cell.style.border = '1px solid #333';
+                }
+            }
+        }
+
+        // Mark processed cells in B as complete (green)
+        for (let i = 0; i < this.BK; i++) {
+            for (let j = 0; j < this.BN; j++) {
+                const cell = this.globalB.querySelector(`[data-row="${kOffset + i}"][data-col="${j}"]`);
+                if (cell) {
+                    cell.style.background = '#8BC34A';
+                    cell.style.border = '1px solid #333';
+                }
+            }
+        }
+
+        // Mark output cells in C
+        if (isLastIteration) {
+            for (let i = 0; i < this.TM; i++) {
+                const cell = this.globalC.querySelector(`[data-row="${i}"][data-col="0"]`);
+                if (cell) {
+                    cell.style.background = '#8BC34A';
+                    cell.style.border = '2px solid #AED581';
+                }
+            }
+        }
+    }
+
+    async showPartialResults(kIter) {
+        // Show partial sums in pink/magenta
+        for (let i = 0; i < this.TM; i++) {
+            const resultCell = document.querySelector(`[data-result="${i}"]`);
+            resultCell.style.background = '#FF1493'; // Deep pink for partial
+            resultCell.style.border = '2px solid #FF69B4';
+
+            const cell = this.globalC.querySelector(`[data-row="${i}"][data-col="0"]`);
+            if (cell) {
+                cell.style.background = '#FFB6C1'; // Light pink
+                cell.style.border = '2px solid #FF1493';
+            }
+        }
+    }
+
+    async showFinalResults() {
+        // Show final accumulated results in green
+        for (let i = 0; i < this.TM; i++) {
+            const resultCell = document.querySelector(`[data-result="${i}"]`);
+            resultCell.style.background = '#8BC34A';
+            resultCell.style.border = '2px solid #AED581';
+
+            const cell = this.globalC.querySelector(`[data-row="${i}"][data-col="0"]`);
+            if (cell) {
+                cell.style.background = '#8BC34A';
+                cell.style.border = '2px solid #AED581';
+            }
+        }
+    }
+
+    async loadSharedMemory(kIter = 0) {
+        this.currentStep = 2;
+
+        for (let i = 0; i < this.BM; i++) {
+            for (let j = 0; j < this.BK; j++) {
+                const cell = this.sharedA.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                cell.style.background = '#FF9800';
+                cell.style.border = '2px solid #FFA726';
+            }
+        }
+
+        for (let i = 0; i < this.BK; i++) {
+            for (let j = 0; j < this.BN; j++) {
+                const cell = this.sharedB.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                cell.style.background = '#FF9800';
+                cell.style.border = '2px solid #FFA726';
+            }
+        }
+    }
+
+    async loadRegisters(kIter = 0) {
+        this.currentStep = 3;
+
+        const kOffset = kIter * this.BK;
+        const threadCol = 0;
+
+        // Load thread_tile_a values from shared memory
+        for (let i = 0; i < this.TM; i++) {
+            const cell = this.sharedA.querySelector(`[data-row="${i}"][data-col="${threadCol}"]`);
+            cell.style.background = '#00BCD4';
+            cell.style.border = '2px solid #4DD0E1';
+            await sleep(50);
+
+            const regCell = document.querySelector(`[data-reg-a="${i}"]`);
+            regCell.style.background = '#00BCD4';
+            regCell.style.border = '2px solid #4DD0E1';
+            // Show GMEM and SMEM indices
+            const gmemIdx = `A[${i},${kOffset + threadCol}]`;
+            const smemIdx = `tile_a[${i},${threadCol}]`;
+            regCell.innerHTML = `<div style="font-weight: 600;">a[${i}]</div><div style="font-size: 8px; color: #4DD0E1;">${gmemIdx}<br/>${smemIdx}</div>`;
+        }
+
+        // Load b_tmp from shared memory
+        const bCell = this.sharedB.querySelector(`[data-row="${threadCol}"][data-col="0"]`);
+        bCell.style.background = '#00BCD4';
+        bCell.style.border = '2px solid #4DD0E1';
+
+        const regBCell = document.querySelector(`[data-reg-b="0"]`);
+        regBCell.style.background = '#00BCD4';
+        regBCell.style.border = '2px solid #4DD0E1';
+        // Show GMEM and SMEM indices for b_tmp
+        const gmemIdxB = `B[${kOffset + threadCol},0]`;
+        const smemIdxB = `tile_b[${threadCol},0]`;
+        regBCell.innerHTML = `<div style="font-weight: 600;">b_tmp</div><div style="font-size: 8px; color: #4DD0E1;">${gmemIdxB}<br/>${smemIdxB}</div>`;
+    }
+
+    async computeCudaCores(kIter = 0) {
+        this.currentStep = 4;
+
+        for (let i = 0; i < this.TM; i++) {
+            const core = document.querySelector(`[data-core="${i}"]`);
+            core.style.background = '#E91E63';
+            core.style.border = '2px solid #F06292';
+            core.textContent = '⚡FMA';
+
+            await sleep(100);
+
+            const resultCell = document.querySelector(`[data-result="${i}"]`);
+            // Keep accumulating (darker green for more iterations)
+            const intensity = Math.min(255, 139 + kIter * 20);
+            resultCell.style.background = `rgb(${intensity - 100}, ${intensity}, ${intensity - 85})`;
+            resultCell.style.border = '2px solid #AED581';
+        }
+    }
+
+    async writeResults() {
+        this.currentStep = 5;
+        this.updateStats(`Results written back - ${this.TM} outputs computed with high arithmetic intensity!`);
+
+        // Highlight output region in global C
+        for (let i = 0; i < this.TM; i++) {
+            const cell = this.globalC.querySelector(`[data-row="${i}"][data-col="0"]`);
+            cell.style.background = '#8BC34A';
+            cell.style.border = '2px solid #AED581';
+        }
+    }
+
+    updateStats(message = '') {
+        const stats = document.getElementById('pipeline1dStats');
+        const stepsInfo = [
+            '⏸️  Ready to start',
+            '1️⃣  Loading block tiles from global memory (GMEM → SMEM)',
+            '2️⃣  Block tiles cached in shared memory',
+            '3️⃣  Thread loading data into registers (SMEM → Registers)',
+            '4️⃣  Computing FMA operations on CUDA cores',
+            '5️⃣  ✅ Complete - Results written back to global memory'
+        ];
+
+        stats.innerHTML = `
+            <div class="viz-stats">
+                <div class="viz-stat">
+                    <div class="viz-stat-label">Current Step</div>
+                    <div class="viz-stat-value">${this.currentStep}/5</div>
+                </div>
+                <div class="viz-stat">
+                    <div class="viz-stat-label">Block Tile Size</div>
+                    <div class="viz-stat-value">${this.BM}×${this.BN}</div>
+                </div>
+                <div class="viz-stat">
+                    <div class="viz-stat-label">Thread Tile Size</div>
+                    <div class="viz-stat-value">TM=${this.TM}</div>
+                </div>
+                <div class="viz-stat">
+                    <div class="viz-stat-label">Register Reuse</div>
+                    <div class="viz-stat-value">${this.TM}×</div>
+                </div>
+            </div>
+            <div style="margin-top: 15px; padding: 15px; background: #2a2a2a; border-radius: 6px; border-left: 4px solid #4CAF50;">
+                <div style="font-size: 14px; font-weight: 600; color: #4CAF50; margin-bottom: 10px;">
+                    ${stepsInfo[this.currentStep]}
+                </div>
+                ${message ? `<div style="font-size: 13px; color: #999;">${message}</div>` : ''}
+            </div>
+            <div style="margin-top: 15px; padding: 15px; background: #2a2a2a; border-radius: 6px;">
+                <div style="font-size: 13px; line-height: 1.8; color: #e0e0e0;">
+                    <strong style="color: #FFA726;">Key Insight:</strong><br>
+                    • <strong>${(this.BM / this.TM) * this.BN} threads</strong> cooperate to load ${this.BM}×${this.BK} + ${this.BK}×${this.BN} = ${this.BM * this.BK + this.BK * this.BN} values into SMEM<br>
+                    • Each thread loads <strong>${this.TM} + 1</strong> values into registers (${this.TM} from tile_a, 1 b_tmp from tile_b)<br>
+                    • b_tmp is <strong>reused ${this.TM}×</strong> → ${this.TM} FMA operations per b_tmp load<br>
+                    • <strong>Arithmetic Intensity:</strong> ${this.TM} FLOPs / (${this.TM + 1} SMEM reads) = ${(this.TM / (this.TM + 1)).toFixed(2)} FLOPs/read
+                </div>
+            </div>
+        `;
+    }
+
+    reset() {
+        this.currentStep = 0;
+        this.renderPipeline();
     }
 }
 
@@ -1220,8 +2029,9 @@ class Tiling2DViz {
             return;
         }
         this.isAnimating = false;
-        this.TM = 4;
-        this.TN = 4;
+        this.tileSize = 4; // Shared memory tile size
+        this.TM = 4; // Each thread computes TM outputs in M dimension
+        this.TN = 4; // Each thread computes TN outputs in N dimension
         this.matrixSize = 8;
         this.init();
     }
@@ -1229,35 +2039,62 @@ class Tiling2DViz {
     init() {
         this.container.innerHTML = commonStyles + `
             <div class="viz-container">
-                <div class="viz-title">2D Block Tiling: TM × TN Outputs Per Thread</div>
+                <div class="viz-title">2D Block Tiling: Outer Product Register Blocking</div>
+                <div class="viz-info" style="margin-bottom: 15px;">
+                    <h4>Building on 1D Tiling:</h4>
+                    <p style="margin: 10px 0; line-height: 1.8;">
+                        Now each thread computes <strong>TM × TN = ${this.TM}×${this.TN} outputs</strong> instead of just TM!
+                    </p>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0; padding: 15px; background: #2a2a2a; border-radius: 8px;">
+                        <div style="border-right: 2px solid #444; padding-right: 15px;">
+                            <div style="font-weight: 600; color: #FFA726; margin-bottom: 10px;">🟠 1D Block Tiling</div>
+                            <ul style="margin: 0; padding-left: 20px; line-height: 1.8; font-size: 13px;">
+                                <li>Cache 1 <code>b_tmp</code> value</li>
+                                <li>Load TM values from <code>tile_a</code></li>
+                                <li>Compute TM outputs</li>
+                                <li><strong>TM reuse per b_tmp</strong></li>
+                            </ul>
+                        </div>
+                        <div style="padding-left: 15px;">
+                            <div style="font-weight: 600; color: #4CAF50; margin-bottom: 10px;">✅ 2D Block Tiling</div>
+                            <ul style="margin: 0; padding-left: 20px; line-height: 1.8; font-size: 13px;">
+                                <li>Cache <code style="color: #9C27B0;">register_m[TM]</code> values</li>
+                                <li>Cache <code style="color: #00BCD4;">register_n[TN]</code> values</li>
+                                <li><strong style="color: #4CAF50;">Compute TM×TN outputs via outer product!</strong></li>
+                                <li><strong>Bidirectional reuse: TM×TN per register pair</strong></li>
+                            </ul>
+                        </div>
+                    </div>
+                    <p style="margin-top: 10px; color: #FFA726;"><strong>Key Insight:</strong> Outer product pattern: each <code>register_m[i]</code> × <code>register_n[j]</code> generates one output, creating a ${this.TM}×${this.TN} tile!</p>
+                </div>
                 <div class="viz-controls">
                     <button class="viz-btn" id="tiling2dAnimate">Animate</button>
                     <button class="viz-btn" id="tiling2dReset">Reset</button>
                 </div>
                 <div class="viz-canvas" id="tiling2dCanvas"></div>
                 <div class="viz-info">
-                    <h4>2D Thread-Level Tiling</h4>
-                    <p>Each thread computes a ${this.TM}×${this.TN} grid of outputs:</p>
-                    <ul style="margin: 10px 0; padding-left: 20px;">
-                        <li>Load TM elements from A into regM[]</li>
-                        <li>Load TN elements from B into regN[]</li>
-                        <li>Compute outer product: TM × TN results</li>
-                        <li>Maximum register reuse and arithmetic intensity</li>
-                    </ul>
                     <div id="tiling2dStats"></div>
                 </div>
                 <div class="legend">
                     <div class="legend-item">
-                        <div class="legend-box" style="background: #673AB7;"></div>
-                        <span>Loaded in Registers</span>
+                        <div class="legend-box" style="background: #FF9800;"></div>
+                        <span>tile_a[], tile_b[] (Shared Memory)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-box" style="background: #FF6D00;"></div>
-                        <span>Computing</span>
+                        <div class="legend-box" style="background: #9C27B0;"></div>
+                        <span>register_m[TM] (from tile_a)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-box" style="background: #00E676;"></div>
-                        <span>TM×TN Output Tile</span>
+                        <div class="legend-box" style="background: #00BCD4;"></div>
+                        <span>register_n[TN] (from tile_b)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #E91E63;"></div>
+                        <span>Computing Outer Product</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #4CAF50;"></div>
+                        <span>thread_results[TM×TN]</span>
                     </div>
                 </div>
             </div>
@@ -1272,21 +2109,106 @@ class Tiling2DViz {
 
     renderMatrices() {
         this.canvas.innerHTML = `
-            <div style="display: flex; justify-content: space-around; align-items: center; flex-wrap: wrap;">
-                <div id="tiling2dMatrixA"></div>
-                <div style="text-align: center;">
-                    <div style="font-size: 14px; color: #999; margin-bottom: 10px;">Outer Product</div>
-                    <div style="font-size: 24px; color: #4CAF50; margin: 20px 0;">regM ⊗ regN</div>
-                    <div style="font-size: 12px; color: #999;">= ${this.TM}×${this.TN} outputs</div>
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 25px;">
+                <!-- Memory Hierarchy Flow -->
+                <div style="display: flex; gap: 30px; align-items: flex-start; justify-content: center;">
+                    <!-- Shared Memory Section -->
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 14px; color: #FF9800; margin-bottom: 10px; font-weight: 600;">tile_a[] (Shared Memory)</div>
+                            <div id="tiling2dSharedA"></div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 14px; color: #FF9800; margin-bottom: 10px; font-weight: 600;">tile_b[] (Shared Memory)</div>
+                            <div id="tiling2dSharedB"></div>
+                        </div>
+                    </div>
+
+                    <!-- Arrow -->
+                    <div style="display: flex; align-items: center; justify-content: center; font-size: 40px; color: #FFA726;">
+                        →
+                    </div>
+
+                    <!-- Registers Section -->
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #9C27B0; margin-bottom: 8px; font-weight: 600;">register_m[TM]</div>
+                            <div id="tiling2dRegM" style="display: flex; gap: 3px;"></div>
+                            <div style="font-size: 10px; color: #999; margin-top: 5px;">Cached row from tile_a</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #00BCD4; margin-bottom: 8px; font-weight: 600;">register_n[TN]</div>
+                            <div id="tiling2dRegN" style="display: flex; gap: 3px;"></div>
+                            <div style="font-size: 10px; color: #999; margin-top: 5px;">Cached col from tile_b</div>
+                        </div>
+                        <div style="text-align: center; margin-top: 10px; padding: 10px; background: #2a2a2a; border-radius: 6px; border: 2px solid #4CAF50;">
+                            <div style="font-size: 14px; color: #4CAF50; font-weight: 600;">Outer Product</div>
+                            <div style="font-size: 20px; margin: 5px 0;">⊗</div>
+                            <div style="font-size: 11px; color: #999;">TM × TN = ${this.TM}×${this.TN}</div>
+                        </div>
+                    </div>
+
+                    <!-- Arrow -->
+                    <div style="display: flex; align-items: center; justify-content: center; font-size: 40px; color: #FFA726;">
+                        →
+                    </div>
+
+                    <!-- Output Section -->
+                    <div style="text-align: center;">
+                        <div style="font-size: 12px; color: #4CAF50; margin-bottom: 8px; font-weight: 600;">thread_results[TM×TN]</div>
+                        <div id="tiling2dMatrixC"></div>
+                        <div style="font-size: 10px; color: #999; margin-top: 5px;">One thread computes<br>${this.TM}×${this.TN} outputs!</div>
+                    </div>
                 </div>
-                <div id="tiling2dMatrixB"></div>
-                <div id="tiling2dMatrixC"></div>
             </div>
         `;
 
-        this.matrixA = createMatrixGrid(this.matrixSize, this.matrixSize, 35, 'Matrix A', document.getElementById('tiling2dMatrixA'));
-        this.matrixB = createMatrixGrid(this.matrixSize, this.matrixSize, 35, 'Matrix B', document.getElementById('tiling2dMatrixB'));
-        this.matrixC = createMatrixGrid(this.matrixSize, this.matrixSize, 35, 'Matrix C', document.getElementById('tiling2dMatrixC'));
+        // Create shared memory tiles
+        this.sharedA = createMatrixGrid(this.tileSize, this.tileSize, 30, '', document.getElementById('tiling2dSharedA'));
+        this.sharedB = createMatrixGrid(this.tileSize, this.tileSize, 30, '', document.getElementById('tiling2dSharedB'));
+
+        // Create output tile
+        this.matrixC = createMatrixGrid(this.TM, this.TN, 35, '', document.getElementById('tiling2dMatrixC'));
+
+        // Create register_m visualization (horizontal now, like array)
+        const regMContainer = document.getElementById('tiling2dRegM');
+        regMContainer.innerHTML = '';
+        for (let i = 0; i < this.TM; i++) {
+            const reg = document.createElement('div');
+            reg.id = `reg2d-m-${i}`;
+            reg.style.width = '50px';
+            reg.style.height = '50px';
+            reg.style.background = '#333';
+            reg.style.border = '2px solid #555';
+            reg.style.borderRadius = '4px';
+            reg.style.display = 'flex';
+            reg.style.alignItems = 'center';
+            reg.style.justifyContent = 'center';
+            reg.style.fontSize = '10px';
+            reg.style.transition = 'all 0.3s';
+            reg.textContent = `m[${i}]`;
+            regMContainer.appendChild(reg);
+        }
+
+        // Create register_n visualization (horizontal)
+        const regNContainer = document.getElementById('tiling2dRegN');
+        regNContainer.innerHTML = '';
+        for (let j = 0; j < this.TN; j++) {
+            const reg = document.createElement('div');
+            reg.id = `reg2d-n-${j}`;
+            reg.style.width = '50px';
+            reg.style.height = '50px';
+            reg.style.background = '#333';
+            reg.style.border = '2px solid #555';
+            reg.style.borderRadius = '4px';
+            reg.style.display = 'flex';
+            reg.style.alignItems = 'center';
+            reg.style.justifyContent = 'center';
+            reg.style.fontSize = '10px';
+            reg.style.transition = 'all 0.3s';
+            reg.textContent = `n[${j}]`;
+            regNContainer.appendChild(reg);
+        }
     }
 
     async animate() {
@@ -1297,72 +2219,99 @@ class Tiling2DViz {
         document.getElementById('tiling2dAnimate').disabled = true;
         document.getElementById('tiling2dStats').innerHTML = '';
 
-        const numThreadsRow = Math.ceil(this.matrixSize / this.TM);
-        const numThreadsCol = Math.ceil(this.matrixSize / this.TN);
-        let threadsCompleted = 0;
+        let smemReads = 0;
+        let computationsCompleted = 0;
 
-        for (let threadRow = 0; threadRow < numThreadsRow; threadRow++) {
-            for (let threadCol = 0; threadCol < numThreadsCol; threadCol++) {
-                // Highlight TM rows from A
-                for (let i = 0; i < this.TM; i++) {
-                    const row = threadRow * this.TM + i;
-                    for (let k = 0; k < this.matrixSize; k++) {
-                        if (row < this.matrixSize) {
-                            const cellA = this.matrixA.querySelector(`[data-row="${row}"][data-col="${k}"]`);
-                            if (cellA) cellA.style.background = '#673AB7';
-                        }
-                    }
-                }
+        // Step 1: Load tiles into shared memory
+        for (let i = 0; i < this.tileSize; i++) {
+            for (let j = 0; j < this.tileSize; j++) {
+                const cellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                const cellB = this.sharedB.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                cellA.style.background = '#FF9800';
+                cellB.style.background = '#FF9800';
+            }
+        }
 
-                // Highlight TN columns from B
+        await sleep(500);
+
+        // Simulate one K iteration to show the outer product pattern
+        for (let k = 0; k < this.tileSize; k++) {
+            // Step 2: Load register_m[TM] from tile_a
+            for (let i = 0; i < this.TM; i++) {
+                const cellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${k}"]`);
+                if (cellA) cellA.classList.add('active');
+
+                const regM = document.getElementById(`reg2d-m-${i}`);
+                regM.style.background = '#9C27B0';
+                regM.style.borderColor = '#9C27B0';
+            }
+
+            smemReads += this.TM;
+            await sleep(300);
+
+            // Step 3: Load register_n[TN] from tile_b
+            for (let j = 0; j < this.TN; j++) {
+                const cellB = this.sharedB.querySelector(`[data-row="${k}"][data-col="${j}"]`);
+                if (cellB) cellB.classList.add('active');
+
+                const regN = document.getElementById(`reg2d-n-${j}`);
+                regN.style.background = '#00BCD4';
+                regN.style.borderColor = '#00BCD4';
+            }
+
+            smemReads += this.TN;
+            await sleep(300);
+
+            // Step 4: Compute outer product TM × TN
+            // Show each element being computed
+            for (let i = 0; i < this.TM; i++) {
                 for (let j = 0; j < this.TN; j++) {
-                    const col = threadCol * this.TN + j;
-                    for (let k = 0; k < this.matrixSize; k++) {
-                        if (col < this.matrixSize) {
-                            const cellB = this.matrixB.querySelector(`[data-row="${k}"][data-col="${col}"]`);
-                            if (cellB) cellB.style.background = '#673AB7';
+                    // Highlight registers being used
+                    const regM = document.getElementById(`reg2d-m-${i}`);
+                    const regN = document.getElementById(`reg2d-n-${j}`);
+                    regM.style.background = '#E91E63';
+                    regN.style.background = '#E91E63';
+
+                    // Highlight output cell
+                    const cellC = this.matrixC.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                    if (cellC) cellC.style.background = '#E91E63';
+
+                    await sleep(50);
+
+                    // Update output
+                    if (cellC) {
+                        if (k < this.tileSize - 1) {
+                            cellC.style.background = '#FF6B6B'; // Partial
+                        } else {
+                            cellC.style.background = '#4CAF50'; // Complete
+                            computationsCompleted++;
                         }
                     }
+
+                    // Reset register colors
+                    regM.style.background = '#9C27B0';
+                    regN.style.background = '#00BCD4';
                 }
+            }
 
-                await sleep(300);
+            this.updateTiling2DStats(smemReads, computationsCompleted, k + 1);
 
-                // Show computation (highlight output tile)
-                for (let i = 0; i < this.TM; i++) {
-                    for (let j = 0; j < this.TN; j++) {
-                        const row = threadRow * this.TM + i;
-                        const col = threadCol * this.TN + j;
+            await sleep(200);
 
-                        if (row < this.matrixSize && col < this.matrixSize) {
-                            const cellC = this.matrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-                            if (cellC) cellC.style.background = '#FF6D00';
-                        }
-                    }
-                }
+            // Clear active highlights from shared memory
+            this.sharedA.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
+            this.sharedB.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
 
-                await sleep(300);
-
-                // Mark outputs as complete
-                for (let i = 0; i < this.TM; i++) {
-                    for (let j = 0; j < this.TN; j++) {
-                        const row = threadRow * this.TM + i;
-                        const col = threadCol * this.TN + j;
-
-                        if (row < this.matrixSize && col < this.matrixSize) {
-                            const cellC = this.matrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-                            if (cellC) cellC.style.background = '#00E676';
-                        }
-                    }
-                }
-
-                threadsCompleted++;
-                this.updateTiling2DStats(threadsCompleted);
-
-                await sleep(200);
-
-                // Clear input highlights
-                this.matrixA.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
-                this.matrixB.querySelectorAll('.matrix-cell').forEach(el => el.style.background = '#333');
+            // Reset registers
+            for (let i = 0; i < this.TM; i++) {
+                const regM = document.getElementById(`reg2d-m-${i}`);
+                regM.style.background = '#333';
+                regM.style.borderColor = '#555';
+            }
+            for (let j = 0; j < this.TN; j++) {
+                const regN = document.getElementById(`reg2d-n-${j}`);
+                regN.style.background = '#333';
+                regN.style.borderColor = '#555';
             }
         }
 
@@ -1370,29 +2319,40 @@ class Tiling2DViz {
         this.isAnimating = false;
     }
 
-    updateTiling2DStats(threadsCompleted) {
-        const totalThreads = Math.ceil(this.matrixSize / this.TM) * Math.ceil(this.matrixSize / this.TN);
-        const outputsPerThread = this.TM * this.TN;
-        const totalOutputs = Math.min(threadsCompleted * outputsPerThread, this.matrixSize * this.matrixSize);
-        const arithmeticIntensity = (outputsPerThread / (this.TM + this.TN)).toFixed(2);
+    updateTiling2DStats(smemReads, computationsCompleted, kProgress) {
+        const totalOutputs = this.TM * this.TN;
+        const totalSMEMReads = this.tileSize * (this.TM + this.TN);
+        const reusePerLoad = (totalOutputs / (this.TM + this.TN)).toFixed(2);
 
         document.getElementById('tiling2dStats').innerHTML = `
             <div class="viz-stats">
                 <div class="viz-stat">
-                    <div class="viz-stat-label">Threads Completed</div>
-                    <div class="viz-stat-value">${threadsCompleted}/${totalThreads}</div>
+                    <div class="viz-stat-label">K Progress</div>
+                    <div class="viz-stat-value">${kProgress}/${this.tileSize}</div>
                 </div>
                 <div class="viz-stat">
-                    <div class="viz-stat-label">Outputs Per Thread</div>
-                    <div class="viz-stat-value">${this.TM}×${this.TN} = ${outputsPerThread}</div>
+                    <div class="viz-stat-label">SMEM Reads (So Far)</div>
+                    <div class="viz-stat-value">${smemReads}/${totalSMEMReads}</div>
                 </div>
                 <div class="viz-stat">
-                    <div class="viz-stat-label">Total Outputs</div>
-                    <div class="viz-stat-value">${totalOutputs}</div>
+                    <div class="viz-stat-label">Outputs Completed</div>
+                    <div class="viz-stat-value">${computationsCompleted}/${totalOutputs}</div>
                 </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Register Efficiency</div>
-                    <div class="viz-stat-value">${arithmeticIntensity} FLOP/load</div>
+                <div class="viz-stat" style="border-left: 3px solid #4CAF50;">
+                    <div class="viz-stat-label">Outer Product Size</div>
+                    <div class="viz-stat-value" style="color: #4CAF50;">${this.TM}×${this.TN} = ${totalOutputs}</div>
+                </div>
+                <div class="viz-stat" style="border-left: 3px solid #9C27B0;">
+                    <div class="viz-stat-label">Register Reuse Factor</div>
+                    <div class="viz-stat-value" style="color: #9C27B0;">${reusePerLoad}× per register</div>
+                </div>
+            </div>
+            <div style="margin-top: 15px; padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 4px solid #FFA726;">
+                <div style="font-size: 13px; line-height: 1.6;">
+                    <strong style="color: #FFA726;">🎯 Outer Product Pattern:</strong><br>
+                    <span style="color: #9C27B0;">register_m[${this.TM}]</span> ⊗ <span style="color: #00BCD4;">register_n[${this.TN}]</span> = <span style="color: #4CAF50;">${this.TM}×${this.TN} outputs</span><br>
+                    Each iteration: Load <strong>${this.TM + this.TN}</strong> values, compute <strong>${this.TM * this.TN}</strong> outputs!<br>
+                    <span style="color: #4CAF50;">Efficiency:</span> ${reusePerLoad}× more computation per SMEM read than 1D tiling!
                 </div>
             </div>
         `;
@@ -1952,6 +2912,7 @@ if (typeof window !== 'undefined') {
     window.IndexTransformViz = IndexTransformViz;
     window.SharedMemoryViz = SharedMemoryViz;
     window.Tiling1DViz = Tiling1DViz;
+    window.Tiling1DPipelineViz = Tiling1DPipelineViz;
     window.Tiling2DViz = Tiling2DViz;
     window.VectorizedViz = VectorizedViz;
     window.PerformanceComparison = PerformanceComparison;
