@@ -12,7 +12,14 @@ author: ks
 
 Matrix multiplication (GEMM - General Matrix Multiply) is one of the most fundamental operations in deep learning. Understanding how to optimize GEMM kernels on GPUs provides deep insights into GPU architecture, memory hierarchies, and parallel computing principles.
 
-If the reader is remotely interested in CUDA or Triton programmin, they have likely come across [this gemm of a post](https://siboehm.com/articles/22/CUDA-MMM) -- pun intended -- by Simon Boehm. We'll build on this and walk through several optimization stages, each with some interactive visualizations to help understand the concepts. In addition, we will try to do most of the work in triton instead.
+If the reader is remotely interested in CUDA or Triton programmin, they have likely come across [this gemm of a post](https://siboehm.com/articles/22/CUDA-MMM) -- pun intended -- by Simon Boehm. We'll build on this and walk through several optimization stages, each with some interactive visualizations to help understand the concepts. 
+
+
+## Code Repository
+
+Full implementation of all kernels discussed in this post:
+
+<div class="github-card" data-user="gpusgobrr" data-repo="explore-gemm" data-width="100%" data-height="" data-theme="default"></div>
 
 ## GEMM Basics
 
@@ -47,108 +54,11 @@ For a $4096 \times 4096$ matrix multiplication ($M = N = K = 4096$):
 - Memory required: $3 \times 4096^2 \times 4$ bytes $\approx$ 201 MB (float32)
 - **Arithmetic Intensity**: $\frac{137 \text{ GFLOPs}}{201 \text{ MB}} \approx 682$ FLOPs/byte
 
-## Code Repository
 
-Full implementation of all kernels discussed in this post:
-
-<div class="github-card" data-user="gpusgobrr" data-repo="explore-gemm" data-width="100%" data-height="" data-theme="default"></div>
 
 ## Hardware Specifications
 
 All benchmarks in this post were run on an **NVIDIA GeForce RTX 4090** 🚀. Below are the key specifications:
-
-<div style="overflow-x: auto; margin: 20px 0;">
-  <table style="width: 100%; border-collapse: collapse; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 10px; overflow: hidden;">
-    <thead>
-      <tr style="background: linear-gradient(90deg, #76b900 0%, #53a401 100%);">
-        <th style="padding: 15px; text-align: left; color: white; font-weight: 600; border-bottom: 2px solid #76b900;">⚡ Specification</th>
-        <th style="padding: 15px; text-align: left; color: white; font-weight: 600; border-bottom: 2px solid #76b900;">🎯 RTX 4090 (Ada Lovelace)</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr style="background: rgba(118, 185, 0, 0.05);">
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🏗️ <strong>Architecture</strong></td>
-        <td style="padding: 12px; color: #76b900; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">Ada Lovelace (TSMC 4nm)</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🔢 <strong>CUDA Cores</strong></td>
-        <td style="padding: 12px; color: #4fc3f7; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">16,384</td>
-      </tr>
-      <tr style="background: rgba(118, 185, 0, 0.05);">
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🎛️ <strong>Streaming Multiprocessors (SMs)</strong></td>
-        <td style="padding: 12px; color: #4fc3f7; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">128</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">⚡ <strong>GPU Boost Clock</strong></td>
-        <td style="padding: 12px; color: #ffb74d; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">2,520 MHz</td>
-      </tr>
-      <tr style="background: rgba(255, 193, 7, 0.1);">
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">💪 <strong>FP32 Performance</strong></td>
-        <td style="padding: 12px; color: #ffc107; font-weight: 700; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,0.1);">82.6 TFLOPS 🔥</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🧠 <strong>Tensor Cores</strong></td>
-        <td style="padding: 12px; color: #ba68c8; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">512 (4th Gen)</td>
-      </tr>
-      <tr style="background: rgba(118, 185, 0, 0.05);">
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🚀 <strong>Tensor Performance (FP8)</strong></td>
-        <td style="padding: 12px; color: #ba68c8; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">660.6 TFLOPS</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">✨ <strong>RT Cores</strong></td>
-        <td style="padding: 12px; color: #81c784; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">128 (3rd Gen)</td>
-      </tr>
-      <tr style="background: rgba(33, 150, 243, 0.1);">
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">💾 <strong>Memory Size</strong></td>
-        <td style="padding: 12px; color: #42a5f5; font-weight: 700; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,0.1);">24 GB GDDR6X</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">⏱️ <strong>Memory Clock</strong></td>
-        <td style="padding: 12px; color: #42a5f5; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">21 Gbps</td>
-      </tr>
-      <tr style="background: rgba(33, 150, 243, 0.1);">
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🌊 <strong>Memory Bandwidth</strong></td>
-        <td style="padding: 12px; color: #42a5f5; font-weight: 700; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,0.1);">1,008 GB/s 💨</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">📦 <strong>L1 Cache / Shared Memory (Total)</strong></td>
-        <td style="padding: 12px; color: #ff7043; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">16,384 KB (16 MB)</td>
-      </tr>
-      <tr style="background: rgba(118, 185, 0, 0.05);">
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🗄️ <strong>L2 Cache</strong></td>
-        <td style="padding: 12px; color: #ff7043; font-weight: 700; font-size: 16px; border-bottom: 1px solid rgba(255,255,255,0.1);">72 MB 📈</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🔧 <strong>Shared Memory per SM</strong></td>
-        <td style="padding: 12px; color: #ff7043; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">128 KB</td>
-      </tr>
-      <tr style="background: rgba(118, 185, 0, 0.05);">
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">📝 <strong>Registers per SM</strong></td>
-        <td style="padding: 12px; color: #ff7043; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">256 KB</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">⚡ <strong>TGP</strong></td>
-        <td style="padding: 12px; color: #f57c00; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">450 W</td>
-      </tr>
-      <tr style="background: rgba(118, 185, 0, 0.05);">
-        <td style="padding: 12px; color: #e0e0e0; border-bottom: 1px solid rgba(255,255,255,0.1);">🔬 <strong>Transistor Count</strong></td>
-        <td style="padding: 12px; color: #9575cd; font-weight: 600; border-bottom: 1px solid rgba(255,255,255,0.1);">76.3 Billion</td>
-      </tr>
-      <tr>
-        <td style="padding: 12px; color: #e0e0e0;">📏 <strong>Die Size</strong></td>
-        <td style="padding: 12px; color: #9575cd; font-weight: 600;">608.5 mm²</td>
-      </tr>
-    </tbody>
-  </table>
-</div>
-
-> **Key Takeaways for GEMM Performance:**
-> - **128 SMs** with 128 KB shared memory each = massive parallelism opportunity
-> - **82.6 TFLOPS FP32** theoretical peak (our target to approach)
-> - **1,008 GB/s** memory bandwidth = need to minimize global memory access
-> - **72 MB L2 cache** = excellent data reuse potential
-> - **16,384 KB total L1/shared memory** across all SMs = critical for tiling strategies
-{: .prompt-tip}
 
 ### SM Architecture
 
@@ -156,11 +66,62 @@ All benchmarks in this post were run on an **NVIDIA GeForce RTX 4090** 🚀. Bel
 
 *Source: [NVIDIA Ada GPU Architecture Whitepaper](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf)*
 
-## Kernel 1: Naive Implementation
+| Specification | RTX 4090 (Ada Lovelace) |
+|---------------|--------------------------|
+| **Architecture** | Ada Lovelace (TSMC 4nm) |
+| **CUDA Cores** | 16,384 |
+| **Streaming Multiprocessors (SMs)** | 128 |
+| **GPU Boost Clock** | 2,520 MHz |
+| **FP32 Performance** | 82.6 TFLOPS |
+| **Tensor Cores** | 512 (4th Gen) |
+| **Tensor Performance (FP8)** | 660.6 TFLOPS |
+| **RT Cores** | 128 (3rd Gen) |
+| **Memory Size** | 24 GB GDDR6X |
+| **Memory Clock** | 21 Gbps |
+| **Memory Bandwidth** | 1,008 GB/s |
+| **L1 Cache / Shared Memory (Total)** | 16,384 KB (16 MB) |
+| **L2 Cache** | 72 MB |
+| **Shared Memory per SM** | 128 KB |
+| **Registers per SM** | 256 KB |
+| **TGP** | 450 W |
+| **Transistor Count** | 76.3 Billion |
+| **Die Size** | 608.5 mm² |
+
+> **Key Takeaways for GEMM Performance:**
+> - **128 SMs** with 128 KB shared memory each
+> - **82.6 TFLOPS FP32** theoretical peak
+> - **1,008 GB/s** max memory bandwidth
+> - **72 MB L2 cache**
+> - **16,384 KB total L1/shared memory**
+{: .prompt-tip}
+
+
+
+## Naive Implementation
 
 ### Concept
 
-The simplest approach to calculate GEMM assign each thread to compute one output element. Here is a naive implementation for matrix maltiply GEMM kernel
+The simplest approach to calculate GEMM assign each thread to compute one output element.
+
+> **What does the memory access pattern look like in this naive case?**
+>
+> At a high level, each thread independently:
+> 1. Loads one row of $A$ (K elements)
+> 2. Loads one column of $B$ (K elements)
+> 3. Computes dot product
+> 4. Writes one element to $C$
+{: .prompt-tip}
+
+Let's look an interactive visualization of it below
+
+<div id="naive-viz"></div>
+
+> **Problem**: Threads access memory in a scattered, non-coalesced pattern.
+{: .prompt-warning}
+
+### Kernel
+
+Here is a naive implementation for matrix multiply GEMM kernel:
 
 ```c
 __global__ void sgemm_naive(int M, int N, int K,
@@ -180,7 +141,7 @@ __global__ void sgemm_naive(int M, int N, int K,
 }
 ```
 
-#### Caller
+### Caller
 
 We operate on torch Tensors directly to call the above kernel:
 
@@ -225,24 +186,9 @@ void sgemm_naive(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
 }
 ```
 
+### Performance Analysis
 
-> **What does the memory access pattern look like in this naive case?** 
->
-> At a high level, each thread independently:
-> 1. Loads one row of $A$ (K elements)
-> 2. Loads one column of $B$ (K elements)
-> 3. Computes dot product
-> 4. Writes one element to $C$
-{: .prompt-tip}
-
-Let's look an interactive visualization of it below
-
-<div id="naive-viz"></div>
-
-> **Problem**: Threads access memory in a scattered, non-coalesced pattern.
-{: .prompt-warning}
-
-I ran the naive kernel and pytorch gemm kernels on my RTX 4090 to experiment. Let's see the results below:
+I ran the naive kernel and PyTorch GEMM kernels on my RTX 4090 to experiment. Let's see the results below:
 
 ```
 2025-10-07 07:11:33.403 | INFO     | __main__:run_benchmarks:745 - 📊 Comparison (baseline: PyTorch)
@@ -273,8 +219,6 @@ I ran the naive kernel and pytorch gemm kernels on my RTX 4090 to experiment. Le
 > - Bandwidth utilization is 133× worse (0.90 GB/s vs 119.97 GB/s)
 {: .prompt-info}
 
-### Benchmark Results
-
 Below are the full benchmark results comparing the naive CUDA kernel against PyTorch's optimized GEMM implementation across different shapes:
 
 ![Naive Only](/assets/explore_gemm_naive_only.png)
@@ -282,11 +226,11 @@ Below are the full benchmark results comparing the naive CUDA kernel against PyT
 As we can see, the naive implementation is significantly slower than PyTorch's optimized kernel, achieving only ~1% of PyTorch's performance. 
 
 
-## Kernel 2: Global Memory Coalescing
+## Global Memory Coalescing
 
-### Why Memory Coalescing Matters
+### Concept
 
-#### The Hardware Perspective
+#### Why Memory Coalescing Matters
 
 To understand memory coalescing, we need to understand GPU execution hierarchy:
 
@@ -307,22 +251,30 @@ To understand memory coalescing, we need to understand GPU execution hierarchy:
 {: .prompt-tip}
 
 
-**Why SMs matter for GEMM**:
+**In addition, other things to note about SMs include**:
 - Each SM has limited resources (registers, shared memory)
 - Multiple thread blocks compete for these resources
 - SMs can switch between warps in a **single clock cycle** (1000x faster than CPU context switches)
 - This enables **latency hiding**: while one warp waits for memory, another executes
-- GEMM efficiency depends on keeping all warp schedulers busy with coalesced memory access patterns
+- **GEMM efficiency depends on keeping all warp schedulers busy with coalesced memory access patterns**
 
-**Coalescing Example**:
+Now that we have general hardware fundamentals, we can see that the naive kernel's memory access pattern is inefficient. When threads in a warp access scattered memory locations, each access requires a separate memory transaction. Memory coalescing restructures the thread-to-output mapping so threads in the same warp access consecutive memory locations, enabling the hardware to combine multiple accesses into a single transaction.
+
+**Example**:
 - 32 threads each load a 4-byte float
 - Total data: 128 bytes
 - **Coalesced**: 1 memory transaction (128-byte cache line)
 - **Uncoalesced**: Up to 32 separate transactions
 
-### Concept
+#### Memory Access Visualization
 
-Now that we have general hardware fundatmentals, we can see that the naive kernel's memory access pattern is inefficient. When threads in a warp access scattered memory locations, each access requires a separate memory transaction. Memory coalescing restructures the thread-to-output mapping so threads in the same warp access consecutive memory locations, enabling the hardware to combine multiple accesses into a single transaction.
+Let's visualize how the coalesced kernel accesses memory during matrix multiplication. Notice how threads in the same warp now access the **same row** of matrix A, enabling memory coalescing:
+
+<div id="coalesced-matrix-viz"></div>
+
+<div id="index-transform-viz"></div>
+
+### Kernel
 
 #### Thread-to-Output Remapping
 
@@ -396,19 +348,12 @@ void sgemm_global_mem_coalesce(const torch::Tensor &matrix_a, const torch::Tenso
 }
 ```
 
-The key change from the naive kernel:
+{: .prompt-info}
+> The key change from the naive kernel:
+> 
+> Threads with consecutive `threadIdx.x` now access consecutive elements in the same row of A—enabling coalescing.
 
-Threads with consecutive `threadIdx.x` now access consecutive elements in the same row of A—enabling coalescing.
-
-### Memory Access Visualization
-
-Let's visualize how the coalesced kernel accesses memory during matrix multiplication. Notice how threads in the same warp now access the **same row** of matrix A, enabling memory coalescing:
-
-<div id="coalesced-matrix-viz"></div>
-
-<div id="index-transform-viz"></div>
-
-#### The Performance Impact
+### Performance Analysis
 
 Just like the naive version, we ran a benchmark for N = M = K = 4096 to get the FLOPs and memory bandwidth numbers.
 
@@ -461,9 +406,11 @@ Below are the full benchmark results comparing the naive CUDA kernel against PyT
 
 We can see that performance improved but still way slower than the pytorch version.
 
-## Kernel 3: Shared Memory Caching
+## Shared Memory Caching
 
-### GPU Memory Hierarchy
+### Concept
+
+#### GPU Memory Hierarchy
 
 Before diving into shared memory optimization, let's understand the RTX 4090's memory hierarchy and why shared memory is so critical for performance:
 
@@ -478,32 +425,21 @@ Shared memory provides **bandwidth advantage** compared to global memory:
 | **Shared Memory (L1)** | ~14 TB/s | 20-30 cycles | On-chip |
 
 
-Even with coalesced access, both the naive and coalesced kernels repeatedly read the same data from global memory:
-- Each element of matrix $A$ is read $N$ times (once per column of $B$)
-- Each element of matrix $B$ is read $M$ times (once per row of $A$)
-- For a 1024×1024 matrix multiplication: **each element is read ~1000 times from slow global memory**
+{: .prompt-warning}
+> Even with coalesced access, both the naive and coalesced kernels repeatedly read the same data from global memory:
+> - Each element of matrix $A$ is read $N$ times (once per column of $B$)
+> - Each element of matrix $B$ is read $M$ times (once per row of $A$)
+> - For a 1024×1024 matrix multiplication: **each element is read ~1000 times from slow global memory**
 
-#### The Shared Memory Solution
+#### Using the Shared Memory
 
-The RTX 4090 has **128 KB of shared memory per SM**, physically located on-chip. This memory is:
+The RTX 4090 has **128 KB of shared memory per SM** that serves as a fast on-chip cache physically located much closer to the compute units than global memory. This shared memory is partitioned among thread blocks (each block gets its own chunk), accessible by all threads within a block, and delivers dramatically better performance with ~14 TB/s bandwidth and 20-30 cycle latency compared to global memory's 1 TB/s and 400-800 cycle latency. 
 
-1. **Partitioned among thread blocks**: Each block gets its own chunk of shared memory
-2. **Shared within a block**: All threads in a block can access the same shared memory
-3. **Explicitly managed**: We control what data goes into shared memory
-4. **Much faster**: 14 TB/s vs 1 TB/s global memory bandwidth
-5. **Lower latency**: ~20-30 cycles vs 400-800 cycles
+With 128 SMs on the RTX 4090, there's a total of **16.4 MB of shared memory** distributed across the chip. Instead of repeatedly reading the same data slow GMEM, our optimization strategy loads tiles (chunks) of matrices A and B into this fast shared memory, computes partial results using the cached tile data with high reuse across multiple threads, then slides these tiles across the matrices to compute the final result—effectively transforming a bandwidth-bound problem into a compute-bound one.
 
-With 128 SMs on the RTX 4090, that's a total of **16.4 MB of shared memory** distributed across the chip.
+<div id="shared-memory-viz"></div>
 
-### Concept
-
-Now, instead of reading from global memory for every operation, we:
-
-1. **Load tiles** (chunks) of $A$ and $B$ from global memory into shared memory
-2. **Compute partial results** using the tiles in fast shared memory
-3. **Reuse** the tile data across multiple threads without re-reading from global memory
-4. **Slide the tiles** across matrices $A$ and $B$ to compute the final result
-
+### Kernel
 
 ```cuda
 
@@ -575,7 +511,7 @@ __global__ void sgemm_shared_mem_kernel(int num_rows_a, int num_cols_b, int num_
 }
 ```
 
-#### Caller
+### Caller
 
 ```cpp
 void sgemm_shared_mem(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
@@ -615,8 +551,6 @@ void sgemm_shared_mem(const torch::Tensor &matrix_a, const torch::Tensor &matrix
         alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix);
 }
 ```
-
-<div id="shared-memory-viz"></div>
 
 ### Performance Analysis
 
@@ -686,10 +620,26 @@ Before diving into more advanced optimizations, we need to understand **occupanc
 
 $$\text{Occupancy} = \frac{\text{Active Warps per SM}}{\text{Maximum Warps per SM}}$$
 
-For the RTX 4090 (Compute Capability 8.9):
-- **Maximum warps per SM**: 48 warps
-- **Maximum threads per SM**: 1,536 threads (48 warps × 32 threads/warp)
-- **Maximum thread blocks per SM**: 32 blocks
+For the RTX 4090 (Compute Capability 8.9), below are the device specs:
+
+| Specification | RTX 4090 Value |
+|---------------|----------------|
+| **Total Global Memory** | 24,209 MB |
+| **Shared Memory per Block** | 49,152 bytes (48 KB) |
+| **Shared Memory per SM** | 102,400 bytes (100 KB) |
+| **Registers per Block** | 65,536 |
+| **Warp Size** | 32 threads |
+| **Max Threads per Block** | 1,024 |
+| **Max Threads per SM** | 1,536 |
+| **Number of SMs** | 128 |
+| **Max Blocks per SM** | 24 |
+| **Max Grid Dimensions** | [2,147,483,647, 65,535, 65,535] |
+| **Max Thread Block Dimensions** | [1,024, 1,024, 64] |
+| **Base Clock Rate** | 2,520 MHz |
+| **Memory Clock Rate** | 10,501 MHz |
+| **Memory Bus Width** | 384 bits |
+| **L2 Cache Size** | 75,497,472 bytes (72 MB) |
+
 
 ### Why Occupancy Matters
 
@@ -795,14 +745,16 @@ Next, looking at the instruction mix, we can see that LDS dominates the instruct
 > NVIDIA provides [`cudaOccupancyMaxActiveBlocksPerMultiprocessor()`](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__HIGHLEVEL.html#group__CUDART__HIGHLEVEL_1g5a5d67a3c907371559ba692195e8a38c) to calculate theoretical occupancy at runtime. Most profilers (Nsight Compute) also report achieved occupancy.
 {: .prompt-tip}
 
-## Kernel 4: 1D Block Tiling
+## 1D Block Tiling
 
-Now that we understand that in Kernel 3, each thread was computing a single output element of matrix C, meaning each thread needed to load elements from shared memory repeatedly, with memory accesses dominating the execution time. Next, instead of each thread computing exactly one output element of the tile, each thread computes multiple output elements along one dimension. To support this, we fetch some data from SMEM into registers (for reuse) within each thread, reducing repeated SMEM loads. 
+### Concept
 
+Now that we understand that in the previous kernel, each thread was computing a single output element of matrix C, meaning each thread needed to load elements from shared memory repeatedly, with memory accesses dominating the execution time. Next, instead of each thread computing exactly one output element of the tile, each thread computes multiple output elements along one dimension. To support this, we fetch some data from SMEM into registers (for reuse) within each thread, reducing repeated SMEM loads.
 
 > In essence, we are trying to improve the arithmetic intensity of the kernel, which effectively means computing more results per thread with the same loaded data i.e. increase FLOPS/byte
 {: .prompt-tip}
 
+<div id="1d-tiling-viz"></div>
 
 ### Kernel
 
@@ -939,15 +891,7 @@ void sgemm_blocktiling_1d(const torch::Tensor &matrix_a, const torch::Tensor &ma
 
 ```
 
-<div id="1d-tiling-viz"></div>
-
-<!-- ### Memory Hierarchy Pipeline
-
-The visualization below shows the complete data flow through the GPU memory hierarchy for 1D block tiling:
-
-<div id="1d-pipeline-viz"></div> -->
-
-### Performance Results
+### Performance Analysis
 
 ```
 🟠 Benchmarking CUDA 1D Block Tiling...
@@ -1018,7 +962,7 @@ The shared memory bandwidth used is also showed in the memory charts. See the co
 > Key takeaway from 1D blocktiling approach is as we calculate more values per thread, we reduce the number of loads/stores per result i.e. increase arithmetic intensity
 {: .prompt-tip}
 
-## Kernel 5: 2D Block Tiling
+## 2D Block Tiling
 
 ### Concept
 
@@ -1272,9 +1216,9 @@ void sgemm_blocktiling_2d(const torch::Tensor &matrix_a, const torch::Tensor &ma
 
 <div id="2d-tiling-viz"></div>
 
-### Performance Results
+### Performance Analysis
 
-Looking at the benchmark results for 4096×4096 matrices, the 2D block tiling kernel shows furthre performance gains:
+Looking at the benchmark results for 4096×4096 matrices, the 2D block tiling kernel shows further performance gains:
 
 
 
@@ -1296,7 +1240,7 @@ Looking at the benchmark results for 4096×4096 matrices, the 2D block tiling ke
 | **2D Block Tiling** | **4.50** | **30.55** | **44.75** | **38.7%** | **46.9×** |
 | PyTorch | 1.74 | 79.00 | 115.73 | 100% | 121.2× |
 
-### Performance Across Matrix Sizes
+#### Performance Across Matrix Sizes
 
 ![2D block tiling performance](/assets/explore_gemm_2d_blocktiling_performance.png)
 
@@ -1308,7 +1252,7 @@ As next steps, when we check our kernel in Nsight compute, we get more pointers 
 
 ![NCU After 2D Tiling](/assets/explore_gemm_ncu_after_2d_tiling.png)
 
-## Kernel 6: Vectorized Memory Access
+## Vectorized Memory Access
 
 ### Concept
 
@@ -1585,17 +1529,18 @@ The vectorized kernel shows **mixed results** — performance **degrades** compa
 | **Vectorized** | **3.52** | **39.00** | **57.14** | **46.3%** | **59.7×** |
 | PyTorch | 1.63 | 84.23 | 123.38 | 100% | 129.0× |
 
-### Performance Across Matrix Sizes
+#### Performance Across Matrix Sizes
 
 ![Vectorized performance](/assets/explore_gemm_performance_vectorized.png)
 
 
-## WarpTiling
+## Warp Tiling
 
+### Concept
 
 After optimizing thread-level and block-level tiling, the next step is **warp-level tiling**—exploiting the natural 32-thread warp execution unit in NVIDIA GPUs to achieve better register reuse and computation efficiency.
 
-### What is Warp Tiling? Tiling Hierarchy in CUTLASS
+#### What is Warp Tiling?
 
 A **warp** is the fundamental execution unit in NVIDIA GPUs consisting of 32 threads that execute in SIMT (Single Instruction, Multiple Thread) fashion. Warp tiling introduces an additional level in the memory hierarchy:
 
@@ -1612,7 +1557,7 @@ The NVIDIA CUTLASS library implements a sophisticated tiling strategy that mirro
 4. **Thread-level GEMM**: Individual threads compute on register data
 5. **Instruction-level**: Hardware instructions (e.g., Tensor Cores on modern GPUs)
 
-### Concept
+#### Memory Access Pattern Comparison
 
 ```
 Without Warp Tiling (2D Block Tiling):
@@ -1629,6 +1574,8 @@ With Warp Tiling:
 ```
 
 The critical difference: with warp tiling, each shared memory load is amortized over more computation because the data stays in registers for the entire warp tile processing loop.
+
+<div id="warp-tiling-viz"></div>
 
 {: .prompt-tip }
 > [NVIDIA CUTLASS Documentation](https://docs.nvidia.com/cutlass/media/docs/cpp/efficient_gemm.html) has a lot more details and is pretty comprehensive in explaining different layers of tiling.
@@ -1922,8 +1869,7 @@ The warp tiling kernel demonstrates **impressive performance gains** at large ma
 | **Warp Tiling** | **3.00** | **45.82** | **67.12** | **54.4%** | **70.1×** |
 | PyTorch | 1.63 | 84.19 | 123.33 | 100% | 128.8× |
 
-
-### Performance Across Matrix Sizes
+#### Performance Across Matrix Sizes
 
 ![Across matrices warptiling](/assets/explore_gemm_warptiling_performance.png)
 
@@ -1984,6 +1930,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (document.getElementById('1d-pipeline-viz')) new Tiling1DPipelineViz('1d-pipeline-viz');
     if (document.getElementById('2d-tiling-viz')) new Tiling2DViz('2d-tiling-viz');
     if (document.getElementById('vectorized-viz')) new VectorizedViz('vectorized-viz');
+    if (document.getElementById('warp-tiling-viz')) new WarpTilingViz('warp-tiling-viz');
     if (document.getElementById('performance-comparison')) new PerformanceComparison('performance-comparison');
 });
 </script>

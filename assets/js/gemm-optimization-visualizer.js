@@ -869,9 +869,6 @@ class SharedMemoryViz {
                     <p style="margin-top: 10px; color: #FFA726;"><strong>Key:</strong> Each C element requires multiple K tiles - we accumulate partial sums!</p>
                 </div>
                 <div class="viz-canvas" id="sharedCanvas"></div>
-                <div class="viz-info">
-                    <div id="sharedStats"></div>
-                </div>
                 <div class="legend">
                     <div class="legend-item">
                         <div class="legend-box" style="background: #9C27B0;"></div>
@@ -930,7 +927,6 @@ class SharedMemoryViz {
         this.renderMatrices();
 
         document.getElementById('sharedAnimate').disabled = true;
-        document.getElementById('sharedStats').innerHTML = '';
 
         let globalLoads = 0;
         let tilesProcessed = 0;
@@ -1027,8 +1023,6 @@ class SharedMemoryViz {
                         }
                     }
 
-                    this.updateSharedStats(tilesProcessed, globalLoads, computationsCompleted, tileK + 1, numTiles);
-
                     await sleep(300);
 
                     // Clear shared memory visualization
@@ -1046,41 +1040,8 @@ class SharedMemoryViz {
         this.isAnimating = false;
     }
 
-    updateSharedStats(tilesProcessed, globalLoads, computationsCompleted, currentKTile, totalKTiles) {
-        const totalTiles = Math.pow(Math.ceil(this.matrixSize / this.tileSize), 2);
-        const naiveLoads = this.matrixSize * this.matrixSize * 2 * this.matrixSize;
-        const reduction = ((naiveLoads - globalLoads) / naiveLoads * 100).toFixed(1);
-        const totalComputations = this.matrixSize * this.matrixSize;
-
-        document.getElementById('sharedStats').innerHTML = `
-            <div class="viz-stats">
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Output Tiles</div>
-                    <div class="viz-stat-value">${tilesProcessed}/${totalTiles}</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">K Dimension Progress</div>
-                    <div class="viz-stat-value">${currentKTile}/${totalKTiles}</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">C Elements Computed</div>
-                    <div class="viz-stat-value">${computationsCompleted} partial sums</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Global Memory Loads</div>
-                    <div class="viz-stat-value">${globalLoads}</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Memory Traffic Reduction</div>
-                    <div class="viz-stat-value">${reduction}%</div>
-                </div>
-            </div>
-        `;
-    }
-
     reset() {
         this.renderMatrices();
-        document.getElementById('sharedStats').innerHTML = '';
     }
 }
 
@@ -2903,6 +2864,468 @@ class IndexTransformViz {
     }
 }
 
+// ============================================================================
+// Warp Tiling Visualization
+// ============================================================================
+class WarpTilingViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+        this.isAnimating = false;
+
+        // Configuration matching typical warp tiling parameters
+        this.BM = 64;  // Block tile M
+        this.BN = 64;  // Block tile N
+        this.BK = 8;   // Block tile K
+        this.WM = 32;  // Warp tile M (half of block)
+        this.WN = 32;  // Warp tile N (half of block)
+        this.TM = 8;   // Thread tile M
+        this.TN = 4;   // Thread tile N
+        this.WARPSIZE = 32;
+
+        // For visualization, use smaller sizes
+        this.vizBM = 8;
+        this.vizBN = 8;
+        this.vizWM = 4;
+        this.vizWN = 4;
+        this.vizTM = 2;
+        this.vizTN = 2;
+
+        this.init();
+    }
+
+    init() {
+        this.container.innerHTML = commonStyles + `
+            <div class="viz-container">
+                <div class="viz-title">Warp Tiling: Three-Level Memory Hierarchy</div>
+                <div class="viz-info" style="margin-bottom: 15px;">
+                    <h4>Evolution of Tiling Strategies:</h4>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 15px 0;">
+                        <div style="padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 3px solid #FF9800;">
+                            <div style="font-weight: 600; color: #FF9800; margin-bottom: 8px;">📦 2D Block Tiling</div>
+                            <div style="font-size: 12px; line-height: 1.6; color: #ccc;">
+                                • Global → Shared<br>
+                                • Shared → Registers<br>
+                                • Thread computes TM×TN
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 3px solid #9C27B0;">
+                            <div style="font-weight: 600; color: #9C27B0; margin-bottom: 8px;">🌊 Warp Tiling</div>
+                            <div style="font-size: 12px; line-height: 1.6; color: #ccc;">
+                                • Global → Shared<br>
+                                • <strong>Shared → Warp Registers</strong><br>
+                                • <strong>Warp fragments → Thread tiles</strong><br>
+                                • 32 threads cooperate
+                            </div>
+                        </div>
+                        <div style="padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 3px solid #4CAF50;">
+                            <div style="font-weight: 600; color: #4CAF50; margin-bottom: 8px;">✨ Key Benefit</div>
+                            <div style="font-size: 12px; line-height: 1.6; color: #ccc;">
+                                • <strong>Warp-level register caching</strong><br>
+                                • Each SMEM load enables<br>
+                                  TM×TN FMAs per thread<br>
+                                • 32 threads = massive reuse
+                            </div>
+                        </div>
+                    </div>
+                    <div style="padding: 12px; background: #1a1a1a; border-radius: 6px; margin-top: 10px; border: 2px solid #4CAF50;">
+                        <strong style="color: #4CAF50;">🎯 Core Idea:</strong>
+                        <span style="color: #ccc;">Load warp-sized fragments (${this.vizWM}×${this.vizWN}) from shared memory into registers,
+                        then each of the 32 threads computes its ${this.vizTM}×${this.vizTN} output tile from those cached fragments.</span>
+                    </div>
+                </div>
+
+                <div class="viz-controls">
+                    <button class="viz-btn" id="warpAnimate">Animate</button>
+                    <button class="viz-btn" id="warpReset">Reset</button>
+                </div>
+
+                <div class="viz-canvas" id="warpCanvas"></div>
+
+                <div class="viz-info">
+                    <div id="warpStats"></div>
+                </div>
+
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #FF9800;"></div>
+                        <span>Shared Memory (Block Tile)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #9C27B0;"></div>
+                        <span>Warp Fragment (register_m)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #00BCD4;"></div>
+                        <span>Warp Fragment (register_n)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #E91E63;"></div>
+                        <span>Computing Thread Tile</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #4CAF50;"></div>
+                        <span>Thread Results (TM×TN)</span>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        this.canvas = document.getElementById('warpCanvas');
+        this.renderHierarchy();
+
+        document.getElementById('warpAnimate').addEventListener('click', () => this.animate());
+        document.getElementById('warpReset').addEventListener('click', () => this.reset());
+    }
+
+    renderHierarchy() {
+        this.canvas.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 30px;">
+                <!-- Level 1: Shared Memory -->
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 16px; color: #FF9800; margin-bottom: 10px; font-weight: 600;">
+                            📦 Shared Memory (Block Tile ${this.vizBM}×${this.vizBN})
+                        </div>
+                        <div style="font-size: 11px; color: #999; margin-bottom: 8px;">
+                            All warps in the block share this data
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 30px; align-items: center;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #FF9800; margin-bottom: 8px;">tile_a[${this.vizBM}×${this.BK}]</div>
+                            <div id="warpSharedA"></div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #FF9800; margin-bottom: 8px;">tile_b[${this.BK}×${this.vizBN}]</div>
+                            <div id="warpSharedB"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Arrow down -->
+                <div style="font-size: 30px; color: #FFA726;">↓</div>
+                <div style="font-size: 11px; color: #9C27B0; font-weight: 600; margin-top: -25px;">
+                    Warp loads WM×WN fragment into registers
+                </div>
+
+                <!-- Level 2: Warp Registers -->
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 20px; background: #2a2a2a; border-radius: 8px; border: 2px solid #9C27B0;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 16px; color: #9C27B0; margin-bottom: 10px; font-weight: 600;">
+                            🌊 Warp-Level Register Cache (${this.vizWM}×${this.vizWN})
+                        </div>
+                        <div style="font-size: 11px; color: #999; margin-bottom: 8px;">
+                            One warp (32 threads) collectively holds these fragments
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 30px; align-items: center;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #9C27B0; margin-bottom: 8px;">register_m[WM]</div>
+                            <div id="warpRegM" style="display: flex; flex-direction: column; gap: 2px;"></div>
+                        </div>
+                        <div style="font-size: 30px; color: #E91E63;">⊗</div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #00BCD4; margin-bottom: 8px;">register_n[WN]</div>
+                            <div id="warpRegN" style="display: flex; gap: 2px;"></div>
+                        </div>
+                    </div>
+                    <div style="font-size: 11px; color: #999; text-align: center; margin-top: 5px;">
+                        Each thread holds ${this.vizTM}×${this.vizTN} portion of the warp tile
+                    </div>
+                </div>
+
+                <!-- Arrow down -->
+                <div style="font-size: 30px; color: #FFA726;">↓</div>
+                <div style="font-size: 11px; color: #4CAF50; font-weight: 600; margin-top: -25px;">
+                    Each thread computes its TM×TN tile from warp fragments
+                </div>
+
+                <!-- Level 3: Thread Output -->
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 20px; background: #2a2a2a; border-radius: 8px; border: 2px solid #4CAF50;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 16px; color: #4CAF50; margin-bottom: 10px; font-weight: 600;">
+                            ✨ Thread Output Tile (${this.vizTM}×${this.vizTN})
+                        </div>
+                        <div style="font-size: 11px; color: #999; margin-bottom: 8px;">
+                            Each of 32 threads computes this
+                        </div>
+                    </div>
+                    <div id="warpThreadOutput"></div>
+                    <div style="font-size: 11px; color: #999; text-align: center; margin-top: 5px;">
+                        Total per warp: ${this.vizWM}×${this.vizWN} = ${this.vizWM * this.vizWN} outputs
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Create shared memory tiles (smaller for visualization)
+        const cellSize = 35;
+        this.sharedA = createMatrixGrid(this.vizWM, this.BK, cellSize, '', document.getElementById('warpSharedA'));
+        this.sharedB = createMatrixGrid(this.BK, this.vizWN, cellSize, '', document.getElementById('warpSharedB'));
+
+        // Create warp register fragments
+        const regMContainer = document.getElementById('warpRegM');
+        regMContainer.innerHTML = '';
+        for (let i = 0; i < this.vizWM; i++) {
+            const reg = document.createElement('div');
+            reg.id = `warp-reg-m-${i}`;
+            reg.style.width = '40px';
+            reg.style.height = '20px';
+            reg.style.background = '#333';
+            reg.style.border = '2px solid #555';
+            reg.style.borderRadius = '4px';
+            reg.style.display = 'flex';
+            reg.style.alignItems = 'center';
+            reg.style.justifyContent = 'center';
+            reg.style.fontSize = '9px';
+            reg.style.transition = 'all 0.3s';
+            reg.style.color = '#999';
+            reg.textContent = `m${i}`;
+            regMContainer.appendChild(reg);
+        }
+
+        const regNContainer = document.getElementById('warpRegN');
+        regNContainer.innerHTML = '';
+        for (let j = 0; j < this.vizWN; j++) {
+            const reg = document.createElement('div');
+            reg.id = `warp-reg-n-${j}`;
+            reg.style.width = '40px';
+            reg.style.height = '40px';
+            reg.style.background = '#333';
+            reg.style.border = '2px solid #555';
+            reg.style.borderRadius = '4px';
+            reg.style.display = 'flex';
+            reg.style.alignItems = 'center';
+            reg.style.justifyContent = 'center';
+            reg.style.fontSize = '9px';
+            reg.style.transition = 'all 0.3s';
+            reg.style.color = '#999';
+            reg.textContent = `n${j}`;
+            regNContainer.appendChild(reg);
+        }
+
+        // Create thread output tile
+        this.threadOutput = createMatrixGrid(this.vizTM, this.vizTN, 45, '', document.getElementById('warpThreadOutput'));
+    }
+
+    async animate() {
+        if (this.isAnimating) return;
+        this.isAnimating = true;
+        this.renderHierarchy();
+
+        document.getElementById('warpAnimate').disabled = true;
+        document.getElementById('warpStats').innerHTML = '';
+
+        let smemReads = 0;
+        let registerLoads = 0;
+        let fmaOps = 0;
+
+        // Step 1: Highlight block tile in shared memory
+        await this.updateStats('Loading block tile into shared memory...', smemReads, registerLoads, fmaOps);
+        for (let i = 0; i < this.vizWM; i++) {
+            for (let k = 0; k < this.BK; k++) {
+                const cellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${k}"]`);
+                if (cellA) {
+                    cellA.style.background = '#FF9800';
+                    cellA.style.borderColor = '#FF9800';
+                }
+            }
+        }
+        for (let k = 0; k < this.BK; k++) {
+            for (let j = 0; j < this.vizWN; j++) {
+                const cellB = this.sharedB.querySelector(`[data-row="${k}"][data-col="${j}"]`);
+                if (cellB) {
+                    cellB.style.background = '#FF9800';
+                    cellB.style.borderColor = '#FF9800';
+                }
+            }
+        }
+        await sleep(800);
+
+        // Iterate over K dimension
+        for (let k = 0; k < this.BK; k++) {
+            // Step 2: Load warp fragment from shared memory to registers
+            await this.updateStats(`K=${k}: Loading warp fragments into registers...`, smemReads, registerLoads, fmaOps);
+
+            // Highlight column k from tile_a
+            for (let i = 0; i < this.vizWM; i++) {
+                const cellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${k}"]`);
+                if (cellA) {
+                    cellA.classList.add('active');
+                    cellA.style.background = '#9C27B0';
+                }
+
+                const regM = document.getElementById(`warp-reg-m-${i}`);
+                if (regM) {
+                    regM.style.background = '#9C27B0';
+                    regM.style.borderColor = '#9C27B0';
+                    regM.style.color = '#fff';
+                }
+            }
+            smemReads += this.vizWM;
+            registerLoads += this.vizWM;
+            await sleep(400);
+
+            // Highlight row k from tile_b
+            for (let j = 0; j < this.vizWN; j++) {
+                const cellB = this.sharedB.querySelector(`[data-row="${k}"][data-col="${j}"]`);
+                if (cellB) {
+                    cellB.classList.add('active');
+                    cellB.style.background = '#00BCD4';
+                }
+
+                const regN = document.getElementById(`warp-reg-n-${j}`);
+                if (regN) {
+                    regN.style.background = '#00BCD4';
+                    regN.style.borderColor = '#00BCD4';
+                    regN.style.color = '#fff';
+                }
+            }
+            smemReads += this.vizWN;
+            registerLoads += this.vizWN;
+            await sleep(400);
+
+            // Step 3: Compute thread tile using outer product of warp fragments
+            await this.updateStats(`K=${k}: Computing ${this.vizTM}×${this.vizTN} thread outputs...`, smemReads, registerLoads, fmaOps);
+
+            for (let i = 0; i < this.vizTM; i++) {
+                for (let j = 0; j < this.vizTN; j++) {
+                    // Highlight the registers being used
+                    const regM = document.getElementById(`warp-reg-m-${i}`);
+                    const regN = document.getElementById(`warp-reg-n-${j}`);
+                    if (regM) regM.style.background = '#E91E63';
+                    if (regN) regN.style.background = '#E91E63';
+
+                    // Highlight output cell
+                    const cellOut = this.threadOutput.querySelector(`[data-row="${i}"][data-col="${j}"]`);
+                    if (cellOut) {
+                        cellOut.style.background = '#E91E63';
+                        cellOut.style.borderColor = '#E91E63';
+                    }
+
+                    fmaOps++;
+                    await sleep(80);
+
+                    // Update output cell
+                    if (cellOut) {
+                        if (k < this.BK - 1) {
+                            cellOut.style.background = '#FF6B6B'; // Partial result
+                            cellOut.textContent = `~${k+1}`;
+                        } else {
+                            cellOut.style.background = '#4CAF50'; // Final result
+                            cellOut.textContent = '✓';
+                        }
+                        cellOut.style.borderColor = '#4CAF50';
+                    }
+
+                    // Reset register colors
+                    if (regM) regM.style.background = '#9C27B0';
+                    if (regN) regN.style.background = '#00BCD4';
+                }
+            }
+
+            await this.updateStats(`K=${k}: Iteration complete`, smemReads, registerLoads, fmaOps);
+            await sleep(300);
+
+            // Clear active highlights
+            this.sharedA.querySelectorAll('.active').forEach(el => {
+                el.classList.remove('active');
+                el.style.background = '#FF9800';
+            });
+            this.sharedB.querySelectorAll('.active').forEach(el => {
+                el.classList.remove('active');
+                el.style.background = '#FF9800';
+            });
+
+            // Reset register colors for next iteration
+            for (let i = 0; i < this.vizWM; i++) {
+                const regM = document.getElementById(`warp-reg-m-${i}`);
+                if (regM) {
+                    regM.style.background = '#333';
+                    regM.style.borderColor = '#555';
+                    regM.style.color = '#999';
+                }
+            }
+            for (let j = 0; j < this.vizWN; j++) {
+                const regN = document.getElementById(`warp-reg-n-${j}`);
+                if (regN) {
+                    regN.style.background = '#333';
+                    regN.style.borderColor = '#555';
+                    regN.style.color = '#999';
+                }
+            }
+        }
+
+        await this.updateStats('✅ Warp tile computation complete!', smemReads, registerLoads, fmaOps, true);
+        document.getElementById('warpAnimate').disabled = false;
+        this.isAnimating = false;
+    }
+
+    async updateStats(message, smemReads, registerLoads, fmaOps, final = false) {
+        const totalSMEM = this.BK * (this.vizWM + this.vizWN);
+        const totalFMAs = this.BK * this.vizTM * this.vizTN;
+        const totalOutputs = this.vizTM * this.vizTN;
+        const arithmeticIntensity = (totalFMAs / totalSMEM).toFixed(2);
+        const reusePerLoad = (totalOutputs / (this.vizWM + this.vizWN)).toFixed(2);
+
+        document.getElementById('warpStats').innerHTML = `
+            <div style="margin-bottom: 12px; padding: 10px; background: ${final ? '#1a4d2e' : '#2a2a2a'}; border-radius: 6px; border-left: 4px solid ${final ? '#4CAF50' : '#FFA726'};">
+                <strong style="color: ${final ? '#4CAF50' : '#FFA726'};">${message}</strong>
+            </div>
+            <div class="viz-stats">
+                <div class="viz-stat">
+                    <div class="viz-stat-label">SMEM Reads</div>
+                    <div class="viz-stat-value">${smemReads}/${totalSMEM}</div>
+                </div>
+                <div class="viz-stat">
+                    <div class="viz-stat-label">Register Loads</div>
+                    <div class="viz-stat-value">${registerLoads}</div>
+                </div>
+                <div class="viz-stat">
+                    <div class="viz-stat-label">FMA Operations</div>
+                    <div class="viz-stat-value">${fmaOps}/${totalFMAs}</div>
+                </div>
+                <div class="viz-stat" style="border-left: 3px solid #4CAF50;">
+                    <div class="viz-stat-label">Thread Outputs</div>
+                    <div class="viz-stat-value" style="color: #4CAF50;">${this.vizTM}×${this.vizTN} = ${totalOutputs}</div>
+                </div>
+                <div class="viz-stat" style="border-left: 3px solid #9C27B0;">
+                    <div class="viz-stat-label">Arithmetic Intensity</div>
+                    <div class="viz-stat-value" style="color: #9C27B0;">${arithmeticIntensity} FMA/SMEM</div>
+                </div>
+                <div class="viz-stat" style="border-left: 3px solid #00BCD4;">
+                    <div class="viz-stat-label">Register Reuse</div>
+                    <div class="viz-stat-value" style="color: #00BCD4;">${reusePerLoad}× per load</div>
+                </div>
+            </div>
+            <div style="margin-top: 15px; padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 4px solid #4CAF50;">
+                <div style="font-size: 13px; line-height: 1.8;">
+                    <strong style="color: #4CAF50;">🎯 Warp Tiling Benefits:</strong><br>
+                    <span style="color: #ccc;">
+                    • <strong>Warp-level cooperation:</strong> 32 threads collectively cache ${this.vizWM}×${this.vizWN} fragment<br>
+                    • <strong>Register reuse:</strong> Each SMEM load enables ${this.vizTM}×${this.vizTN} FMAs per thread<br>
+                    • <strong>Reduced SMEM traffic:</strong> ${arithmeticIntensity}× more computation per byte loaded<br>
+                    • <strong>Better ILP:</strong> Outer product exposes instruction-level parallelism
+                    </span>
+                </div>
+            </div>
+        `;
+
+        if (!final) {
+            await sleep(100);
+        }
+    }
+
+    reset() {
+        this.renderHierarchy();
+        document.getElementById('warpStats').innerHTML = '';
+    }
+}
+
 // Export for use in HTML
 if (typeof window !== 'undefined') {
     window.NaiveKernelViz = NaiveKernelViz;
@@ -2915,5 +3338,6 @@ if (typeof window !== 'undefined') {
     window.Tiling1DPipelineViz = Tiling1DPipelineViz;
     window.Tiling2DViz = Tiling2DViz;
     window.VectorizedViz = VectorizedViz;
+    window.WarpTilingViz = WarpTilingViz;
     window.PerformanceComparison = PerformanceComparison;
 }
