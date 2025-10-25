@@ -10,16 +10,17 @@ math: true
 author: ks
 ---
 
-Matrix multiplication (GEMM - General Matrix Multiply) is one of the most fundamental operations in deep learning. Understanding how to optimize GEMM kernels on GPUs provides deep insights into GPU architecture, memory hierarchies, and parallel computing principles.
+Matrix multiplication (GEMM - General Matrix Multiply) is a fundamental operations in deep learning. Understanding how to optimize GEMM kernels on GPUs provides good insights into GPU architecture, compute and memory hierarchy.
 
-If the reader is remotely interested in CUDA or Triton programmin, they have likely come across [this gemm of a post](https://siboehm.com/articles/22/CUDA-MMM) -- pun intended -- by Simon Boehm. We'll build on this and walk through several optimization stages, each with some interactive visualizations to help understand the concepts. 
+If the reader is remotely interested in CUDA or Triton programming, they have likely come across [this gemm of a post](https://siboehm.com/articles/22/CUDA-MMM) -- pun intended -- by Simon Boehm. There was [another amazing post](https://www.aleksagordic.com/blog/matmul) on GPU architecture from Aleksa Gordić. This one is more recent and I encountered it while writing this one. 
 
+In this post, we'll build on these and walk through several optimization stages, each with some interactive visualizations to help understand the concepts.
 
-## Code Repository
+## Code Repository and Structure
 
-Full implementation of all kernels discussed in this post:
+[Full implementation of all kernels](https://github.com/gpusgobrr/explore-gemm)
 
-<div class="github-card" data-user="gpusgobrr" data-repo="explore-gemm" data-width="100%" data-height="" data-theme="default"></div>
+In the following sections, we will go over several steps in optimizing GEMM kernel, each time discussing a new concept. In the later sections, we will look at fp16/bf16 matmul kernels and tensor cores. In the end, we'll look into cutlass to show how it maps APIs to the GPU menory hierarchy. 
 
 ## GEMM Basics
 
@@ -33,10 +34,11 @@ where:
 - $C$ is an $M \times N$ matrix (both input and output)
 - $\alpha$ and $\beta$ are scalar coefficients
 
-**Key Points:**
-- The standard matrix product $C = AB$ is a special case with $\alpha = 1$ and $\beta = 0$
-- When $\beta \neq 0$, GEMM accumulates into a pre-existing matrix $C$
-- This formulation enables fused operations, avoiding separate kernel launches
+
+{: .prompt-tip}
+> - The standard matrix product $C = AB$ is a special case with $\alpha = 1$ and $\beta = 0$
+> - When $\beta \neq 0$, GEMM accumulates into a pre-existing matrix $C$
+> - This formulation also enables fused operations, avoiding separate kernel launches. We'll see this in cutlass section.
 
 ### Computational Complexity
 
@@ -49,12 +51,11 @@ For matrices of size $M \times K$, $K \times N$:
 - Operations per dot product: $2K$ (K multiplies + K adds) + 3 scalar ops ($\alpha$, $\beta$, addition of $M \times N$ matrix)
 - **Total FLOPs**: $2MNK + MK$ (dominated by dot products)
 
-For a $4096 \times 4096$ matrix multiplication ($M = N = K = 4096$):
-- Total operations: $2 \times 4096^3 \approx 137$ GFLOPs
-- Memory required: $3 \times 4096^2 \times 4$ bytes $\approx$ 201 MB (float32)
-- **Arithmetic Intensity**: $\frac{137 \text{ GFLOPs}}{201 \text{ MB}} \approx 682$ FLOPs/byte
-
-
+{: .prompt-tip}
+> For a $4096 \times 4096$ matrix multiplication ($M = N = K = 4096$):
+> - Total operations: $2 \times 4096^3 \approx 137$ GFLOPs
+> - Memory required: $3 \times 4096^2 \times 4$ bytes $\approx$ 201 MB (float32)
+> - **Arithmetic Intensity**: $\frac{137 \text{ GFLOPs}}{201 \text{ MB}} \approx 682$ FLOPs/byte
 
 ## Hardware Specifications
 
@@ -87,15 +88,13 @@ All benchmarks in this post were run on an **NVIDIA GeForce RTX 4090** 🚀. Bel
 | **Transistor Count** | 76.3 Billion |
 | **Die Size** | 608.5 mm² |
 
-> **Key Takeaways for GEMM Performance:**
+> **Important hardware details for GEMM Performance:**
 > - **128 SMs** with 128 KB shared memory each
 > - **82.6 TFLOPS FP32** theoretical peak
 > - **1,008 GB/s** max memory bandwidth
 > - **72 MB L2 cache**
 > - **16,384 KB total L1/shared memory**
 {: .prompt-tip}
-
-
 
 ## Naive Implementation
 
@@ -225,38 +224,32 @@ Below are the full benchmark results comparing the naive CUDA kernel against PyT
 
 As we can see, the naive implementation is significantly slower than PyTorch's optimized kernel, achieving only ~1% of PyTorch's performance. 
 
+#### Why?
+
+Since A, B, C are all row-major tensors, memory access pattern for B is non-contiguous since we are loading one column at a time to multiply with contiguous row from A. 
 
 ## Global Memory Coalescing
 
 ### Concept
 
+Slides from [an NVidia GTC talk](https://www.nvidia.com/en-us/on-demand/session/gtcfall22-a41101/) is a really good reference to understand the memory hierarchy details and why memory access patterns are the primary consideration when we think about GPU/CUDA performance. 
+
 #### Why Memory Coalescing Matters
 
 To understand memory coalescing, we need to understand GPU execution hierarchy:
-
-**Threads → Warps → Thread Blocks → Streaming Multiprocessors (SMs)**
 
 1. **Threads**: Individual execution units in your CUDA kernel
 2. **Warps**: Groups of 32 threads that execute the same instruction simultaneously (SIMT - Single Instruction, Multiple Thread)
 3. **Thread Blocks**: Logical groupings of threads (up to 1024 threads) that share resources and can synchronize
 4. **Streaming Multiprocessors (SMs)**: The physical processors on the GPU that execute thread blocks
 
-> A modern GPU like the H100 has **144 SMs**, each capable of running up to **2,048 threads concurrently** (64 warps). Each SM has **4 warp schedulers** that issue instructions to warps every clock cycle.
-{: .prompt-tip}
-
-> On my RTX 4090, I have 128 SMs and it allows **1024 threads concurrently** (32 warps).
-{: .prompt-info}
-
-> The key insight: **warps are the fundamental unit of execution**. All 32 threads in a warp execute the same instruction at the same time. When these threads access consecutive memory addresses, the hardware can combine their memory requests into a single transaction. Modern GPU DRAM systems can fetch large contiguous blocks (32B, 64B, or 128B cache lines) in one transaction. Without coalescing, the same 32 accesses could require 32 separate transactions → **32x increase in memory traffic** ⚠️.
-{: .prompt-tip}
-
+**Warps are the fundamental unit of execution** such that all 32 threads in a warp execute the same instruction at the same time. Also, when these threads access consecutive memory addresses, the hardware can combine their memory requests into a single transaction. Modern GPU DRAM systems can fetch large contiguous blocks (32B, 64B, or 128B cache lines) in one transaction. Without coalescing, the same 32 accesses could require 32 separate transactions.
 
 **In addition, other things to note about SMs include**:
 - Each SM has limited resources (registers, shared memory)
 - Multiple thread blocks compete for these resources
-- SMs can switch between warps in a **single clock cycle** (1000x faster than CPU context switches)
-- This enables **latency hiding**: while one warp waits for memory, another executes
-- **GEMM efficiency depends on keeping all warp schedulers busy with coalesced memory access patterns**
+- SMs can switch between warps in a **single clock cycle**, enabling **latency hiding** while one warp waits for memory, another executes
+- GEMM efficiency depends on keeping all warp schedulers busy with coalesced memory access patterns
 
 Now that we have general hardware fundamentals, we can see that the naive kernel's memory access pattern is inefficient. When threads in a warp access scattered memory locations, each access requires a separate memory transaction. Memory coalescing restructures the thread-to-output mapping so threads in the same warp access consecutive memory locations, enabling the hardware to combine multiple accesses into a single transaction.
 
@@ -270,9 +263,9 @@ Now that we have general hardware fundamentals, we can see that the naive kernel
 
 Let's visualize how the coalesced kernel accesses memory during matrix multiplication. Notice how threads in the same warp now access the **same row** of matrix A, enabling memory coalescing:
 
-<div id="coalesced-matrix-viz"></div>
-
 <div id="index-transform-viz"></div>
+
+<div id="coalesced-matrix-viz"></div>
 
 ### Kernel
 
@@ -387,7 +380,6 @@ Just like the naive version, we ran a benchmark for N = M = K = 4096 to get the 
 2025-10-07 10:41:55.180 | SUCCESS  | __main__:run_benchmarks:717 -    🌊 Bandwidth: 6.94 GB/s
 2025-10-07 10:41:55.180 | INFO     | __main__:run_benchmarks:744 - 
 ────────────────────────────────────────────────────────────────────────────────
-
 ```
 
 > **Throughput:**
@@ -600,7 +592,7 @@ Running the shared memory kernel for M = N = K = 4096:
 > - **9.5× faster than naive** (0.64 → 6.10 TFLOPS)
 > - Still only **7.8% of PyTorch's performance**, indicating more optimization needed
 >
-> **Key Insight:**
+> **Key Insight:**d
 > - Shared memory caching provides modest improvement (~24%) over just coalescing
 > - The relatively small gain suggests we're not yet effectively hiding memory latency
 > - Need additional optimizations like thread-level tiling to improve arithmetic intensity
