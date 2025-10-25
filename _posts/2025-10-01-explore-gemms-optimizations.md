@@ -123,19 +123,27 @@ Let's look an interactive visualization of it below
 Here is a naive implementation for matrix multiply GEMM kernel:
 
 ```c
-__global__ void sgemm_naive(int M, int N, int K,
-                            float alpha, const float *A,
-                            const float *B, float beta,
-                            float *C) {
-    const uint x = blockIdx.x * blockDim.x + threadIdx.x;
-    const uint y = blockIdx.y * blockDim.y + threadIdx.y;
+template <const uint block_size>
+__global__ void sgemm_naive_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
+                                   float alpha, const float *matrix_a,
+                                   const float *matrix_b, float beta, float *output_matrix)
+{
+    // Map 1D thread ID to 2D output position for coalesced memory access
+    const int output_row = blockIdx.x * block_size + (threadIdx.x % block_size);
+    const int output_col = blockIdx.y * block_size + (threadIdx.x / block_size);
 
-    if (x < M && y < N) {
-        float tmp = 0.0;
-        for (int i = 0; i < K; ++i) {
-            tmp += A[x * K + i] * B[i * N + y];
+    // Boundary check for non-multiple of block size
+    if (output_row < num_rows_a && output_col < num_cols_b)
+    {
+        float accumulator = 0.0f;
+        for (int k_idx = 0; k_idx < num_cols_a; ++k_idx)
+        {
+            accumulator += matrix_a[output_row * num_cols_a + k_idx] *
+                           matrix_b[k_idx * num_cols_b + output_col];
         }
-        C[x * N + y] = alpha * tmp + beta * C[x * N + y];
+        // C = α*(A@B)+β*C
+        const int output_idx = output_row * num_cols_b + output_col;
+        output_matrix[output_idx] = alpha * accumulator + beta * output_matrix[output_idx];
     }
 }
 ```
@@ -145,6 +153,12 @@ __global__ void sgemm_naive(int M, int N, int K,
 We operate on torch Tensors directly to call the above kernel:
 
 ```cpp
+
+namespace {
+    constexpr int ceil_div(int m, int n) {
+        return (m + n - 1) / n;
+    }
+}
 
 void sgemm_naive(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
                  torch::Tensor &output_matrix, float alpha, float beta)
@@ -172,17 +186,18 @@ void sgemm_naive(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
     const float *d_matrix_b = matrix_b.data_ptr<float>();
     float *d_output_matrix = output_matrix.data_ptr<float>();
 
-    // Configure kernel launch: 16x16 threads per block
-    constexpr int threads_per_block = 32;
-    dim3 block_dim(threads_per_block, threads_per_block);
-    dim3 grid_dim(CEIL_DIV(num_rows_a, threads_per_block),
-                  CEIL_DIV(num_cols_b, threads_per_block));
+    // Configure kernel launch: 1D blocks with block_size^2 threads (32x32 = 1024 threads per block)
+    constexpr uint block_size = 32;
+    dim3 block_dim(block_size * block_size);
+    dim3 grid_dim(ceil_div(num_rows_a, block_size),
+                  ceil_div(num_cols_b, block_size));
 
     // Launch kernel
-    sgemm_naive_kernel<<<grid_dim, block_dim>>>(
+    sgemm_naive_kernel<block_size><<<grid_dim, block_dim>>>(
         num_rows_a, num_cols_b, num_cols_a,
         alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix);
 }
+
 ```
 
 ### Performance Analysis
@@ -224,17 +239,15 @@ Below are the full benchmark results comparing the naive CUDA kernel against PyT
 
 As we can see, the naive implementation is significantly slower than PyTorch's optimized kernel, achieving only ~1% of PyTorch's performance. 
 
-#### Why?
-
-Since A, B, C are all row-major tensors, memory access pattern for B is non-contiguous since we are loading one column at a time to multiply with contiguous row from A. 
-
 ## Global Memory Coalescing
+
+Let's take a brief diggresion before we look into why naive kernel is so slow.
 
 ### Concept
 
 Slides from [an NVidia GTC talk](https://www.nvidia.com/en-us/on-demand/session/gtcfall22-a41101/) is a really good reference to understand the memory hierarchy details and why memory access patterns are the primary consideration when we think about GPU/CUDA performance. 
 
-#### Why Memory Coalescing Matters
+#### Some Basics
 
 To understand memory coalescing, we need to understand GPU execution hierarchy:
 
@@ -251,25 +264,54 @@ To understand memory coalescing, we need to understand GPU execution hierarchy:
 - SMs can switch between warps in a **single clock cycle**, enabling **latency hiding** while one warp waits for memory, another executes
 - GEMM efficiency depends on keeping all warp schedulers busy with coalesced memory access patterns
 
-Now that we have general hardware fundamentals, we can see that the naive kernel's memory access pattern is inefficient. When threads in a warp access scattered memory locations, each access requires a separate memory transaction. Memory coalescing restructures the thread-to-output mapping so threads in the same warp access consecutive memory locations, enabling the hardware to combine multiple accesses into a single transaction.
+#### Why is Naive Kernel Slow?
 
-**Example**:
-- 32 threads each load a 4-byte float
-- Total data: 128 bytes
-- **Coalesced**: 1 memory transaction (128-byte cache line)
-- **Uncoalesced**: Up to 32 separate transactions
+Let's add some debug info to see what threads map to what values on A, B
+
+```diff
++            if (threadIdx.x < 64)
++            {
++                printf("Thread %d ; Warp %d: Multiplying A[%d][%d] * B[%d][%d] = C[%d][%d]\n",
++                       threadIdx.x, threadIdx.x / 32, output_row, k_idx,
++                       k_idx, output_col,
++                       output_row, output_col);
++            }
+```
+
+```text
+Thread 0 ; Warp 0: Multiplying A[0][0] * B[0][0] = C[0][0]
+Thread 1 ; Warp 0: Multiplying A[1][0] * B[0][0] = C[1][0]
+...
+Thread 30 ; Warp 0: Multiplying A[30][0] * B[0][0] = C[30][0]
+Thread 31 ; Warp 0: Multiplying A[31][0] * B[0][0] = C[31][0]
+Thread 32 ; Warp 1: Multiplying A[0][0] * B[0][1] = C[0][1]
+Thread 33 ; Warp 1: Multiplying A[1][0] * B[0][1] = C[1][1]
+...
+Thread 62 ; Warp 1: Multiplying A[30][0] * B[0][1] = C[30][1]
+Thread 63 ; Warp 1: Multiplying A[31][0] * B[0][1] = C[31][1]
+```
+
+Now that we have general hardware fundamentals, we can see that the naive kernel's memory access pattern is inefficient. For each thread in a warp, it is accessing `A[k][0]` values where k is the thread id in a warp. When threads in a warp access scattered memory locations, each access requires a separate memory transaction. It is totally solvable by memory coalescing such that we restructure the thread-to-output mapping so threads in the same warp access consecutive memory locations, enabling the hardware to combine multiple accesses into a single transaction.
+
+Turns out the only change we need is swap % and / across row and col calculations for C.
+
+```c
+    // Map 1D thread ID to 2D output position for coalesced memory access
+    // *** KEY CHANGE wrt NAIVE kernel
+    const int output_row = blockIdx.x * block_size + (threadIdx.x / block_size);
+    const int output_col = blockIdx.y * block_size + (threadIdx.x % block_size);
+    // *** KEY CHANGE wrt NAIVE kernel
+```
 
 #### Memory Access Visualization
 
-Let's visualize how the coalesced kernel accesses memory during matrix multiplication. Notice how threads in the same warp now access the **same row** of matrix A, enabling memory coalescing:
+Let's visualize how the coalesced kernel accesses memory during matrix multiplication. Notice how threads in the same warp now access the **same row** of matrix A, enabling memory coalescing. We will take a simple example with `block_size=4`:
 
 <div id="index-transform-viz"></div>
 
 <div id="coalesced-matrix-viz"></div>
 
 ### Kernel
-
-#### Thread-to-Output Remapping
 
 ```cuda
 template <const uint block_size>
@@ -299,52 +341,10 @@ __global__ void sgemm_global_mem_coalesce_kernel(int num_rows_a, int num_cols_b,
 
 ```
 
-### Caller
-
-```cpp
-void sgemm_global_mem_coalesce(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
-                               torch::Tensor &output_matrix, float alpha, float beta)
-{
-    // Validate inputs
-    TORCH_CHECK(matrix_a.device().is_cuda(), "Matrix A must be on CUDA device");
-    TORCH_CHECK(matrix_b.device().is_cuda(), "Matrix B must be on CUDA device");
-    TORCH_CHECK(matrix_a.dtype() == torch::kFloat32, "Matrix A must be float32");
-    TORCH_CHECK(matrix_b.dtype() == torch::kFloat32, "Matrix B must be float32");
-    TORCH_CHECK(matrix_a.dim() == 2, "Matrix A must be 2D");
-    TORCH_CHECK(matrix_b.dim() == 2, "Matrix B must be 2D");
-
-    const int num_rows_a = static_cast<int>(matrix_a.size(0));
-    const int num_cols_a = static_cast<int>(matrix_a.size(1));
-    const int num_cols_b = static_cast<int>(matrix_b.size(1));
-
-    TORCH_CHECK(matrix_b.size(0) == num_cols_a, "Matrix dimensions must match: A is MxK, B must be KxN");
-
-    TORCH_CHECK(output_matrix.device().is_cuda(), "Matrix C must be on CUDA device");
-    TORCH_CHECK(output_matrix.dtype() == torch::kFloat32, "Matrix C must be float32");
-    TORCH_CHECK(output_matrix.size(0) == num_rows_a && output_matrix.size(1) == num_cols_b, "Matrix C must be MxN");
-
-    // Get raw device pointers
-    const float *d_matrix_a = matrix_a.data_ptr<float>();
-    const float *d_matrix_b = matrix_b.data_ptr<float>();
-    float *d_output_matrix = output_matrix.data_ptr<float>();
-
-    // Configure kernel launch: 1D blocks with block_size^2 threads (32x32 = 1024 threads per block)
-    constexpr uint block_size = 32;
-    dim3 block_dim(block_size * block_size);
-    dim3 grid_dim(CEIL_DIV(num_rows_a, block_size),
-                  CEIL_DIV(num_cols_b, block_size));
-
-    // Launch kernel
-    sgemm_global_mem_coalesce_kernel<block_size><<<grid_dim, block_dim>>>(
-        num_rows_a, num_cols_b, num_cols_a,
-        alpha, d_matrix_a, d_matrix_b, beta, d_output_matrix);
-}
-```
-
 {: .prompt-info}
 > The key change from the naive kernel:
 > 
-> Threads with consecutive `threadIdx.x` now access consecutive elements in the same row of A—enabling coalescing.
+> Threads with consecutive `threadIdx.x` now access consecutive elements in the same row of A, enabling coalescing. I have removed the calling wrapper since it is the same as the last kernel and for brevity.
 
 ### Performance Analysis
 
@@ -384,7 +384,7 @@ Just like the naive version, we ran a benchmark for N = M = K = 4096 to get the 
 
 > **Throughput:**
 > - 7.63× TFLOPS improvement (0.62 → 4.73 TFLOPS)
-> - Still only 5.8% of PyTorch's performance, but a significant step forward
+> - Still only 5.8% of PyTorch's performance, but a significant step up
 > 
 > **Bandwidth:**
 > - 7.71× bandwidth improvement (0.90 → 6.94 GB/s)
@@ -1876,6 +1876,337 @@ The warp tiling kernel demonstrates **impressive performance gains** at large ma
 | 8192×8192 | 25.69 | 42.80 | 50.9% | 1.12× |
 
 
+## Supporting 16-bit Precision Types
+
+### Concept
+
+So far, we have worked only on fp32 kernels. Most modern workloads increasingly use 16-bit floating-point formats (FP16 and BF16) to reduce memory bandwidth requirements and increase throughput. While our warp tiling kernel works for FP32, we can extend it to support lower-precision computations in 16-bit.
+
+| Format | Sign | Exponent | Mantissa | Range | Precision |
+|--------|------|----------|----------|-------|-----------|
+| **FP32** | 1 bit | 8 bits | 23 bits | ±3.4e38 | ~7 decimal digits |
+| **FP16** | 1 bit | 5 bits | 10 bits | ±65,504 | ~3 decimal digits |
+| **BF16** | 1 bit | 8 bits | 7 bits | ±3.4e38 | ~2 decimal digits |
+
+**Our Approach:**
+Load inputs as FP16/BF16 → Convert to FP32 in registers → Accumulate in FP32 → Write FP32 output
+
+This gives us the bandwidth benefits of 16-bit with the numerical stability of 32-bit accumulation.
+
+#### Implementation Strategy
+
+The multi-dtype kernel extends warp tiling with three key changes:
+
+1. **Type-parameterized loads**: Template parameter `InputType` can be `float`, `half`, or `nv_bfloat16`
+2. **Dtype-specific vectorization**: `half2`/`nv_bfloat162` for 16-bit types vs `float4` for FP32
+3. **Conversion on load**: Convert 16-bit values to FP32 immediately after loading into registers
+
+```
+Memory Hierarchy with Mixed Precision:
+┌─────────────────────────────────────────────────────────────┐
+│ Global Memory (DRAM)                                         │
+│ InputType (FP16/BF16/FP32) - Lower bandwidth for 16-bit     │
+└───────────────────────┬─────────────────────────────────────┘
+                        ↓ Block loads tile
+┌─────────────────────────────────────────────────────────────┐
+│ Shared Memory (On-chip)                                      │
+│ InputType (same as global) - 2× capacity with 16-bit        │
+└───────────────────────┬─────────────────────────────────────┘
+                        ↓ Warp loads fragments + converts
+┌─────────────────────────────────────────────────────────────┐
+│ Register File (Warp-level cache)                             │
+│ float (always FP32) - Computation in full precision         │
+└───────────────────────┬─────────────────────────────────────┘
+                        ↓ Thread computes TM×TN tile
+┌─────────────────────────────────────────────────────────────┐
+│ Accumulator Registers                                        │
+│ float (FP32 accumulation) - Numerical stability             │
+└───────────────────────┬─────────────────────────────────────┘
+                        ↓ Write back
+┌─────────────────────────────────────────────────────────────┐
+│ Global Memory Output                                         │
+│ float (FP32 output) - Full precision results                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Kernel
+
+The multi-dtype kernel uses C++ templates and compile-time specialization to support different input types while maintaining optimal performance.
+
+#### Type Traits for Vectorization
+
+First, we define type traits to map each input type to its vectorized form:
+
+```cuda
+// Helper to get the vectorized type for each input type
+template <typename T>
+struct VecType {};
+
+template <>
+struct VecType<float> {
+    using type = float4;  // Load 4 floats at once
+};
+
+template <>
+struct VecType<half> {
+    using type = half2;  // Load 2 halfs at once
+};
+
+template <>
+struct VecType<nv_bfloat16> {
+    using type = nv_bfloat162;  // Load 2 bf16s at once
+};
+
+// Vector size in elements
+template <typename T>
+constexpr int vec_size() { return 4; }
+
+template <>
+constexpr int vec_size<half>() { return 2; }
+
+template <>
+constexpr int vec_size<nv_bfloat16>() { return 2; }
+```
+
+#### Type Conversion Helpers
+
+CUDA provides intrinsics to convert 16-bit types to FP32:
+
+```cuda
+// Type conversion helper for 16-bit types to float
+__device__ __forceinline__ float to_float(half x) {
+    return __half2float(x);
+}
+
+__device__ __forceinline__ float to_float(nv_bfloat16 x) {
+    return __bfloat162float(x);
+}
+
+__device__ __forceinline__ float to_float(float x) {
+    return x;  // No-op for FP32
+}
+```
+
+#### Dtype-Aware Loading
+
+The `load_from_gmem` function now uses `constexpr` to specialize vector operations based on input type:
+
+```cuda
+template <typename InputType, const int BM, const int BN, const int BK,
+          const int row_stride_a, const int row_stride_b>
+__device__ void load_from_gmem(int num_cols_b, int num_cols_a,
+                               const InputType *matrix_a, const InputType *matrix_b,
+                               InputType *tile_a, InputType *tile_b,
+                               int inner_row_a, int inner_col_a,
+                               int inner_row_b, int inner_col_b)
+{
+    constexpr int VEC_SIZE = vec_size<InputType>();
+    using VecT = typename VecType<InputType>::type;
+
+    // Load tile_a with vectorized loads and transpose
+    for (uint offset = 0; offset + row_stride_a <= BM; offset += row_stride_a) {
+        const VecT tmp_a = reinterpret_cast<const VecT*>(
+            &matrix_a[(inner_row_a + offset) * num_cols_a + inner_col_a * VEC_SIZE])[0];
+
+        // Transpose while storing to shared memory
+        if constexpr (VEC_SIZE == 4) {
+            // FP32 case: load 4 elements
+            tile_a[(inner_col_a * 4 + 0) * BM + inner_row_a + offset] = tmp_a.x;
+            tile_a[(inner_col_a * 4 + 1) * BM + inner_row_a + offset] = tmp_a.y;
+            tile_a[(inner_col_a * 4 + 2) * BM + inner_row_a + offset] = tmp_a.z;
+            tile_a[(inner_col_a * 4 + 3) * BM + inner_row_a + offset] = tmp_a.w;
+        } else {
+            // FP16/BF16 case: load 2 elements
+            tile_a[(inner_col_a * 2 + 0) * BM + inner_row_a + offset] = tmp_a.x;
+            tile_a[(inner_col_a * 2 + 1) * BM + inner_row_a + offset] = tmp_a.y;
+        }
+    }
+
+    // Load tile_b with vectorized loads (no transpose)
+    for (uint offset = 0; offset + row_stride_b <= BK; offset += row_stride_b) {
+        reinterpret_cast<VecT*>(
+            &tile_b[(inner_row_b + offset) * BN + inner_col_b * VEC_SIZE])[0] =
+            reinterpret_cast<const VecT*>(
+                &matrix_b[(inner_row_b + offset) * num_cols_b + inner_col_b * VEC_SIZE])[0];
+    }
+}
+```
+
+**Key features:**
+- Uses `constexpr if` to branch at compile-time based on vector size
+- Maintains the same transpose-on-load optimization for matrix A
+- No runtime overhead—compiler generates separate code paths for each type
+
+#### Warp Tile Processing with Conversion
+
+The `process_warp_tile` function converts inputs to FP32 as they're loaded into registers:
+
+```cuda
+template <typename InputType, const int BM, const int BN, const int BK,
+          const int WM, const int WN, const int WMITER, const int WNITER,
+          const int WSUBM, const int WSUBN, const int TM, const int TN>
+__device__ void process_warp_tile(float *register_m, float *register_n, float *thread_results,
+                                  const InputType *tile_a, const InputType *tile_b,
+                                  const uint warp_row, const uint warp_col,
+                                  const uint thread_row_in_warp, const uint thread_col_in_warp)
+{
+    // Loop over BK dimension
+    for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
+        // Load WMITER * TM elements from tile_a and convert to float
+        for (uint wsub_row_idx = 0; wsub_row_idx < WMITER; ++wsub_row_idx) {
+            for (uint i = 0; i < TM; ++i) {
+                // Convert to float for computation (works for float, half, nv_bfloat16)
+                register_m[wsub_row_idx * TM + i] = to_float(
+                    tile_a[(dot_idx * BM) + warp_row * WM + wsub_row_idx * WSUBM +
+                           thread_row_in_warp * TM + i]);
+            }
+        }
+
+        // Load WNITER * TN elements from tile_b and convert to float
+        for (uint wsub_col_idx = 0; wsub_col_idx < WNITER; ++wsub_col_idx) {
+            for (uint i = 0; i < TN; ++i) {
+                register_n[wsub_col_idx * TN + i] = to_float(
+                    tile_b[(dot_idx * BN) + warp_col * WN + wsub_col_idx * WSUBN +
+                           thread_col_in_warp * TN + i]);
+            }
+        }
+
+        // Execute warptile matmul (same as before - all FP32 now)
+        for (uint wsub_row_idx = 0; wsub_row_idx < WMITER; ++wsub_row_idx) {
+            for (uint wsub_col_idx = 0; wsub_col_idx < WNITER; ++wsub_col_idx) {
+                for (uint res_idx_m = 0; res_idx_m < TM; ++res_idx_m) {
+                    for (uint res_idx_n = 0; res_idx_n < TN; ++res_idx_n) {
+                        thread_results[(wsub_row_idx * TM + res_idx_m) * (WNITER * TN) +
+                                      (wsub_col_idx * TN) + res_idx_n] +=
+                            register_m[wsub_row_idx * TM + res_idx_m] *
+                            register_n[wsub_col_idx * TN + res_idx_n];
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+**Conversion happens once per K iteration**, not per FMA operation, so the overhead is minimal. After conversion, the computation is identical to the FP32 kernel.
+
+#### Main Kernel
+
+The main kernel template is nearly identical to the FP32 warp tiling kernel, just templated on `InputType`:
+
+```cuda
+template <typename InputType, const int BM, const int BN, const int BK,
+          const int WM, const int WN, const int WNITER, const int TM, const int TN,
+          const int NUM_THREADS>
+__global__ void __launch_bounds__(NUM_THREADS)
+sgemm_warptiling_multidtype_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
+                                   float alpha, const InputType *matrix_a, const InputType *matrix_b,
+                                   float beta, float *matrix_c)
+{
+    // Same warp and thread placement as FP32 kernel
+    const uint block_row = blockIdx.y;
+    const uint block_col = blockIdx.x;
+    const uint warp_idx = threadIdx.x / WARPSIZE;
+    const uint warp_col = warp_idx % (BN / WN);
+    const uint warp_row = warp_idx / (BN / WN);
+
+    // Warp subtile dimensions
+    constexpr uint WMITER = (WM * WN) / (WARPSIZE * TM * TN * WNITER);
+    constexpr uint WSUBM = WM / WMITER;
+    constexpr uint WSUBN = WN / WNITER;
+
+    // Thread placement within warp subtile
+    const uint thread_idx_in_warp = threadIdx.x % WARPSIZE;
+    const uint thread_col_in_warp = thread_idx_in_warp % (WSUBN / TN);
+    const uint thread_row_in_warp = thread_idx_in_warp / (WSUBN / TN);
+
+    // Shared memory for block tiles (InputType - 16-bit or 32-bit)
+    __shared__ InputType tile_a[BM * BK];
+    __shared__ InputType tile_b[BK * BN];
+
+    // Position matrix pointers
+    matrix_a += block_row * BM * num_cols_a;
+    matrix_b += block_col * BN;
+    matrix_c += (block_row * BM + warp_row * WM) * num_cols_b + block_col * BN + warp_col * WN;
+
+    // Thread-local storage (always FP32 for accumulation)
+    float thread_results[WMITER * TM * WNITER * TN] = {0.0f};
+    float register_m[WMITER * TM] = {0.0f};
+    float register_n[WNITER * TN] = {0.0f};
+
+    // Outer loop over block tiles along K dimension
+    for (uint block_k_idx = 0; block_k_idx < num_cols_a; block_k_idx += BK) {
+        // Load block tile from global memory to shared memory
+        load_from_gmem<InputType, BM, BN, BK, row_stride_a, row_stride_b>(
+            num_cols_b, num_cols_a, matrix_a, matrix_b, tile_a, tile_b,
+            inner_row_a, inner_col_a, inner_row_b, inner_col_b);
+
+        __syncthreads();
+
+        // Process warptile with conversion to FP32
+        process_warp_tile<InputType, BM, BN, BK, WM, WN, WMITER, WNITER, WSUBM, WSUBN, TM, TN>(
+            register_m, register_n, thread_results, tile_a, tile_b,
+            warp_row, warp_col, thread_row_in_warp, thread_col_in_warp);
+
+        matrix_a += BK;
+        matrix_b += BK * num_cols_b;
+        __syncthreads();
+    }
+
+    // Write results (always FP32 output)
+    // ... vectorized stores as before ...
+}
+```
+
+### Caller
+
+We provide three public API functions—one for each supported dtype:
+
+```cpp
+// FP32 version - delegate to original FP32 warptiling
+void sgemm_warptiling_fp32(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
+                           torch::Tensor &output_matrix, float alpha, float beta)
+{
+    TORCH_CHECK(matrix_a.dtype() == torch::kFloat32, "Matrix A must be float32");
+    TORCH_CHECK(matrix_b.dtype() == torch::kFloat32, "Matrix B must be float32");
+
+    // Delegate to the original FP32 warptiling kernel (no conversion overhead)
+    sgemm_warptiling_default(matrix_a, matrix_b, output_matrix, alpha, beta);
+}
+
+// FP16 version - use the multi-dtype kernel
+void sgemm_warptiling_fp16(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
+                           torch::Tensor &output_matrix, float alpha, float beta)
+{
+    TORCH_CHECK(matrix_a.dtype() == torch::kFloat16, "Matrix A must be float16");
+    TORCH_CHECK(matrix_b.dtype() == torch::kFloat16, "Matrix B must be float16");
+
+    sgemm_warptiling_multidtype<half, 128, 128, 16, 64, 64, 4, 8, 4, 128>(
+        matrix_a, matrix_b, output_matrix, alpha, beta);
+}
+
+// BF16 version - use the multi-dtype kernel
+void sgemm_warptiling_bf16(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
+                           torch::Tensor &output_matrix, float alpha, float beta)
+{
+    TORCH_CHECK(matrix_a.dtype() == torch::kBFloat16, "Matrix A must be bfloat16");
+    TORCH_CHECK(matrix_b.dtype() == torch::kBFloat16, "Matrix B must be bfloat16");
+
+    sgemm_warptiling_multidtype<nv_bfloat16, 128, 128, 16, 64, 64, 4, 8, 4, 128>(
+        matrix_a, matrix_b, output_matrix, alpha, beta);
+}
+```
+
+**Design rationale:**
+- **Separate functions**: Cleaner API—user chooses dtype explicitly
+- **Type safety**: Compile-time checks ensure A and B have matching dtypes
+- **FP32 optimization**: FP32 path uses the original kernel (no conversion overhead)
+- **Output always FP32**: Consistent with cuBLAS and PyTorch mixed-precision training
+
+### Performance Analysis
+
+Performance results will be added here once benchmarking is complete.
+
 ## Further Optimizations
 
 Beyond what we covered:
@@ -1890,23 +2221,26 @@ Beyond what we covered:
 
 ## References
 
-### CUDA Resources
-- [Simon Boehm's CUDA Matrix Multiplication](https://siboehm.com/articles/22/CUDA-MMM) - Original blog post that inspired this guide
-- [NVIDIA CUDA C Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/) - Official CUDA documentation
-- [CUTLASS: CUDA Templates for Linear Algebra Subroutines](https://github.com/NVIDIA/cutlass) - NVIDIA's high-performance GEMM library
-- [Dissecting the NVIDIA Volta GPU Architecture](https://arxiv.org/abs/1804.06826) - Deep dive into GPU architecture
-
-### Triton Resources
-- [Triton Language Documentation](https://triton-lang.org/) - Official Triton documentation
-- [Triton Tutorial: Matrix Multiplication](https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html) - Official GEMM tutorial
-- [OpenAI Triton: A GPU Programming Language](https://openai.com/research/triton) - Original announcement
-- [Triton GitHub Repository](https://github.com/openai/triton) - Source code and examples
-
-### GPU Optimization
-- [NVIDIA Performance Guidelines](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/) - Best practices for CUDA optimization
-- [GPU Gems 3](https://developer.nvidia.com/gpugems/gpugems3/contributors) - Advanced GPU programming techniques
-- [Understanding GPU Memory](https://developer.nvidia.com/blog/how-access-global-memory-efficiently-cuda-c-kernels/) - Memory coalescing explained
+- [Simon Boehm's CUDA Matrix Multiplication](https://siboehm.com/articles/22/CUDA-MMM) - Original blog post that inspired this article
+- [Simon's GEMM Repo](https://github.com/siboehm/SGEMM_CUDA/tree/master)
+- [NVIDIA CUDA C Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/)
+- [CUTLASS: CUDA Templates for Linear Algebra Subroutines](https://github.com/NVIDIA/cutlass)
+- [CUTLASS: Fast Linear Algebra in CUDA C++](https://developer.nvidia.com/blog/cutlass-linear-algebra-cuda/)
+- [Triton Tutorial: Matrix Multiplication](https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html)
+- [NVIDIA Performance Guidelines](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/)
+- [Understanding GPU Memory](https://developer.nvidia.com/blog/how-access-global-memory-efficiently-cuda-c-kernels/)
 - [Shared Memory](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#shared-memory)
+- [Reddit: What's the point of warp-level gemm](https://www.reddit.com/r/CUDA/comments/1hk4410/whats_the_point_of_warplevel_gemm/)
+- [Implementing Strassen’s Algorithm with CUTLASS on NVIDIA Volta GPUs](https://arxiv.org/pdf/1808.07984)
+- [Lei Mao's Blog](https://leimao.github.io/blog/CUDA-Shared-Memory-Bank/)
+- [Advanced Matrix Multiplication Optimization on NVIDIA GPUs](https://salykova.github.io/gemm-gpu)
+- [Inside NVIDIA GPUs: Anatomy of high performance matmul kernels](https://www.aleksagordic.com/blog/matmul)
+- [NVIDIA ADA GPU ARCHITECTURE](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf)
+- [How to Access Global Memory Efficiently in CUDA C/C++ Kernels](https://developer.nvidia.com/blog/how-access-global-memory-efficiently-cuda-c-kernels/)
+- [CUDA Pro Tip: Increase Performance with Vectorized Memory Access](https://developer.nvidia.com/blog/cuda-pro-tip-increase-performance-with-vectorized-memory-access/)
+- [Outperforming cuBLAS on H100: a Worklog](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog)
+- [Modal GPU Glossary](https://modal.com/gpu-glossary/readme)
+
 
 
 <script src="/assets/js/gemm-optimization-visualizer.js"></script>
