@@ -194,11 +194,7 @@ class NaiveKernelViz {
     init() {
         this.container.innerHTML = commonStyles + `
             <div class="viz-container">
-                <div class="viz-title">Naive Kernel: One Thread Per Output</div>
-                <div class="viz-info">
-                    <div id="naiveStats"></div>
-                </div>
-                <br>
+                <div class="viz-title">Naive Kernel</div>
                 <div class="viz-controls">
                     <button class="viz-btn" id="naiveAnimate">Animate</button>
                     <button class="viz-btn" id="naiveReset">Reset</button>
@@ -243,9 +239,6 @@ class NaiveKernelViz {
         this.renderMatrices();
 
         document.getElementById('naiveAnimate').disabled = true;
-        document.getElementById('naiveStats').innerHTML = '';
-
-        let totalMemoryAccesses = 0;
 
         for (let i = 0; i < this.matrixSize; i++) {
             for (let j = 0; j < this.matrixSize; j++) {
@@ -265,9 +258,6 @@ class NaiveKernelViz {
                     cellB.classList.add('highlight');
                 }
 
-                totalMemoryAccesses += 2 * this.matrixSize;
-                this.updateStats(i * this.matrixSize + j + 1, totalMemoryAccesses);
-
                 await sleep(200);
 
                 // Clear highlights
@@ -282,31 +272,8 @@ class NaiveKernelViz {
         this.isAnimating = false;
     }
 
-    updateStats(threadsCompleted, memoryAccesses) {
-        const totalThreads = this.matrixSize * this.matrixSize;
-        const totalOps = totalThreads * this.matrixSize * 2;
-
-        document.getElementById('naiveStats').innerHTML = `
-            <div class="viz-stats">
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Threads Completed</div>
-                    <div class="viz-stat-value">${threadsCompleted}/${totalThreads}</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Memory Accesses</div>
-                    <div class="viz-stat-value">${memoryAccesses}</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Parallelism</div>
-                    <div class="viz-stat-value">Low (Poor Memory Pattern)</div>
-                </div>
-            </div>
-        `;
-    }
-
     reset() {
         this.renderMatrices();
-        document.getElementById('naiveStats').innerHTML = '';
     }
 }
 
@@ -491,13 +458,9 @@ class CoalescedMatrixViz {
     init() {
         this.container.innerHTML = commonStyles + `
             <div class="viz-container">
-                <div class="viz-title">Coalesced Kernel</div>
-                <div class="viz-info">
-                    <div id="coalescedMatrixStats"></div>
-                </div>
-                <br>
+                <div class="viz-title">Global Memory Coalesced Kernel</div>
                 <div class="viz-controls">
-                    <button class="viz-btn" id="coalescedMatrixAnimate">Animate Warp Access</button>
+                    <button class="viz-btn" id="coalescedMatrixAnimate">Animate</button>
                     <button class="viz-btn" id="coalescedMatrixReset">Reset</button>
                 </div>
                 <div class="viz-canvas" id="coalescedMatrixCanvas"></div>
@@ -540,10 +503,6 @@ class CoalescedMatrixViz {
         this.renderMatrices();
 
         document.getElementById('coalescedMatrixAnimate').disabled = true;
-        document.getElementById('coalescedMatrixStats').innerHTML = '';
-
-        let stepCount = 0;
-        const totalSteps = this.matrixSize * this.matrixSize;
 
         // Iterate through columns of B (outer loop)
         for (let colB = 0; colB < this.matrixSize; colB++) {
@@ -565,9 +524,6 @@ class CoalescedMatrixViz {
                 const outputCell = this.matrixC.querySelector(`[data-row="${rowA}"][data-col="${colB}"]`);
                 if (outputCell) outputCell.classList.add('active');
 
-                stepCount++;
-                this.updateStats(stepCount, totalSteps, rowA + 1, colB + 1);
-
                 await sleep(300);
 
                 // Clear highlights
@@ -586,228 +542,8 @@ class CoalescedMatrixViz {
         this.isAnimating = false;
     }
 
-    updateStats(stepCount, totalSteps, rowA, colB) {
-        document.getElementById('coalescedMatrixStats').innerHTML = `
-            <div class="viz-stats">
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Current Step</div>
-                    <div class="viz-stat-value">${stepCount}/${totalSteps}</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Matrix A Row</div>
-                    <div class="viz-stat-value">${rowA}</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Matrix B Column</div>
-                    <div class="viz-stat-value">${colB}</div>
-                </div>
-            </div>
-        `;
-    }
-
     reset() {
         this.renderMatrices();
-        document.getElementById('coalescedMatrixStats').innerHTML = '';
-    }
-}
-
-// ============================================================================
-// GPU Memory Hierarchy Visualization
-// ============================================================================
-class MemoryHierarchyViz {
-    constructor(containerId) {
-        this.container = document.getElementById(containerId);
-        if (!this.container) {
-            console.error(`Container with id "${containerId}" not found`);
-            return;
-        }
-        this.init();
-    }
-
-    init() {
-        this.container.innerHTML = commonStyles + `
-            <style>
-                .mem-layer {
-                    margin: 15px auto;
-                    padding: 20px;
-                    border-radius: 10px;
-                    position: relative;
-                    transition: all 0.3s;
-                    cursor: pointer;
-                }
-                .mem-layer:hover {
-                    transform: translateY(-2px);
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-                }
-                .mem-layer-title {
-                    font-size: 18px;
-                    font-weight: 700;
-                    margin-bottom: 8px;
-                }
-                .mem-layer-stats {
-                    display: grid;
-                    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-                    gap: 10px;
-                    margin-top: 10px;
-                }
-                .mem-stat {
-                    font-size: 12px;
-                }
-                .mem-stat-label {
-                    color: rgba(255,255,255,0.7);
-                    font-size: 11px;
-                }
-                .mem-stat-value {
-                    font-size: 16px;
-                    font-weight: 600;
-                    margin-top: 2px;
-                }
-                .arrow-down {
-                    text-align: center;
-                    font-size: 24px;
-                    color: #666;
-                    margin: 5px 0;
-                }
-                .shared-mem-detail {
-                    margin-top: 15px;
-                    padding: 15px;
-                    background: rgba(0,0,0,0.2);
-                    border-radius: 8px;
-                    border-left: 4px solid #FFA726;
-                }
-                .thread-block {
-                    display: inline-block;
-                    width: 40px;
-                    height: 40px;
-                    background: #4CAF50;
-                    border-radius: 4px;
-                    margin: 3px;
-                    display: inline-flex;
-                    align-items: center;
-                    justify-content: center;
-                    font-size: 10px;
-                    font-weight: bold;
-                }
-            </style>
-            <div class="viz-container">
-                <div class="viz-title">RTX 4090 Memory Hierarchy</div>
-                <div style="max-width: 700px; margin: 0 auto;">
-                    <!-- Memory Stack -->
-                    <div style="display: flex; flex-direction: column; gap: 0;">
-                        <!-- Registers -->
-                        <div class="mem-layer" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; width: 100%; border-radius: 10px 10px 0 0;">
-                            <div class="mem-layer-title">📦 Registers</div>
-                            <div class="mem-layer-stats">
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Size/SM</div>
-                                    <div class="mem-stat-value">256 KB</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Bandwidth</div>
-                                    <div class="mem-stat-value">~19 TB/s</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Latency</div>
-                                    <div class="mem-stat-value">~1 cycle</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Scope</div>
-                                    <div class="mem-stat-value">Per Thread</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- L1 Cache / Shared Memory -->
-                        <div class="mem-layer" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; width: 100%; border-radius: 0;">
-                            <div class="mem-layer-title">🔄 L1 Cache / Shared Memory</div>
-                            <div class="mem-layer-stats">
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Size/SM</div>
-                                    <div class="mem-stat-value">128 KB</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Bandwidth</div>
-                                    <div class="mem-stat-value">~14 TB/s</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Latency</div>
-                                    <div class="mem-stat-value">~20-30 cycles</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Scope</div>
-                                    <div class="mem-stat-value">Per Thread Block</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- L2 Cache -->
-                        <div class="mem-layer" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; width: 100%; border-radius: 0;">
-                            <div class="mem-layer-title">💾 L2 Cache</div>
-                            <div class="mem-layer-stats">
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Total Size</div>
-                                    <div class="mem-stat-value">72 MB</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Bandwidth</div>
-                                    <div class="mem-stat-value">~3.5 TB/s</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Latency</div>
-                                    <div class="mem-stat-value">~200 cycles</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Scope</div>
-                                    <div class="mem-stat-value">All SMs</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Global Memory (HBM) -->
-                        <div class="mem-layer" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); color: white; width: 100%; border-radius: 0 0 10px 10px;">
-                            <div class="mem-layer-title">🌐 Global Memory (GDDR6X)</div>
-                            <div class="mem-layer-stats">
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Total Size</div>
-                                    <div class="mem-stat-value">24 GB</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Bandwidth</div>
-                                    <div class="mem-stat-value">~1 TB/s</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Latency</div>
-                                    <div class="mem-stat-value">~400-800 cycles</div>
-                                </div>
-                                <div class="mem-stat">
-                                    <div class="mem-stat-label">Scope</div>
-                                    <div class="mem-stat-value">Device-wide</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-
-                    <!-- Key Insights -->
-                    <div class="viz-info" style="margin-top: 20px;">
-                        <h4>🎯 Key Insights for GEMM Optimization</h4>
-                        <div style="line-height: 1.8;">
-                            <strong style="color: #4CAF50;">1. Shared Memory is Critical:</strong>
-                            14 TB/s vs 1 TB/s global memory = 14× faster!<br>
-
-                            <strong style="color: #FFA726;">2. Minimize Global Memory Access:</strong>
-                            Load data once, reuse in shared memory/registers<br>
-
-                            <strong style="color: #42A5F5;">3. Maximize Register Usage:</strong>
-                            19 TB/s bandwidth - keep hot data in registers<br>
-
-                            <strong style="color: #AB47BC;">4. Coalescing Matters:</strong>
-                            Even with caching, coalesced access patterns maximize throughput
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
     }
 }
 
@@ -843,7 +579,6 @@ class SharedMemoryViz {
                         <li><strong>Slide to next K tile</strong> and accumulate partial results</li>
                         <li><strong>Move to next output tile</strong> and repeat</li>
                     </ol>
-                    <p style="margin-top: 10px; color: #FFA726;"><strong>Key:</strong> Each C element requires multiple K tiles - we accumulate partial sums!</p>
                 </div>
                 <div class="viz-canvas" id="sharedCanvas"></div>
                 <div class="legend">
@@ -1046,7 +781,7 @@ class Tiling1DViz {
                 <div class="viz-info" style="margin-bottom: 15px;">
                     <h4>Building on Shared Memory:</h4>
                     <p style="margin: 10px 0; line-height: 1.8;">
-                        We still use shared memory tiles (<code>tile_a</code>, <code>tile_b</code>), but now each thread computes <strong>TM = ${this.TM} outputs</strong> instead of just 1!
+                        We still use shared memory tiles (<code>tile_a</code>, <code>tile_b</code>), but now each thread computes <code>TM = ${this.TM} outputs</code> instead of just 1. Let's see how this works below:
                     </p>
 
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0; padding: 15px; background: #2a2a2a; border-radius: 8px;">
@@ -1085,9 +820,6 @@ class Tiling1DViz {
                     <button class="viz-btn" id="tiling1dReset">Reset</button>
                 </div>
                 <div class="viz-canvas" id="tiling1dCanvas"></div>
-                <div class="viz-info">
-                    <div id="tiling1dStats"></div>
-                </div>
                 <div class="legend">
                     <div class="legend-item">
                         <div class="legend-box" style="background: #FF9800;"></div>
@@ -1183,12 +915,15 @@ class Tiling1DViz {
         this.sharedB = createMatrixGrid(this.tileSize, this.tileSize, 30, '', document.getElementById('tiling1dSharedB'));
         this.matrixC = createMatrixGrid(this.tileSize, this.tileSize, 30, '', document.getElementById('tiling1dMatrixC'));
 
-        // Create register visualization - simpler for comparison view
+        // Create register visualization - larger and with index display
         const regContainer = document.getElementById('tiling1dRegisters');
         regContainer.innerHTML = `
-            <div id="regN" style="width: 80px; height: 30px; background: #333; border: 2px solid #555;
-                 border-radius: 6px; display: flex; align-items: center; justify-content: center;
-                 font-size: 10px; transition: all 0.3s;">b_tmp</div>
+            <div id="regN" style="width: 120px; height: 80px; background: #333; border: 2px solid #555;
+                 border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+                 font-size: 12px; transition: all 0.3s; padding: 10px; text-align: center;">
+                <div style="font-weight: bold;">b_tmp</div>
+                <div id="regIndex" style="font-size: 13px; color: #999; margin-top: 5px;">—</div>
+            </div>
         `;
     }
 
@@ -1198,7 +933,6 @@ class Tiling1DViz {
         this.renderMatrices();
 
         document.getElementById('tiling1dAnimate').disabled = true;
-        document.getElementById('tiling1dStats').innerHTML = '';
 
         let prevSMEMReads = 0;
         let currentSMEMReads = 0;
@@ -1281,9 +1015,11 @@ class Tiling1DViz {
                     if (cellB) cellB.classList.add('active');
 
                     const regN = document.getElementById('regN');
+                    const regIndex = document.getElementById('regIndex');
                     regN.style.background = '#00BCD4';
                     regN.style.borderColor = '#00BCD4';
-                    regN.textContent = '🔄 b_tmp';
+                    regIndex.textContent = `B[${k}][${col}]`;
+                    regIndex.style.color = '#00BCD4';
 
                     currentSMEMReads += 1;
 
@@ -1296,7 +1032,8 @@ class Tiling1DViz {
 
                         // Show b_tmp being reused
                         regN.style.background = '#E91E63';
-                        regN.textContent = `✅ ×${tm + 1}`;
+                        regIndex.textContent = `✅ ×${tm + 1}`;
+                        regIndex.style.color = '#E91E63';
 
                         if (cellC) {
                             cellC.style.background = '#E91E63'; // Computing
@@ -1317,14 +1054,13 @@ class Tiling1DViz {
                     // Reset register
                     regN.style.background = '#333';
                     regN.style.borderColor = '#555';
-                    regN.textContent = 'b_tmp';
+                    regIndex.textContent = '—';
+                    regIndex.style.color = '#999';
 
                     // Clear active highlights from shared memory
                     this.sharedA.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
                     this.sharedB.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
                 }
-
-                this.updateTiling1DStats(prevSMEMReads, currentSMEMReads, computationsCompleted, col + 1);
             }
         }
 
@@ -1332,62 +1068,8 @@ class Tiling1DViz {
         this.isAnimating = false;
     }
 
-    updateTiling1DStats(prevSMEMReads, currentSMEMReads, outputsComplete, colsProcessed) {
-        const totalOutputs = this.tileSize * this.tileSize;
-        const smemTrafficReduction = prevSMEMReads > 0 ?
-            ((1 - (currentSMEMReads / prevSMEMReads)) * 100).toFixed(1) : 0;
-
-        document.getElementById('tiling1dStats').innerHTML = `
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 15px;">
-                <div style="background: #2a2a2a; padding: 12px; border-radius: 6px; border-left: 4px solid #FF6B6B;">
-                    <div style="font-weight: 600; color: #FF6B6B; margin-bottom: 8px;">❌ Previous Kernel</div>
-                    <div style="font-size: 13px; line-height: 1.6;">
-                        <div><strong>SMEM Reads:</strong> ${prevSMEMReads}</div>
-                        <div><strong>Pattern:</strong> 2 reads per output</div>
-                        <div><strong>Outputs:</strong> ${outputsComplete}/${totalOutputs}</div>
-                    </div>
-                </div>
-                <div style="background: #2a2a2a; padding: 12px; border-radius: 6px; border-left: 4px solid #4CAF50;">
-                    <div style="font-weight: 600; color: #4CAF50; margin-bottom: 8px;">✅ Current Kernel</div>
-                    <div style="font-size: 13px; line-height: 1.6;">
-                        <div><strong>SMEM Reads:</strong> ${currentSMEMReads}</div>
-                        <div><strong>Pattern:</strong> 1 b_tmp + ${this.TM} tile_a per ${this.TM} outputs</div>
-                        <div><strong>Outputs:</strong> ${outputsComplete}/${totalOutputs}</div>
-                    </div>
-                </div>
-            </div>
-            <div class="viz-stats">
-                <div class="viz-stat" style="border-left: 3px solid #FF6B6B;">
-                    <div class="viz-stat-label">Previous SMEM Traffic</div>
-                    <div class="viz-stat-value" style="color: #FF6B6B;">${prevSMEMReads} reads</div>
-                </div>
-                <div class="viz-stat" style="border-left: 3px solid #4CAF50;">
-                    <div class="viz-stat-label">Current SMEM Traffic</div>
-                    <div class="viz-stat-value" style="color: #4CAF50;">${currentSMEMReads} reads</div>
-                </div>
-                <div class="viz-stat" style="border-left: 3px solid #00BCD4;">
-                    <div class="viz-stat-label">b_tmp Reuse Factor</div>
-                    <div class="viz-stat-value" style="color: #00BCD4;">${this.TM}× per load</div>
-                </div>
-                <div class="viz-stat" style="border-left: 3px solid #FFA726;">
-                    <div class="viz-stat-label">SMEM Traffic Reduction</div>
-                    <div class="viz-stat-value" style="color: #FFA726;">${smemTrafficReduction}%</div>
-                </div>
-            </div>
-            <div style="margin-top: 15px; padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 4px solid #FFA726;">
-                <div style="font-size: 13px; line-height: 1.6;">
-                    <strong style="color: #FFA726;">📊 Side-by-Side Comparison:</strong><br>
-                    <span style="color: #FF6B6B;">Left (Previous):</span> Reads 2 values, computes 1 output (no register reuse)<br>
-                    <span style="color: #4CAF50;">Right (1D Tiling):</span> Caches <code>b_tmp</code> in register, reuses it ${this.TM}× for ${this.TM} outputs!<br>
-                    <span style="color: #00BCD4;">Result:</span> ${smemTrafficReduction}% less shared memory traffic = faster execution!
-                </div>
-            </div>
-        `;
-    }
-
     reset() {
         this.renderMatrices();
-        document.getElementById('tiling1dStats').innerHTML = '';
     }
 }
 
@@ -1977,7 +1659,7 @@ class Tiling2DViz {
     init() {
         this.container.innerHTML = commonStyles + `
             <div class="viz-container">
-                <div class="viz-title">2D Block Tiling: Outer Product Register Blocking</div>
+                <div class="viz-title">2D Block Tiling: Outer Product</div>
                 <div class="viz-info" style="margin-bottom: 15px;">
                     <h4>Building on 1D Tiling:</h4>
                     <p style="margin: 10px 0; line-height: 1.8;">
@@ -2010,9 +1692,6 @@ class Tiling2DViz {
                     <button class="viz-btn" id="tiling2dReset">Reset</button>
                 </div>
                 <div class="viz-canvas" id="tiling2dCanvas"></div>
-                <div class="viz-info">
-                    <div id="tiling2dStats"></div>
-                </div>
                 <div class="legend">
                     <div class="legend-item">
                         <div class="legend-box" style="background: #FF9800;"></div>
@@ -2155,7 +1834,6 @@ class Tiling2DViz {
         this.renderMatrices();
 
         document.getElementById('tiling2dAnimate').disabled = true;
-        document.getElementById('tiling2dStats').innerHTML = '';
 
         let smemReads = 0;
         let computationsCompleted = 0;
@@ -2232,8 +1910,6 @@ class Tiling2DViz {
                 }
             }
 
-            this.updateTiling2DStats(smemReads, computationsCompleted, k + 1);
-
             await sleep(200);
 
             // Clear active highlights from shared memory
@@ -2257,48 +1933,8 @@ class Tiling2DViz {
         this.isAnimating = false;
     }
 
-    updateTiling2DStats(smemReads, computationsCompleted, kProgress) {
-        const totalOutputs = this.TM * this.TN;
-        const totalSMEMReads = this.tileSize * (this.TM + this.TN);
-        const reusePerLoad = (totalOutputs / (this.TM + this.TN)).toFixed(2);
-
-        document.getElementById('tiling2dStats').innerHTML = `
-            <div class="viz-stats">
-                <div class="viz-stat">
-                    <div class="viz-stat-label">K Progress</div>
-                    <div class="viz-stat-value">${kProgress}/${this.tileSize}</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">SMEM Reads (So Far)</div>
-                    <div class="viz-stat-value">${smemReads}/${totalSMEMReads}</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Outputs Completed</div>
-                    <div class="viz-stat-value">${computationsCompleted}/${totalOutputs}</div>
-                </div>
-                <div class="viz-stat" style="border-left: 3px solid #4CAF50;">
-                    <div class="viz-stat-label">Outer Product Size</div>
-                    <div class="viz-stat-value" style="color: #4CAF50;">${this.TM}×${this.TN} = ${totalOutputs}</div>
-                </div>
-                <div class="viz-stat" style="border-left: 3px solid #9C27B0;">
-                    <div class="viz-stat-label">Register Reuse Factor</div>
-                    <div class="viz-stat-value" style="color: #9C27B0;">${reusePerLoad}× per register</div>
-                </div>
-            </div>
-            <div style="margin-top: 15px; padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 4px solid #FFA726;">
-                <div style="font-size: 13px; line-height: 1.6;">
-                    <strong style="color: #FFA726;">🎯 Outer Product Pattern:</strong><br>
-                    <span style="color: #9C27B0;">register_m[${this.TM}]</span> ⊗ <span style="color: #00BCD4;">register_n[${this.TN}]</span> = <span style="color: #4CAF50;">${this.TM}×${this.TN} outputs</span><br>
-                    Each iteration: Load <strong>${this.TM + this.TN}</strong> values, compute <strong>${this.TM * this.TN}</strong> outputs!<br>
-                    <span style="color: #4CAF50;">Efficiency:</span> ${reusePerLoad}× more computation per SMEM read than 1D tiling!
-                </div>
-            </div>
-        `;
-    }
-
     reset() {
         this.renderMatrices();
-        document.getElementById('tiling2dStats').innerHTML = '';
     }
 }
 
@@ -2634,9 +2270,9 @@ class IndexTransformViz {
     init() {
         this.container.innerHTML = commonStyles + `
             <div class="viz-container">
-                <div class="viz-title">Index Transformation: Naive vs Coalesced</div>
+                <div class="viz-title"> Thread To Index/Memory Mapping: Naive vs Coalesced</div>
                 <div class="viz-controls">
-                    <button class="viz-btn" id="transformAnimate">Animate Thread Mapping</button>
+                    <button class="viz-btn" id="transformAnimate">Animate</button>
                     <button class="viz-btn" id="transformReset">Reset</button>
                 </div>
                 <div class="viz-canvas" id="transformCanvas" style="overflow-x: auto;">
@@ -2861,8 +2497,8 @@ class WarpTilingViz {
         this.isAnimating = false;
 
         // Configuration matching typical warp tiling parameters
-        this.BM = 64;  // Block tile M
-        this.BN = 64;  // Block tile N
+        this.BM = 8;   // Block tile M
+        this.BN = 8;   // Block tile N
         this.BK = 8;   // Block tile K
         this.WM = 32;  // Warp tile M (half of block)
         this.WN = 32;  // Warp tile N (half of block)
@@ -2873,10 +2509,10 @@ class WarpTilingViz {
         // For visualization, use smaller sizes
         this.vizBM = 8;
         this.vizBN = 8;
-        this.vizWM = 4;
-        this.vizWN = 4;
-        this.vizTM = 2;
-        this.vizTN = 2;
+        this.vizWM = 8;
+        this.vizWN = 8;
+        this.vizTM = 4;
+        this.vizTN = 4;
 
         this.init();
     }
@@ -2884,60 +2520,44 @@ class WarpTilingViz {
     init() {
         this.container.innerHTML = commonStyles + `
             <div class="viz-container">
-                <div class="viz-title">Warp Tiling: Three-Level Memory Hierarchy</div>
-                <div class="viz-info" style="margin-bottom: 15px;">
-                    <h4>Evolution of Tiling Strategies:</h4>
-                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 15px 0;">
-                        <div style="padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 3px solid #FF9800;">
-                            <div style="font-weight: 600; color: #FF9800; margin-bottom: 8px;">📦 2D Block Tiling</div>
-                            <div style="font-size: 12px; line-height: 1.6; color: #ccc;">
-                                • Global → Shared<br>
-                                • Shared → Registers<br>
-                                • Thread computes TM×TN
-                            </div>
-                        </div>
-                        <div style="padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 3px solid #9C27B0;">
-                            <div style="font-weight: 600; color: #9C27B0; margin-bottom: 8px;">🌊 Warp Tiling</div>
-                            <div style="font-size: 12px; line-height: 1.6; color: #ccc;">
-                                • Global → Shared<br>
-                                • <strong>Shared → Warp Registers</strong><br>
-                                • <strong>Warp fragments → Thread tiles</strong><br>
-                                • 32 threads cooperate
-                            </div>
-                        </div>
-                        <div style="padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 3px solid #4CAF50;">
-                            <div style="font-weight: 600; color: #4CAF50; margin-bottom: 8px;">✨ Key Benefit</div>
-                            <div style="font-size: 12px; line-height: 1.6; color: #ccc;">
-                                • <strong>Warp-level register caching</strong><br>
-                                • Each SMEM load enables<br>
-                                  TM×TN FMAs per thread<br>
-                                • 32 threads = massive reuse
-                            </div>
-                        </div>
-                    </div>
-                    <div style="padding: 12px; background: #1a1a1a; border-radius: 6px; margin-top: 10px; border: 2px solid #4CAF50;">
-                        <strong style="color: #4CAF50;">🎯 Core Idea:</strong>
-                        <span style="color: #ccc;">Load warp-sized fragments (${this.vizWM}×${this.vizWN}) from shared memory into registers,
-                        then each of the 32 threads computes its ${this.vizTM}×${this.vizTN} output tile from those cached fragments.</span>
-                    </div>
-                </div>
+                <div class="viz-title">Warp Tiling</div>
 
                 <div class="viz-controls">
                     <button class="viz-btn" id="warpAnimate">Animate</button>
                     <button class="viz-btn" id="warpReset">Reset</button>
                 </div>
+                <div class="viz-info" style="margin-bottom: 15px;">
+                    <div style="padding: 12px; background: #1a1a1a; border-radius: 6px; margin-top: 10px; border: 2px solid #9C27B0;">
+                        <strong style="color: #9C27B0;">Tile Dimensions:</strong>
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 8px; font-size: 12px;">
+                            <div style="padding: 8px; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #FF9800;">
+                                <div style="color: #999; font-size: 10px;">Block Tile</div>
+                                <div style="color: #FF9800; font-weight: 600;">BM=${this.BM}, BN=${this.BN}, BK=${this.BK}</div>
+                            </div>
+                            <div style="padding: 8px; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #9C27B0;">
+                                <div style="color: #999; font-size: 10px;">Warp Tile</div>
+                                <div style="color: #9C27B0; font-weight: 600;">WM=${this.vizWM}, WN=${this.vizWN}</div>
+                            </div>
+                            <div style="padding: 8px; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #00BCD4;">
+                                <div style="color: #999; font-size: 10px;">Thread Tile</div>
+                                <div style="color: #00BCD4; font-weight: 600;">TM=${this.vizTM}, TN=${this.vizTN}</div>
+                            </div>
+                            <div style="padding: 8px; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #4CAF50;">
+                                <div style="color: #999; font-size: 10px;">Warp Threads</div>
+                                <div style="color: #4CAF50; font-weight: 600;">${this.WARPSIZE} threads</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
                 <div class="viz-canvas" id="warpCanvas"></div>
 
-                <div class="viz-info">
-                    <div id="warpStats"></div>
-                </div>
-
                 <div class="legend">
-                    <div class="legend-item">
+                                    <div class="legend-item">
                         <div class="legend-box" style="background: #FF9800;"></div>
                         <span>Shared Memory (Block Tile)</span>
                     </div>
+                    
                     <div class="legend-item">
                         <div class="legend-box" style="background: #9C27B0;"></div>
                         <span>Warp Fragment (register_m)</span>
@@ -2972,7 +2592,7 @@ class WarpTilingViz {
                 <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
                     <div style="text-align: center;">
                         <div style="font-size: 16px; color: #FF9800; margin-bottom: 10px; font-weight: 600;">
-                            📦 Shared Memory (Block Tile ${this.vizBM}×${this.vizBN})
+                            Shared Memory (Block Tiles ${this.vizBM}×${this.vizBN})
                         </div>
                         <div style="font-size: 11px; color: #999; margin-bottom: 8px;">
                             All warps in the block share this data
@@ -3000,7 +2620,7 @@ class WarpTilingViz {
                 <div style="display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 20px; background: #2a2a2a; border-radius: 8px; border: 2px solid #9C27B0;">
                     <div style="text-align: center;">
                         <div style="font-size: 16px; color: #9C27B0; margin-bottom: 10px; font-weight: 600;">
-                            🌊 Warp-Level Register Cache (${this.vizWM}×${this.vizWN})
+                            Warp-Level Register Cache (${this.vizWM}×1 and 1x${this.vizWN})
                         </div>
                         <div style="font-size: 11px; color: #999; margin-bottom: 8px;">
                             One warp (32 threads) collectively holds these fragments
@@ -3102,14 +2722,8 @@ class WarpTilingViz {
         this.renderHierarchy();
 
         document.getElementById('warpAnimate').disabled = true;
-        document.getElementById('warpStats').innerHTML = '';
-
-        let smemReads = 0;
-        let registerLoads = 0;
-        let fmaOps = 0;
 
         // Step 1: Highlight block tile in shared memory
-        await this.updateStats('Loading block tile into shared memory...', smemReads, registerLoads, fmaOps);
         for (let i = 0; i < this.vizWM; i++) {
             for (let k = 0; k < this.BK; k++) {
                 const cellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${k}"]`);
@@ -3133,7 +2747,6 @@ class WarpTilingViz {
         // Iterate over K dimension
         for (let k = 0; k < this.BK; k++) {
             // Step 2: Load warp fragment from shared memory to registers
-            await this.updateStats(`K=${k}: Loading warp fragments into registers...`, smemReads, registerLoads, fmaOps);
 
             // Highlight column k from tile_a
             for (let i = 0; i < this.vizWM; i++) {
@@ -3150,8 +2763,6 @@ class WarpTilingViz {
                     regM.style.color = '#fff';
                 }
             }
-            smemReads += this.vizWM;
-            registerLoads += this.vizWM;
             await sleep(400);
 
             // Highlight row k from tile_b
@@ -3169,13 +2780,9 @@ class WarpTilingViz {
                     regN.style.color = '#fff';
                 }
             }
-            smemReads += this.vizWN;
-            registerLoads += this.vizWN;
             await sleep(400);
 
             // Step 3: Compute thread tile using outer product of warp fragments
-            await this.updateStats(`K=${k}: Computing ${this.vizTM}×${this.vizTN} thread outputs...`, smemReads, registerLoads, fmaOps);
-
             for (let i = 0; i < this.vizTM; i++) {
                 for (let j = 0; j < this.vizTN; j++) {
                     // Highlight the registers being used
@@ -3191,7 +2798,6 @@ class WarpTilingViz {
                         cellOut.style.borderColor = '#E91E63';
                     }
 
-                    fmaOps++;
                     await sleep(80);
 
                     // Update output cell
@@ -3212,7 +2818,6 @@ class WarpTilingViz {
                 }
             }
 
-            await this.updateStats(`K=${k}: Iteration complete`, smemReads, registerLoads, fmaOps);
             await sleep(300);
 
             // Clear active highlights
@@ -3244,69 +2849,12 @@ class WarpTilingViz {
             }
         }
 
-        await this.updateStats('✅ Warp tile computation complete!', smemReads, registerLoads, fmaOps, true);
         document.getElementById('warpAnimate').disabled = false;
         this.isAnimating = false;
     }
 
-    async updateStats(message, smemReads, registerLoads, fmaOps, final = false) {
-        const totalSMEM = this.BK * (this.vizWM + this.vizWN);
-        const totalFMAs = this.BK * this.vizTM * this.vizTN;
-        const totalOutputs = this.vizTM * this.vizTN;
-        const arithmeticIntensity = (totalFMAs / totalSMEM).toFixed(2);
-        const reusePerLoad = (totalOutputs / (this.vizWM + this.vizWN)).toFixed(2);
-
-        document.getElementById('warpStats').innerHTML = `
-            <div style="margin-bottom: 12px; padding: 10px; background: ${final ? '#1a4d2e' : '#2a2a2a'}; border-radius: 6px; border-left: 4px solid ${final ? '#4CAF50' : '#FFA726'};">
-                <strong style="color: ${final ? '#4CAF50' : '#FFA726'};">${message}</strong>
-            </div>
-            <div class="viz-stats">
-                <div class="viz-stat">
-                    <div class="viz-stat-label">SMEM Reads</div>
-                    <div class="viz-stat-value">${smemReads}/${totalSMEM}</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">Register Loads</div>
-                    <div class="viz-stat-value">${registerLoads}</div>
-                </div>
-                <div class="viz-stat">
-                    <div class="viz-stat-label">FMA Operations</div>
-                    <div class="viz-stat-value">${fmaOps}/${totalFMAs}</div>
-                </div>
-                <div class="viz-stat" style="border-left: 3px solid #4CAF50;">
-                    <div class="viz-stat-label">Thread Outputs</div>
-                    <div class="viz-stat-value" style="color: #4CAF50;">${this.vizTM}×${this.vizTN} = ${totalOutputs}</div>
-                </div>
-                <div class="viz-stat" style="border-left: 3px solid #9C27B0;">
-                    <div class="viz-stat-label">Arithmetic Intensity</div>
-                    <div class="viz-stat-value" style="color: #9C27B0;">${arithmeticIntensity} FMA/SMEM</div>
-                </div>
-                <div class="viz-stat" style="border-left: 3px solid #00BCD4;">
-                    <div class="viz-stat-label">Register Reuse</div>
-                    <div class="viz-stat-value" style="color: #00BCD4;">${reusePerLoad}× per load</div>
-                </div>
-            </div>
-            <div style="margin-top: 15px; padding: 12px; background: #2a2a2a; border-radius: 6px; border-left: 4px solid #4CAF50;">
-                <div style="font-size: 13px; line-height: 1.8;">
-                    <strong style="color: #4CAF50;">🎯 Warp Tiling Benefits:</strong><br>
-                    <span style="color: #ccc;">
-                    • <strong>Warp-level cooperation:</strong> 32 threads collectively cache ${this.vizWM}×${this.vizWN} fragment<br>
-                    • <strong>Register reuse:</strong> Each SMEM load enables ${this.vizTM}×${this.vizTN} FMAs per thread<br>
-                    • <strong>Reduced SMEM traffic:</strong> ${arithmeticIntensity}× more computation per byte loaded<br>
-                    • <strong>Better ILP:</strong> Outer product exposes instruction-level parallelism
-                    </span>
-                </div>
-            </div>
-        `;
-
-        if (!final) {
-            await sleep(100);
-        }
-    }
-
     reset() {
         this.renderHierarchy();
-        document.getElementById('warpStats').innerHTML = '';
     }
 }
 
@@ -3315,7 +2863,6 @@ if (typeof window !== 'undefined') {
     window.NaiveKernelViz = NaiveKernelViz;
     window.CoalescingViz = CoalescingViz;
     window.CoalescedMatrixViz = CoalescedMatrixViz;
-    window.MemoryHierarchyViz = MemoryHierarchyViz;
     window.IndexTransformViz = IndexTransformViz;
     window.SharedMemoryViz = SharedMemoryViz;
     window.Tiling1DViz = Tiling1DViz;
