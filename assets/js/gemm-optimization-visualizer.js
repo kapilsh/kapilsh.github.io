@@ -2629,12 +2629,12 @@ class WarpTilingViz {
                     <div style="display: flex; gap: 30px; align-items: center;">
                         <div style="text-align: center;">
                             <div style="font-size: 12px; color: #9C27B0; margin-bottom: 8px;">register_m[WM]</div>
-                            <div id="warpRegM" style="display: flex; flex-direction: column; gap: 2px;"></div>
+                            <div id="warpRegM" style="display: flex; flex-direction: column; gap: 8px;"></div>
                         </div>
                         <div style="font-size: 30px; color: #E91E63;">⊗</div>
                         <div style="text-align: center;">
                             <div style="font-size: 12px; color: #00BCD4; margin-bottom: 8px;">register_n[WN]</div>
-                            <div id="warpRegN" style="display: flex; gap: 2px;"></div>
+                            <div id="warpRegN" style="display: flex; gap: 8px;"></div>
                         </div>
                     </div>
                     <div style="font-size: 11px; color: #999; text-align: center; margin-top: 5px;">
@@ -2652,7 +2652,7 @@ class WarpTilingViz {
                 <div style="display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 20px; background: #2a2a2a; border-radius: 8px; border: 2px solid #4CAF50;">
                     <div style="text-align: center;">
                         <div style="font-size: 16px; color: #4CAF50; margin-bottom: 10px; font-weight: 600;">
-                            ✨ Thread Output Tile (${this.vizTM}×${this.vizTN})
+                            Thread Output Tile (${this.vizTM}×${this.vizTN})
                         </div>
                         <div style="font-size: 11px; color: #999; margin-bottom: 8px;">
                             Each of 32 threads computes this
@@ -2671,45 +2671,71 @@ class WarpTilingViz {
         this.sharedA = createMatrixGrid(this.vizWM, this.BK, cellSize, '', document.getElementById('warpSharedA'));
         this.sharedB = createMatrixGrid(this.BK, this.vizWN, cellSize, '', document.getElementById('warpSharedB'));
 
-        // Create warp register fragments
+        // Create warp register fragments for register_m with thread tile grouping
         const regMContainer = document.getElementById('warpRegM');
         regMContainer.innerHTML = '';
-        for (let i = 0; i < this.vizWM; i++) {
-            const reg = document.createElement('div');
-            reg.id = `warp-reg-m-${i}`;
-            reg.style.width = '40px';
-            reg.style.height = '20px';
-            reg.style.background = '#333';
-            reg.style.border = '2px solid #555';
-            reg.style.borderRadius = '4px';
-            reg.style.display = 'flex';
-            reg.style.alignItems = 'center';
-            reg.style.justifyContent = 'center';
-            reg.style.fontSize = '9px';
-            reg.style.transition = 'all 0.3s';
-            reg.style.color = '#999';
-            reg.textContent = `m${i}`;
-            regMContainer.appendChild(reg);
+        const numThreadTiles = this.vizWM / this.vizTM;
+        for (let threadIdx = 0; threadIdx < numThreadTiles; threadIdx++) {
+            const groupBox = document.createElement('div');
+            groupBox.style.padding = '8px';
+            groupBox.style.border = '2px solid #9C27B0';
+            groupBox.style.borderRadius = '6px';
+            groupBox.style.display = 'flex';
+            groupBox.style.flexDirection = 'column';
+            groupBox.style.gap = '2px';
+
+            for (let i = 0; i < this.vizTM; i++) {
+                const regIdx = threadIdx * this.vizTM + i;
+                const reg = document.createElement('div');
+                reg.id = `warp-reg-m-${regIdx}`;
+                reg.style.width = '40px';
+                reg.style.height = '20px';
+                reg.style.background = '#333';
+                reg.style.border = '2px solid #555';
+                reg.style.borderRadius = '4px';
+                reg.style.display = 'flex';
+                reg.style.alignItems = 'center';
+                reg.style.justifyContent = 'center';
+                reg.style.fontSize = '9px';
+                reg.style.transition = 'all 0.3s';
+                reg.style.color = '#999';
+                reg.textContent = `m${regIdx}`;
+                groupBox.appendChild(reg);
+            }
+            regMContainer.appendChild(groupBox);
         }
 
+        // Create warp register fragments for register_n with thread tile grouping
         const regNContainer = document.getElementById('warpRegN');
         regNContainer.innerHTML = '';
-        for (let j = 0; j < this.vizWN; j++) {
-            const reg = document.createElement('div');
-            reg.id = `warp-reg-n-${j}`;
-            reg.style.width = '40px';
-            reg.style.height = '40px';
-            reg.style.background = '#333';
-            reg.style.border = '2px solid #555';
-            reg.style.borderRadius = '4px';
-            reg.style.display = 'flex';
-            reg.style.alignItems = 'center';
-            reg.style.justifyContent = 'center';
-            reg.style.fontSize = '9px';
-            reg.style.transition = 'all 0.3s';
-            reg.style.color = '#999';
-            reg.textContent = `n${j}`;
-            regNContainer.appendChild(reg);
+        const numThreadTilesN = this.vizWN / this.vizTN;
+        for (let threadIdx = 0; threadIdx < numThreadTilesN; threadIdx++) {
+            const groupBox = document.createElement('div');
+            groupBox.style.padding = '8px';
+            groupBox.style.border = '2px solid #00BCD4';
+            groupBox.style.borderRadius = '6px';
+            groupBox.style.display = 'flex';
+            groupBox.style.gap = '2px';
+
+            for (let j = 0; j < this.vizTN; j++) {
+                const regIdx = threadIdx * this.vizTN + j;
+                const reg = document.createElement('div');
+                reg.id = `warp-reg-n-${regIdx}`;
+                reg.style.width = '40px';
+                reg.style.height = '40px';
+                reg.style.background = '#333';
+                reg.style.border = '2px solid #555';
+                reg.style.borderRadius = '4px';
+                reg.style.display = 'flex';
+                reg.style.alignItems = 'center';
+                reg.style.justifyContent = 'center';
+                reg.style.fontSize = '9px';
+                reg.style.transition = 'all 0.3s';
+                reg.style.color = '#999';
+                reg.textContent = `n${regIdx}`;
+                groupBox.appendChild(reg);
+            }
+            regNContainer.appendChild(groupBox);
         }
 
         // Create thread output tile
