@@ -1,7 +1,7 @@
 ---
-title: "Exploring GEMMs - Naive to Cutlass"
+title: "Learn CUTLASS THE HARD WAY!"
 description: >-
-  Interactive walkthrough of optimization techniques for GEMMs
+  Interactive walkthrough of optimization techniques for GEMMs from a naive fp32 kernel to Cutlass bf16 fully optimized kernel
 date: 2025-10-01
 categories: [Blog]
 tags: [Triton, CUDA, GPU, GEMM, Performance]
@@ -1921,7 +1921,242 @@ We start to do a bit better compared to the warptiled kernel without tensorcores
 > We see the TensorCore instructions now in the kernel!!
 {: .prompt-tip}
 
+Now just to confirm that we are using the right instructions, ran pytorch matmul through ncu and it seems like it uses the same instruction as our kernel!
+
+![PyTorch Matmul NCU](/assets/explore_gemms_pytorch_matmul_ncu.png)
+
+> Although, I did realize one problem with the benchmarking at this point. We were allocating an elementwise kernel for torch.zeros for every custom kernel we were benchmarking against pytorch. So, I updated the benchmark code to just do torch.empty since beta = 0 implies C doesn't need to be initialized with 0s. 
+{: .prompt-warning}
+
+... but did not help much!
+
+![Torch empty experiment](/assets/explore_gemm_torch_empty_experiment.png)
+
+At this point, I was wondering about changing the interface of the kernels such that we allocate C inside the kernel itself. But, let's get back to this later!
+
 ## Double Buffering
+
+Double buffering is in essence a producer/consumer pattern such that you compute based on one buffer while you fill the other buffer. This [Nvidia user post answer](https://forums.developer.nvidia.com/t/what-is-double-buffering/13531) puts it very well! It is also called software pipelining in cuda land to overlap memory access with computation. 
+
+![Double Buffer](/assets/explore_gemms_double_buffer_user_answer.png)
+
+![Double Buffer 2](/assets/software-pipelining.png)
+
+To accomplish this in our tensorcore kernels, we just create 2 separate chunks of shared memory - one is the read buffer and the other is the write buffer. 
+
+```c
+__shared__ InputType tile_a[2][BM * BK];
+__shared__ InputType tile_b[2][BK * BN];
+```
+
+We can write to the write buffer while we read buffer is used for the gemm operations. We can skip the synchornization in this case. You can also think of it as a special case of circular buffer queue with buffer size = 2!
+
+### Kernel
+
+```c
+template <typename InputType,
+          const int BLOCK_ROW_WARPS = 4,
+          const int BLOCK_COL_WARPS = 4,
+          const int WARP_ROW_TILES = 4,
+          const int WARP_COL_TILES = 2,
+          const int WMMA_M = 16,
+          const int WMMA_N = 16,
+          const int WMMA_K = 16>
+__global__ void
+sgemm_tensorcore_double_buffered_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
+                                        float alpha, const InputType *matrix_a,
+                                        const InputType *matrix_b, float beta,
+                                        float *matrix_c)
+{
+    // Thread and warp identification
+    const int warp_id = threadIdx.x / 32; // Warp ID within block (0 to BLOCK_ROW_WARPS*BLOCK_COL_WARPS-1)
+
+    // Warp position in 2D block layout (row-major ordering)
+    // With 4x4 warp layout: warp_id 0-3 are row 0, warp_id 4-7 are row 1, etc.
+    const int warp_row = warp_id / BLOCK_COL_WARPS; // Which warp row (0 to BLOCK_ROW_WARPS-1)
+    const int warp_col = warp_id % BLOCK_COL_WARPS; // Which warp column (0 to BLOCK_COL_WARPS-1)
+
+    // Compute block tile dimensions in WMMA tiles
+    constexpr int BLOCK_ROW_TILES = WARP_ROW_TILES * BLOCK_ROW_WARPS; // Total 16x16 tiles along M
+    constexpr int BLOCK_COL_TILES = WARP_COL_TILES * BLOCK_COL_WARPS; // Total 16x16 tiles along N
+
+    // Compute block tile dimensions in elements
+    constexpr int BM = BLOCK_ROW_TILES * WMMA_M; // 256: rows of A/C per block
+    constexpr int BN = BLOCK_COL_TILES * WMMA_N; // 128: cols of B/C per block
+    constexpr int BK = WMMA_K;                   // 16: inner dimension per iteration
+
+    // Double-buffered shared memory layout:
+    // - tile_a[2]: two BM x BK buffers (2 * 256x16), stored row-major for coalesced A loads
+    // - tile_b[2]: two BK x BN buffers (2 * 16x128), stored COLUMN-major to match WMMA fragment expectation
+    __shared__ InputType tile_a[2][BM * BK];
+    __shared__ InputType tile_b[2][BK * BN];
+
+    // Base pointers to global memory (block-level, not offset yet)
+    const InputType *global_a = matrix_a;
+    const InputType *global_b = matrix_b;
+    float *global_c = matrix_c;
+
+    // WMMA fragments (register-level storage for matrix tiles)
+    // Fragment for A tiles (16x16 input matrix, row-major layout)
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, InputType, nvcuda::wmma::row_major> a_frag;
+
+    // Fragment for B tiles (16x16 input matrix, column-major layout)
+    // Column-major is critical: matches our shared memory layout for efficient loads
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, InputType, nvcuda::wmma::col_major> b_frag;
+
+    // Accumulator fragments for output tiles (FP32 for numerical stability)
+    // Each warp maintains WARP_ROW_TILES x WARP_COL_TILES = 4x2 = 8 accumulators
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> acc_frag[WARP_ROW_TILES][WARP_COL_TILES];
+
+    // Temporary fragment for loading existing C values (when beta != 0)
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag;
+
+    // Initialize all accumulator fragments to zero
+#pragma unroll
+    for (int i = 0; i < WARP_ROW_TILES; ++i)
+    {
+#pragma unroll
+        for (int j = 0; j < WARP_COL_TILES; ++j)
+        {
+            nvcuda::wmma::fill_fragment(acc_frag[i][j], 0.0f);
+        }
+    }
+
+    constexpr int NUM_THREADS = BLOCK_ROW_WARPS * BLOCK_COL_WARPS * 32;
+
+    // Double buffering control: which buffer is currently being computed on
+    int read_buffer = 0;
+
+    // ===== Prologue: Load the first tile into buffer 0 =====
+    {
+        for (int idx = threadIdx.x; idx < BM * BK; idx += NUM_THREADS)
+        {
+            int row = idx / BK;
+            int col = idx % BK;
+            int global_row = blockIdx.y * BM + row;
+            int global_col = col;
+
+            tile_a[0][row * BK + col] = global_a[global_row * num_cols_a + global_col];
+        }
+
+        for (int idx = threadIdx.x; idx < BK * BN; idx += NUM_THREADS)
+        {
+            int row = idx / BN;
+            int col = idx % BN;
+            int global_row = row;
+            int global_col = blockIdx.x * BN + col;
+
+            tile_b[0][col * BK + row] = global_b[global_row * num_cols_b + global_col];
+        }
+    }
+
+    __syncthreads();
+
+    // Main K-loop: iterate over K dimension in chunks of size BK (16)
+    // Each iteration: load next tile into write_buffer while computing current read_buffer
+    for (int block_k_idx = 0; block_k_idx < num_cols_a; block_k_idx += BK)
+    {
+        // Determine which buffer to write next tile into
+        int write_buffer = read_buffer ^ 1; // Toggle between 0 and 1
+
+        // ===== Prefetch next tile into write_buffer (if not last iteration) =====
+        if (block_k_idx + BK < num_cols_a)
+        {
+            // Load next A tile - no bounds check (assumes aligned dimensions)
+            for (int idx = threadIdx.x; idx < BM * BK; idx += NUM_THREADS)
+            {
+                int row = idx / BK;
+                int col = idx % BK;
+                int global_row = blockIdx.y * BM + row;
+                int global_col = block_k_idx + BK + col;
+
+                // Direct load - no bounds check
+                tile_a[write_buffer][row * BK + col] = global_a[global_row * num_cols_a + global_col];
+            }
+
+            // Load next B tile - no bounds check (assumes aligned dimensions)
+            for (int idx = threadIdx.x; idx < BK * BN; idx += NUM_THREADS)
+            {
+                int row = idx / BN;
+                int col = idx % BN;
+                int global_row = block_k_idx + BK + row;
+                int global_col = blockIdx.x * BN + col;
+
+                // Direct load - no bounds check
+                tile_b[write_buffer][col * BK + row] = global_b[global_row * num_cols_b + global_col];
+            }
+        }
+
+        // ===== Compute using current read_buffer =====
+        // Each warp independently computes WARP_ROW_TILES x WARP_COL_TILES output tiles
+        // using WMMA operations on tensor cores
+#pragma unroll
+        for (int i = 0; i < WARP_ROW_TILES; ++i) // Iterate over warp's row tiles
+        {
+#pragma unroll
+            for (int j = 0; j < WARP_COL_TILES; ++j) // Iterate over warp's col tiles
+            {
+                // Compute which 16x16 tile this warp is processing within the block
+                int a_tile_row = warp_row * WARP_ROW_TILES + i; // Tile index in A (0 to BLOCK_ROW_TILES-1)
+                int b_tile_col = warp_col * WARP_COL_TILES + j; // Tile index in B (0 to BLOCK_COL_TILES-1)
+
+                InputType const *a_tile_ptr = tile_a[read_buffer] + (a_tile_row * WMMA_M) * BK;
+                InputType const *b_tile_ptr = tile_b[read_buffer] + (b_tile_col * WMMA_N) * BK;
+
+                nvcuda::wmma::load_matrix_sync(a_frag, a_tile_ptr, BK);
+                nvcuda::wmma::load_matrix_sync(b_frag, b_tile_ptr, BK);
+
+                nvcuda::wmma::mma_sync(acc_frag[i][j], a_frag, b_frag, acc_frag[i][j]);
+            }
+        }
+
+        // Synchronize before switching buffers (ensures loads complete and computation reads correct data)
+        __syncthreads();
+
+        // Switch to the newly loaded buffer for next iteration
+        read_buffer = write_buffer;
+
+    } // End of K-loop: accumulation complete in acc_frag
+
+    // ===== Phase 4: Write results to global memory =====
+    // Store accumulated results from fragments to output matrix C
+    // Apply alpha/beta scaling: C = alpha * (A * B) + beta * C
+    // NOTE: Assumes M is multiple of BM and N is multiple of BN (no bounds checking)
+#pragma unroll
+    for (int i = 0; i < WARP_ROW_TILES; ++i)
+    {
+#pragma unroll
+        for (int j = 0; j < WARP_COL_TILES; ++j)
+        {
+            int c_tile_row = warp_row * WARP_ROW_TILES + i;
+            int c_tile_col = warp_col * WARP_COL_TILES + j;
+
+            int global_row = blockIdx.y * BM + c_tile_row * WMMA_M;
+            int global_col = blockIdx.x * BN + c_tile_col * WMMA_N;
+
+            float *c_ptr = global_c + global_row * num_cols_b + global_col;
+
+            // Always load C and compute: C = alpha * AB + beta * C
+            nvcuda::wmma::load_matrix_sync(c_frag, c_ptr, num_cols_b, nvcuda::wmma::mem_row_major);
+
+#pragma unroll
+            for (int t = 0; t < c_frag.num_elements; ++t)
+            {
+                c_frag.x[t] = alpha * acc_frag[i][j].x[t] + beta * c_frag.x[t];
+            }
+
+            // Write result back to global memory
+            nvcuda::wmma::store_matrix_sync(c_ptr, c_frag, num_cols_b, nvcuda::wmma::mem_row_major);
+        }
+    }
+}
+```
+
+### Performance Analysis
+
+We get a nice 30+% improvement in performance!
+
+![Double Buffering](/assets/explore_gemms_tensorcore_double_buffered.png.png)
 
 ## CUTLASS Kernel
 
@@ -1930,7 +2165,6 @@ We start to do a bit better compared to the warptiled kernel without tensorcores
 Beyond what we covered:
 
 2. **Asynchronous Memory Copy**: Overlap computation with memory transfers
-3. **Double Buffering**: Load next tile while computing current
 4. **Register Blocking**: More sophisticated register reuse patterns
 6. **Persistent Kernels**: Keep GPU occupied across multiple operations
 
