@@ -1729,7 +1729,7 @@ asm(
 More details on Tensorcore instructions in [this GTC talk from 2019](https://www.nvidia.com/en-us/on-demand/session/gtcsj20-s21745/).
 
 
-### WMMA
+### WMMA GEMM Kernel
 
 So, as we see above, the general idea is that NVidia provides instruction sets for Tensor Cores to do warp level matmuls that allow us to calculate thread tile matrix multiplications in single instructions. These instructions allow warp-wide MMA operations. Quoted from original [Cutlass post](https://developer.nvidia.com/blog/cutlass-linear-algebra-cuda/):
 
@@ -1740,17 +1740,198 @@ So, as we see above, the general idea is that NVidia provides instruction sets f
 
 ![WMMA 2](/assets/explore_gemms_wmma_nvidia_blog_2.png)
 
-Next, let's transform our original warp-tiled kernel for 16-bit precision to wmma api. We should be able to map tile sizes directly to wmma api.
+Now, using [reference naive tensorcore](https://github.com/gpusgobrr/explore-gemm/blob/main/cuda/09_kernel_tensorcore_naive.cu) kernel using wmma, the baseline performance was pretty bad. So next, let's transform our original warp-tiled kernel for 16-bit precision to wmma api. We should be able to map tile sizes directly to wmma api.
+
+```c
+
+template <typename InputType,
+            const int BLOCK_ROW_WARPS = 4,
+            const int BLOCK_COL_WARPS = 4,
+            const int WARP_ROW_TILES = 4,
+            const int WARP_COL_TILES = 2,
+            const int WMMA_M = 16,
+            const int WMMA_N = 16,
+            const int WMMA_K = 16>
+__global__ void
+sgemm_tensorcore_warptiled_kernel(int num_cols_b, int num_cols_a,
+                                    float alpha, const InputType *matrix_a,
+                                    const InputType *matrix_b, float beta,
+                                    float *matrix_c)
+{
+    const uint warp_id = threadIdx.x / 32;
+    const uint warp_row = warp_id / BLOCK_COL_WARPS;
+    const uint warp_col = warp_id % BLOCK_COL_WARPS;
+
+    constexpr int BLOCK_ROW_TILES = WARP_ROW_TILES * BLOCK_ROW_WARPS;
+    constexpr int BLOCK_COL_TILES = WARP_COL_TILES * BLOCK_COL_WARPS;
+
+    constexpr int BM = BLOCK_ROW_TILES * WMMA_M;
+    constexpr int BN = BLOCK_COL_TILES * WMMA_N;
+    constexpr int BK = WMMA_K;
+
+    // Shared memory: tile_a (BM x BK, row-major), tile_b (BK x BN, column-major)
+    __shared__ InputType tile_a[BM * BK];
+    __shared__ InputType tile_b[BK * BN];
+
+    const InputType *global_a = matrix_a;
+    const InputType *global_b = matrix_b;
+    float *global_c = matrix_c;
+
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, InputType, nvcuda::wmma::row_major> a_frag;
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, InputType, nvcuda::wmma::col_major> b_frag;
+
+    // Accumulator fragments (FP32): each warp maintains WARP_ROW_TILES x WARP_COL_TILES tiles
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> acc_frag[WARP_ROW_TILES][WARP_COL_TILES];
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag;
+#pragma unroll
+    for (int i = 0; i < WARP_ROW_TILES; ++i)
+    {
+#pragma unroll
+        for (int j = 0; j < WARP_COL_TILES; ++j)
+        {
+            nvcuda::wmma::fill_fragment(acc_frag[i][j], 0.0f);
+        }
+    }
+
+    constexpr int NUM_THREADS = BLOCK_ROW_WARPS * BLOCK_COL_WARPS * 32; // warps per block * threads per warp
+
+    // K-loop: iterate by BK, load A and B tiles, compute WMMA operations
+    for (int block_k_idx = 0; block_k_idx < num_cols_a; block_k_idx += BK)
+    {
+        // Load A tile (BM x BK, row-major)
+        // TODO: Vectorize loads if possible - getting numerics issues
+        for (int idx = threadIdx.x; idx < BM * BK; idx += NUM_THREADS)
+        {
+            int row = idx / BK;
+            int col = idx % BK;
+            int global_row = blockIdx.y * BM + row;
+            int global_col = block_k_idx + col;
+            tile_a[row * BK + col] = global_a[global_row * num_cols_a + global_col];
+        }
+
+        // Load B tile (BK x BN, column-major for WMMA)
+        // TODO: Vectorize loads if possible - getting numerics issues
+        for (int idx = threadIdx.x; idx < BK * BN; idx += NUM_THREADS)
+        {
+            int row = idx / BN;
+            int col = idx % BN;
+            int global_row = block_k_idx + row;
+            int global_col = blockIdx.x * BN + col;
+            tile_b[col * BK + row] = global_b[global_row * num_cols_b + global_col];
+        }
+
+        __syncthreads();
+
+        // Warp-level tiling: each warp computes WARP_ROW_TILES x WARP_COL_TILES WMMA tiles
+#pragma unroll
+        for (int i = 0; i < WARP_ROW_TILES; ++i)
+        {
+#pragma unroll
+            for (int j = 0; j < WARP_COL_TILES; ++j)
+            {
+                int a_tile_row = warp_row * WARP_ROW_TILES + i;
+                int b_tile_col = warp_col * WARP_COL_TILES + j;
+
+                InputType const *a_tile_ptr = tile_a + (a_tile_row * WMMA_M) * BK;
+                InputType const *b_tile_ptr = tile_b + (b_tile_col * WMMA_N) * BK;
+
+                nvcuda::wmma::load_matrix_sync(a_frag, a_tile_ptr, BK);
+                nvcuda::wmma::load_matrix_sync(b_frag, b_tile_ptr, BK);
+                nvcuda::wmma::mma_sync(acc_frag[i][j], a_frag, b_frag, acc_frag[i][j]);
+            }
+        }
+
+        __syncthreads();
+    }
+
+    // Store results: C = alpha * (A * B) + beta * C
+#pragma unroll
+    for (int i = 0; i < WARP_ROW_TILES; ++i)
+    {
+#pragma unroll
+        for (int j = 0; j < WARP_COL_TILES; ++j)
+        {
+            int c_tile_row = warp_row * WARP_ROW_TILES + i;
+            int c_tile_col = warp_col * WARP_COL_TILES + j;
+
+            int global_row = blockIdx.y * BM + c_tile_row * WMMA_M;
+            int global_col = blockIdx.x * BN + c_tile_col * WMMA_N;
+
+            float *c_ptr = global_c + global_row * num_cols_b + global_col;
+
+            nvcuda::wmma::load_matrix_sync(c_frag, c_ptr, num_cols_b, nvcuda::wmma::mem_row_major);
+
+#pragma unroll
+            for (int t = 0; t < c_frag.num_elements; ++t)
+            {
+                c_frag.x[t] = alpha * acc_frag[i][j].x[t] + beta * c_frag.x[t];
+            }
+
+            nvcuda::wmma::store_matrix_sync(c_ptr, c_frag, num_cols_b, nvcuda::wmma::mem_row_major);
+        }
+    }
+}
+```
+
+### Performance
+
+We start to do a bit better compared to the warptiled kernel without tensorcores now. In the original warptiled kernel, I also had a hard time getting numerics to match completely. Some sporadic values were off compared to PyTorch version. But, now the numerics / calculation pieces are mostly abstracted away, which is nice.
+
+![Tensorcore warptiled fp16](/assets/explore_gemm_tensorcore_warptiled.png)
+
+![Tensorcore warptiled bf16](/assets/explore_gemm_tensorcore_warptiled_bf16.png)
+
+
+| Matrix Size | FP16 TFLOPS | BF16 TFLOPS | FP16 GB/s | BF16 GB/s | FP16 vs PyTorch | BF16 vs PyTorch |
+|-------------|-------------|-------------|-----------|-----------|-----------------|-----------------|
+| 1024×1024  | 17.3        | 17.5        | 50.6      | 51.4      | 17.8%           | 14.9%           |
+| 2048×2048  | 67.9        | 73.4        | 99.5      | 107.6     | 42.8%           | 47.5%           |
+| 4096×4096  | 55.4        | 58.2        | 40.6      | 42.6      | 34.4%           | 40.1%           |
+| 8192×8192  | 55.9        | 56.5        | 20.5      | 20.7      | 38.7%           | 37.5%           |
+
+### NCU
+
+{: .prompt-warning}
+> We improved but still way off the PyTorch kernel performance. But, we should be using the tensorcores now. Let's look at ncu profile to confirm this.
+
+#### Regular BF16 WarpTiled
+
+![NCU Regular warptiled](/assets/explore_gemm_regular_warptiled_ncu.png)
+
+```c
+1031	00007923 ff052d60	      FMUL R111, R111, c[0x0][0x16c]
+1032	00007923 ff052d70	      PRMT R80, RZ, 0x5410, R80
+1033	00007923 ff052d80	      PRMT R0, RZ, 0x5410, R0
+1034	00007923 ff052d90	      FFMA R5, R80, c[0x0][0x180], R5
+1035	00007923 ff052da0	      FFMA R0, R0, c[0x0][0x180], R111
+```
+
+#### Tensorcores + Warptiled
+
+![NCU TC warptiled](/assets/explore_gemm_tensorcore_warptiled_ncu.png)
+
+
+```c
+000076da 1b050280	      HMMA.16816.F32.BF16 R20, R76, R104, R20
+000076da 1b050290	      HMMA.16816.F32.BF16 R24, R76, R106, R24
+000076da 1b0502a0	      HMMA.16816.F32.BF16 R28, R76, R108, R28
+000076da 1b0502b0	      HMMA.16816.F32.BF16 R32, R76, R110, R32
+000076da 1b0502c0	      HMMA.16816.F32.BF16 R36, R80, R104, R36
+```
+> We see the TensorCore instructions now in the kernel!!
+{: .prompt-tip}
+
+## Double Buffering
+
+## CUTLASS Kernel
 
 ## Further Optimizations
 
 Beyond what we covered:
 
-1. **Warp-level Matrix Operations**: Use `wmma` (Warp Matrix Multiply-Accumulate)
 2. **Asynchronous Memory Copy**: Overlap computation with memory transfers
 3. **Double Buffering**: Load next tile while computing current
 4. **Register Blocking**: More sophisticated register reuse patterns
-5. **Mixed Precision**: FP16/BF16 compute with FP32 accumulation
 6. **Persistent Kernels**: Keep GPU occupied across multiple operations
 
 
@@ -1783,6 +1964,9 @@ Beyond what we covered:
 - [CUTLASS Tutorial: Efficient GEMM kernel designs with Pipelining](https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/)
 - [NVIDIA Tensor Core Evolution: From Volta To Blackwell
 ](https://newsletter.semianalysis.com/p/nvidia-tensor-core-evolution-from-volta-to-blackwell)
+- [Programming Tensor Cores in CUDA 9](https://developer.nvidia.com/blog/programming-tensor-cores-cuda-9/)
+- [Warp Matrix Functions](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#warp-matrix-functions)
+- [Cuda_hgemm repo](https://github.com/Bruce-Lee-LY/cuda_hgemm/tree/master)
 
 
 <script src="/assets/js/gemm-optimization-visualizer.js"></script>
