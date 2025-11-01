@@ -1726,6 +1726,8 @@ asm(
 > Here, `mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32` can be understood as `mma.sync.aligned` instruction over matrix dimentsion of `M=16, N=8, K=8 (computes C[16×8] = A[16×8] × B[8×8] + C[16×8])`. `row.col` represents row-major/column-major layouts for A and B, respectivelly and finally `f32.f16.f16.f32` represents data types such that output is 32-bit float (fp32) with A and B as fp16 and accumulation happening in fp32.
 {: .prompt-info}
 
+![SM80 TC Instruction](/assets/explore_gemms_tensorcore_instruction_sm80.png)
+
 More details on Tensorcore instructions in [this GTC talk from 2019](https://www.nvidia.com/en-us/on-demand/session/gtcsj20-s21745/).
 
 
@@ -1872,6 +1874,8 @@ sgemm_tensorcore_warptiled_kernel(int num_cols_b, int num_cols_a,
     }
 }
 ```
+
+
 
 ### Performance
 
@@ -2384,6 +2388,31 @@ void sgemm_cutlass_fp32(const torch::Tensor &matrix_a, const torch::Tensor &matr
 
 ```
 
+### Performance Analysis
+
+We pretty much doubled our performance compared to previous best warptiled double buffered kernel. Also, we can see below that we are pretty close to PyTorch performance for larger batch sizes, though lagging in perf for some of the mid-sized tensors. It seems there is still some performance juice left - even at the bigger sizes!
+
+![CUTLASS Performance](/assets/explore_gemms_cutlass_performance_1.png)
+
+#### FLOPs Improvement
+
+> CUTLASS significantly outperforms all previous kernels:
+> - vs. Tensor Core Naive: **1.5-12.6× faster**
+> - vs. Tensor Core Warptiled: **1.1-4.7× faster**
+> - vs. Tensor Core Double Buffered: **1.0-3.1× faster**
+{: .prompt-info}
+
+| Matrix Size | PyTorch | CUTLASS | Double Buffered | CUTLASS vs PyTorch | CUTLASS vs WMMA_DB |
+|-------------|------------------|------------------|--------------------------|-------------------|------------------------|
+| 64×64 | 0.053 | 0.051 | 0.038 | 0.96× | 1.34× |
+| 128×128 | 0.591 | 0.389 | 0.225 | 0.66× | 1.73× |
+| 256×256 | 6.457 | 2.621 | 1.145 | 0.41× | 2.29× |
+| 512×512 | 26.479 | 14.411 | 5.690 | 0.54× | 2.53× |
+| 1024×1024 | 124.515 | 65.971 | 24.717 | 0.53× | 2.67× |
+| 2048×2048 | 163.635 | 149.684 | 98.395 | 0.91× | 1.52× |
+| 3072×3072 | 150.275 | 142.772 | 68.091 | 0.95× | 2.10× |
+| 4096×4096 | 146.418 | 152.904 | 83.852 | **1.04×** | 1.82× |
+| 8192×8192 | 150.154 | 153.085 | 84.604 | **1.02×** | 1.81× |
 
 
 ## References
@@ -2435,6 +2464,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (document.getElementById('2d-tiling-viz')) new Tiling2DViz('2d-tiling-viz');
     if (document.getElementById('vectorized-viz')) new VectorizedViz('vectorized-viz');
     if (document.getElementById('warp-tiling-viz')) new WarpTilingViz('warp-tiling-viz');
+    if (document.getElementById('wmma-tensorcore-viz')) new WmmaTensorcoreViz('wmma-tensorcore-viz');
     if (document.getElementById('performance-comparison')) new PerformanceComparison('performance-comparison');
 });
 </script>

@@ -2884,6 +2884,407 @@ class WarpTilingViz {
     }
 }
 
+// ============================================================================
+// WMMA TensorCore Visualization
+// ============================================================================
+class WmmaTensorcoreViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+        this.isAnimating = false;
+
+        // Real kernel parameters from the code
+        this.BLOCK_ROW_WARPS = 4;
+        this.BLOCK_COL_WARPS = 4;
+        this.WARP_ROW_TILES = 4;
+        this.WARP_COL_TILES = 2;
+        this.WMMA_M = 16;
+        this.WMMA_N = 16;
+        this.WMMA_K = 16;
+
+        // Calculate block dimensions
+        this.BLOCK_ROW_TILES = this.WARP_ROW_TILES * this.BLOCK_ROW_WARPS;
+        this.BLOCK_COL_TILES = this.WARP_COL_TILES * this.BLOCK_COL_WARPS;
+        this.BM = this.BLOCK_ROW_TILES * this.WMMA_M; // 256
+        this.BN = this.BLOCK_COL_TILES * this.WMMA_N; // 128
+        this.BK = this.WMMA_K; // 16
+
+        this.init();
+    }
+
+    init() {
+        // For visualization, use smaller representative sizes (matching WarpTilingViz style)
+        this.vizBM = 32;   // Visualize as 32 instead of 256 (2 WMMA tiles)
+        this.vizBN = 32;   // Visualize as 32 instead of 128 (2 WMMA tiles)
+        this.vizBK = 16;   // Keep K the same
+        this.vizBlockRowWarps = 2;  // Show 2×2 warp grid instead of 4×4
+        this.vizBlockColWarps = 2;
+        this.vizWarpRowTiles = 1;   // Show 1×1 WMMA tiles per warp instead of 4×2
+        this.vizWarpColTiles = 1;
+
+        this.container.innerHTML = commonStyles + `
+            <div class="viz-container">
+                <div class="viz-title">WMMA TensorCore Warp-Tiled Kernel</div>
+
+                <div class="viz-controls">
+                    <button class="viz-btn" id="wmmaAnimate">Animate</button>
+                    <button class="viz-btn" id="wmmaReset">Reset</button>
+                </div>
+
+                <div class="viz-info" style="margin-bottom: 15px;">
+                    <div style="padding: 12px; background: #1a1a1a; border-radius: 6px; margin-top: 10px; border: 2px solid #E91E63;">
+                        <strong style="color: #E91E63;">Real Kernel Dimensions:</strong>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 8px; font-size: 12px;">
+                            <div style="padding: 8px; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #FF9800;">
+                                <div style="color: #999; font-size: 10px;">Block Tile</div>
+                                <div style="color: #FF9800; font-weight: 600;">BM=${this.BM}, BN=${this.BN}, BK=${this.BK}</div>
+                            </div>
+                            <div style="padding: 8px; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #9C27B0;">
+                                <div style="color: #999; font-size: 10px;">Warp Grid</div>
+                                <div style="color: #9C27B0; font-weight: 600;">${this.BLOCK_ROW_WARPS}×${this.BLOCK_COL_WARPS} = ${this.BLOCK_ROW_WARPS * this.BLOCK_COL_WARPS} warps</div>
+                            </div>
+                            <div style="padding: 8px; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #00BCD4;">
+                                <div style="color: #999; font-size: 10px;">Warp Tiles</div>
+                                <div style="color: #00BCD4; font-weight: 600;">${this.WARP_ROW_TILES}×${this.WARP_COL_TILES} WMMA ops per warp</div>
+                            </div>
+                            <div style="padding: 8px; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #E91E63;">
+                                <div style="color: #999; font-size: 10px;">WMMA Tile</div>
+                                <div style="color: #E91E63; font-weight: 600;">${this.WMMA_M}×${this.WMMA_N}×${this.WMMA_K}</div>
+                            </div>
+                        </div>
+                        <div style="font-size: 11px; color: #999; margin-top: 10px; text-align: center; font-style: italic;">
+                            Visualization shows scaled-down version for clarity
+                        </div>
+                    </div>
+                </div>
+
+                <div class="viz-canvas" id="wmmaCanvas"></div>
+
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #FF9800;"></div>
+                        <span>Block Tile (Shared Memory)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #9C27B0;"></div>
+                        <span>Warp Processing Area</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #E91E63;"></div>
+                        <span>WMMA Fragment (16×16)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-box" style="background: #4CAF50;"></div>
+                        <span>Active TensorCore Operation</span>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        this.canvas = document.getElementById('wmmaCanvas');
+        this.renderHierarchy();
+
+        document.getElementById('wmmaAnimate').addEventListener('click', () => this.animate());
+        document.getElementById('wmmaReset').addEventListener('click', () => this.reset());
+    }
+
+    renderHierarchy() {
+        // Use reasonable cell sizes for visualization
+        const cellSize = 12;
+
+        this.canvas.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 30px;">
+                <!-- Level 1: Block Level (Shared Memory) -->
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 16px; color: #FF9800; margin-bottom: 10px; font-weight: 600;">
+                            Block Level: Shared Memory Tiles
+                        </div>
+                        <div style="font-size: 11px; color: #999; margin-bottom: 8px;">
+                            ${this.vizBlockRowWarps * this.vizBlockColWarps} warps in a ${this.vizBlockRowWarps}×${this.vizBlockColWarps} grid cooperatively load and process
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 30px; align-items: center; flex-wrap: wrap; justify-content: center;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #FF9800; margin-bottom: 8px;">tile_a[${this.vizBM}×${this.vizBK}]</div>
+                            <div id="wmmaBlockA" style="position: relative;"></div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #FF9800; margin-bottom: 8px;">tile_b[${this.vizBK}×${this.vizBN}]</div>
+                            <div id="wmmaBlockB" style="position: relative;"></div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #999; margin-bottom: 8px;">Output C[${this.vizBM}×${this.vizBN}]</div>
+                            <div id="wmmaBlockC" style="position: relative;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Arrow down -->
+                <div style="font-size: 30px; color: #FFA726;">↓</div>
+                <div style="font-size: 11px; color: #9C27B0; font-weight: 600; margin-top: -25px;">
+                    Each warp processes ${this.vizWarpRowTiles}×${this.vizWarpColTiles} WMMA tiles
+                </div>
+
+                <!-- Level 2: Warp Level -->
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 20px; background: #2a2a2a; border-radius: 8px; border: 2px solid #9C27B0;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 16px; color: #9C27B0; margin-bottom: 10px; font-weight: 600;">
+                            Warp Level: WMMA Tile Grid (${this.vizWarpRowTiles * this.WMMA_M}×${this.vizWarpColTiles * this.WMMA_N})
+                        </div>
+                        <div style="font-size: 11px; color: #999; margin-bottom: 8px;">
+                            Each warp computes ${this.vizWarpRowTiles}×${this.vizWarpColTiles} = ${this.vizWarpRowTiles * this.vizWarpColTiles} WMMA operations
+                        </div>
+                    </div>
+                    <div id="wmmaWarpGrid" style="position: relative;"></div>
+                    <div style="font-size: 11px; color: #999; text-align: center; margin-top: 5px;">
+                        Warp output: ${this.vizWarpRowTiles * this.WMMA_M}×${this.vizWarpColTiles * this.WMMA_N} = ${this.vizWarpRowTiles * this.WMMA_M * this.vizWarpColTiles * this.WMMA_N} elements
+                    </div>
+                </div>
+
+                <!-- Arrow down -->
+                <div style="font-size: 30px; color: #FFA726;">↓</div>
+                <div style="font-size: 11px; color: #E91E63; font-weight: 600; margin-top: -25px;">
+                    TensorCore executes D = A × B + C (16×16×16 matrix multiply-accumulate)
+                </div>
+
+                <!-- Level 3: TensorCore Operation -->
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 20px; background: #2a2a2a; border-radius: 8px; border: 2px solid #E91E63;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 16px; color: #E91E63; margin-bottom: 10px; font-weight: 600;">
+                            TensorCore WMMA Operation (${this.WMMA_M}×${this.WMMA_N}×${this.WMMA_K})
+                        </div>
+                        <div style="font-size: 11px; color: #999; margin-bottom: 8px;">
+                            32 threads collectively hold matrix fragments
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap; justify-content: center;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #E91E63; margin-bottom: 8px;">A_frag (${this.WMMA_M}×${this.WMMA_K})</div>
+                            <div id="wmmaTcA"></div>
+                        </div>
+                        <div style="font-size: 24px; color: #E91E63;">×</div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #E91E63; margin-bottom: 8px;">B_frag (${this.WMMA_K}×${this.WMMA_N})</div>
+                            <div id="wmmaTcB"></div>
+                        </div>
+                        <div style="font-size: 24px; color: #E91E63;">+</div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #00BCD4; margin-bottom: 8px;">ACC_frag (${this.WMMA_M}×${this.WMMA_N})</div>
+                            <div id="wmmaTcAcc"></div>
+                        </div>
+                        <div style="font-size: 24px; color: #4CAF50;">=</div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 12px; color: #4CAF50; margin-bottom: 8px;">D_frag (${this.WMMA_M}×${this.WMMA_N})</div>
+                            <div id="wmmaTcD"></div>
+                        </div>
+                    </div>
+                    <div style="font-size: 11px; color: #999; text-align: center; margin-top: 5px;">
+                        Single warp-synchronous mma_sync() instruction
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Create block-level tiles with reasonable cell size
+        this.blockA = createMatrixGrid(this.vizBM, this.vizBK, cellSize, '', document.getElementById('wmmaBlockA'));
+        this.blockB = createMatrixGrid(this.vizBK, this.vizBN, cellSize, '', document.getElementById('wmmaBlockB'));
+        this.blockC = createMatrixGrid(this.vizBM, this.vizBN, cellSize, '', document.getElementById('wmmaBlockC'));
+
+        // Add warp grid overlay to block C
+        this.addWarpGridOverlay(this.blockC, this.vizBM, this.vizBN, cellSize);
+
+        // Create warp-level WMMA tile grid
+        const warpM = this.vizWarpRowTiles * this.WMMA_M;
+        const warpN = this.vizWarpColTiles * this.WMMA_N;
+        const warpCellSize = 18;
+        this.warpGrid = createMatrixGrid(warpM, warpN, warpCellSize, '', document.getElementById('wmmaWarpGrid'));
+        this.addWmmaTileOverlay(this.warpGrid, warpM, warpN, warpCellSize);
+
+        // Create TensorCore fragment visualizations
+        const tcCellSize = 15;
+        this.tcA = createMatrixGrid(this.WMMA_M, this.WMMA_K, tcCellSize, '', document.getElementById('wmmaTcA'));
+        this.tcB = createMatrixGrid(this.WMMA_K, this.WMMA_N, tcCellSize, '', document.getElementById('wmmaTcB'));
+        this.tcAcc = createMatrixGrid(this.WMMA_M, this.WMMA_N, tcCellSize, '', document.getElementById('wmmaTcAcc'));
+        this.tcD = createMatrixGrid(this.WMMA_M, this.WMMA_N, tcCellSize, '', document.getElementById('wmmaTcD'));
+    }
+
+    addWarpGridOverlay(grid, vizBM, vizBN, cellSize) {
+        const container = grid.parentElement;
+        container.style.position = 'relative';
+
+        const warpHeight = (this.vizWarpRowTiles * this.WMMA_M) * (cellSize + 2);
+        const warpWidth = (this.vizWarpColTiles * this.WMMA_N) * (cellSize + 2);
+
+        for (let wr = 0; wr < this.vizBlockRowWarps; wr++) {
+            for (let wc = 0; wc < this.vizBlockColWarps; wc++) {
+                const overlay = document.createElement('div');
+                overlay.className = `warp-overlay-${wr}-${wc}`;
+                overlay.style.position = 'absolute';
+                overlay.style.top = `${wr * warpHeight}px`;
+                overlay.style.left = `${wc * warpWidth}px`;
+                overlay.style.width = `${warpWidth}px`;
+                overlay.style.height = `${warpHeight}px`;
+                overlay.style.border = '2px solid #9C27B0';
+                overlay.style.borderRadius = '2px';
+                overlay.style.pointerEvents = 'none';
+                overlay.style.opacity = '0.5';
+                container.appendChild(overlay);
+            }
+        }
+    }
+
+    addWmmaTileOverlay(grid, warpM, warpN, cellSize) {
+        const container = grid.parentElement;
+        container.style.position = 'relative';
+
+        const tileHeight = this.WMMA_M * (cellSize + 2);
+        const tileWidth = this.WMMA_N * (cellSize + 2);
+
+        for (let tr = 0; tr < this.vizWarpRowTiles; tr++) {
+            for (let tc = 0; tc < this.vizWarpColTiles; tc++) {
+                const overlay = document.createElement('div');
+                overlay.className = `wmma-tile-overlay-${tr}-${tc}`;
+                overlay.style.position = 'absolute';
+                overlay.style.top = `${tr * tileHeight}px`;
+                overlay.style.left = `${tc * tileWidth}px`;
+                overlay.style.width = `${tileWidth}px`;
+                overlay.style.height = `${tileHeight}px`;
+                overlay.style.border = '2px solid #E91E63';
+                overlay.style.borderRadius = '2px';
+                overlay.style.pointerEvents = 'none';
+                overlay.style.opacity = '0.6';
+                container.appendChild(overlay);
+
+                // Add label
+                const label = document.createElement('div');
+                label.textContent = `${tr},${tc}`;
+                label.style.position = 'absolute';
+                label.style.top = '2px';
+                label.style.left = '2px';
+                label.style.fontSize = '9px';
+                label.style.color = '#E91E63';
+                label.style.fontWeight = '700';
+                label.style.background = 'rgba(0,0,0,0.7)';
+                label.style.padding = '1px 3px';
+                label.style.borderRadius = '2px';
+                overlay.appendChild(label);
+            }
+        }
+    }
+
+    async animate() {
+        if (this.isAnimating) return;
+        this.isAnimating = true;
+
+        const animateBtn = document.getElementById('wmmaAnimate');
+        animateBtn.disabled = true;
+
+        // Reset
+        this.reset();
+
+        // Step 1: Load shared memory tiles
+        await this.highlightMatrix(this.blockA, '#FF9800');
+        await sleep(300);
+        await this.highlightMatrix(this.blockB, '#FF9800');
+        await sleep(500);
+
+        // Step 2: Highlight a specific warp area
+        const warpRow = 0;
+        const warpCol = 0;
+        const warpOverlay = document.querySelector(`.warp-overlay-${warpRow}-${warpCol}`);
+        if (warpOverlay) {
+            warpOverlay.style.border = '3px solid #9C27B0';
+            warpOverlay.style.opacity = '1';
+            warpOverlay.style.background = 'rgba(156, 39, 176, 0.2)';
+        }
+        await sleep(500);
+
+        // Step 3: Highlight warp tiles
+        await this.highlightMatrix(this.warpGrid, '#9C27B0');
+        await sleep(500);
+
+        // Step 4: Animate WMMA operations for this warp
+        for (let i = 0; i < this.vizWarpRowTiles; i++) {
+            for (let j = 0; j < this.vizWarpColTiles; j++) {
+                // Highlight the WMMA tile being processed
+                const wmmaTileOverlay = document.querySelector(`.wmma-tile-overlay-${i}-${j}`);
+                if (wmmaTileOverlay) {
+                    wmmaTileOverlay.style.border = '3px solid #4CAF50';
+                    wmmaTileOverlay.style.background = 'rgba(76, 175, 80, 0.3)';
+                }
+
+                // Animate TensorCore operation
+                await this.highlightMatrix(this.tcA, '#E91E63');
+                await sleep(200);
+                await this.highlightMatrix(this.tcB, '#E91E63');
+                await sleep(200);
+                await this.highlightMatrix(this.tcAcc, '#00BCD4');
+                await sleep(200);
+                await this.highlightMatrix(this.tcD, '#4CAF50');
+                await sleep(300);
+
+                // Reset TensorCore matrices
+                this.resetMatrix(this.tcA);
+                this.resetMatrix(this.tcB);
+                this.resetMatrix(this.tcAcc);
+                this.resetMatrix(this.tcD);
+
+                // Mark this warp tile as complete
+                if (wmmaTileOverlay) {
+                    wmmaTileOverlay.style.background = 'rgba(76, 175, 80, 0.5)';
+                }
+
+                await sleep(100);
+            }
+        }
+
+        // Step 5: Show final output in block C
+        await this.highlightWarpInBlockC(warpRow, warpCol);
+        await sleep(500);
+
+        this.isAnimating = false;
+        animateBtn.disabled = false;
+    }
+
+    async highlightMatrix(matrix, color) {
+        const cells = matrix.children;
+        for (let cell of cells) {
+            cell.style.background = color;
+        }
+    }
+
+    resetMatrix(matrix) {
+        const cells = matrix.children;
+        for (let cell of cells) {
+            cell.style.background = '#333';
+        }
+    }
+
+    async highlightWarpInBlockC(warpRow, warpCol) {
+        const cells = this.blockC.children;
+        const startRow = warpRow * this.vizWarpRowTiles * this.WMMA_M;
+        const startCol = warpCol * this.vizWarpColTiles * this.WMMA_N;
+        const endRow = startRow + this.vizWarpRowTiles * this.WMMA_M;
+        const endCol = startCol + this.vizWarpColTiles * this.WMMA_N;
+
+        for (let cell of cells) {
+            const row = parseInt(cell.dataset.row);
+            const col = parseInt(cell.dataset.col);
+            if (row >= startRow && row < endRow && col >= startCol && col < endCol) {
+                cell.style.background = '#4CAF50';
+            }
+        }
+    }
+
+    reset() {
+        this.renderHierarchy();
+    }
+}
+
 // Export for use in HTML
 if (typeof window !== 'undefined') {
     window.NaiveKernelViz = NaiveKernelViz;
@@ -2896,5 +3297,6 @@ if (typeof window !== 'undefined') {
     window.Tiling2DViz = Tiling2DViz;
     window.VectorizedViz = VectorizedViz;
     window.WarpTilingViz = WarpTilingViz;
+    window.WmmaTensorcoreViz = WmmaTensorcoreViz;
     window.PerformanceComparison = PerformanceComparison;
 }
