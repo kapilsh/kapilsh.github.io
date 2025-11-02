@@ -2184,7 +2184,10 @@ CUTLASS started as an implementation of the hierarchical GEMM structure and prov
 
 CUTLASS also provides premitives such as Epilogue to fuse downstream operations (such as pointwise or reduction ops) with GEMMs. For example, CUTLASS Flash Attention kernels take advantage of this to fuse softmax with SDPA (Scaled Dot Product Attention). 
 
-> CUTLASS provides 2 main APIs for writing GEMMs - Gemm api : `cutlass::gemm::device::Gemm` and Collective Builders api: `cutlass::gemm::collective::CollectiveBuilder`.
+> CUTLASS provides 2 main APIs for writing GEMMs - Gemm api : `cutlass::gemm::device::Gemm` and Collective Builders api: `cutlass::gemm::collective::CollectiveBuilder`. 
+> 
+> **I have used the Gemm API which is technically from CUTLASS 2.x era. I haven't played around with the 3.x collective builder api so decided to use the Gemm api for most illustrations.**
+{: .prompt-warning}
 
 ### Kernel
 
@@ -2415,6 +2418,95 @@ We pretty much doubled our performance compared to previous best warptiled doubl
 | 8192×8192 | 150.154 | 153.085 | 84.604 | **1.02×** | 1.81× |
 
 
+If we look at the main [Gemm abstraction](https://ipd.graylab.jhu.edu/rfdiffusion2/cutlass-3.5.1/docs/classcutlass_1_1gemm_1_1device_1_1Gemm.html) we used, it also has few more arguments that we did not use earlier. The ones we will explictly focus on in this section are `ThreadblockSwizzle_` and `Stages`! Adding these arguments to template:
+
+```cpp
+constexpr auto swizzle_type ...;
+constexpr int stages ...;
+using Gemm = cutlass::gemm::device::Gemm<
+    ElementInput,
+    LayoutA,
+    ElementInput,
+    LayoutB,
+    ElementOutput,
+    LayoutC,
+    ElementAccumulator,
+    cutlass::arch::OpClassTensorOp,
+    cutlass::arch::Sm80, // SM80 (compatible with Ampere/Ada Lovelace)
+    ThreadBlockShape,
+    WarpShape,
+    InstructionShape,
+    EpilogueOp,
+    swizzle_type, // swizzling type
+    stages> // pipelining;
+
+```
+
+## Swizzling
+
+### Bank Conflicts
+
+We discussed this briefly earlier but let's dig into more details. Shared memory is divided into multiple banks — typically 32 banks, each servicing one 32-bit word per cycle. When a warp of 32 threads issues a shared-memory load or store, the hardware maps each thread’s memory address to a specific bank based on the address’s lower bits. If two or more threads in the warp access different addresses that map to the same bank, the accesses must be serialized, resulting in performance hit. Below is a nice visualization from [Modal's GPU Glossary]()
+
+![Shared Memory Bank Conflict](/assets/explore_gemms_shared_memory_bank_conflict.png)
+
+> In GEMMs, each block of threads repeatedly loads tiles of matrices A and B into shared memory for reuse in the compute phase. Because these loads are highly structured, naïve layouts can easily produce severe bank conflicts.
+{: .prompt-tip}
+
+
+**How Does Swizzling Help?:** Swizzling is an address-remapping technique that changes how data is laid out in shared memory to minimize these bank conflicts. Instead of writing matrix tiles in a simple row-major or column-major order, the memory indices are re-permuted to make to different address locations. Swizzling adjusts certain low-order address bits so that consecutive threads in a warp — which often access elements in the same column or row — get mapped to different banks. 
+
+I found [Lei.Chat's Article on Layouts](https://www.lei.chat/posts/triton-linear-layout-concept/) the simplest one I could find which drives home the point. Let's look at the following example:
+
+**Linear Layout: `bank = (address / 4) % 32`**
+
+> Successive 32-bit elements are assigned to successive banks such that a 2D shared memory tensor will map (x, y) to (o / 32, o % 32)
+{: .prompt-info}
+
+![Linear Layout Shared Memory Bank Conflicts](/assets/explore_gemms_swizzling_linear_layout_lei_chat.png)
+
+**Swizzled Layout: `(o / 32, (o % 32) xor (o / 32))`**
+
+> As an alternate memory mapping, we can remap the same data to different memory locations. For example, we use `xor` to swap out pairs.
+{: .prompt-info}
+
+![Swizzled Layout](/assets/explore_gemms_swizzling_alternate_layout_lei_chat.png)
+
+**In fact, you can do all kinds of crazy things with swizzling**
+
+Here's a couple of more layouts from [Nvidia docs](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-operation-wgmma-mma-async):
+
+![K Major](/assets/explore_gemms_k_major_swizzling_nvidia_docs.png)
+
+![MN Major](/assets/explore_gemms_mn_major_swizzling_nvidia_docs.png)
+
+> In my view, key takeaway from Swizzling should be that to avoid bank conflict, you remap shared memory layouts to some alternate (i.e. swizzled) layout to ensure threads don't fight for the same hardware resources (i.e. banks)! There are a few more resources in the References section that I read or skimmed - specially the ones from [Colfax Research](https://research.colfax-intl.com/cutlass-tutorial-wgmma-hopper/) are good but need a lot of brain compute. 
+{: .prompt-tip}
+
+## Persistent Kernels/Software Pipelining
+
+At a high level, I think of software pipelining/persistent kernels as a natural extension of double buffering. You expand the number of shared memory "buffers" to N for an n-stage pipelined kernel. 
+
+I think, below talk from 2024 Triton Conference is a good beginner's guide
+
+{% include embed/youtube.html id='PAsL680eWUw' %}
+
+**Persistent Kernels**: Conceptually, we move the GEMM kernels to "remain active" or persistent such taht we push different "stages" to be asynchronous and overlapped. The main goal is the overall loads, computes, kernel launches, epilogues, prologues, etc to be running continously. Here is a nice simple illustration from [Colfax blog post](https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/):
+
+![Software Pipelining](/assets/explore_gemms_software_pipeling_colfax.png)
+
+Conceptually, this is a deep topic and is an active area of performance work specially for Blackwell (with its shiny new features e.g. 2 CTAs). I really liked this more recent talks from [Phil Tillet from GTC 25](https://www.nvidia.com/en-us/on-demand/session/gtc25-s72876/) and [another from Chris Sullivan at 2025 Triton conference](https://www.youtube.com/watch?v=GL7ImGZj-Oc). To drive the point home, I will leave screenshots from [Phil's presentation at GTC](https://semianalysis.com/wp-content/uploads/2025/03/Blackwell-Programming-for-the-Masses-With-OpenAI-Triton-Phil-Tillet.pdf).
+
+![Phil Tillet GTC 25 - 1](/assets/explore_gemms_phil_gtc_1.png)
+
+![Phil Tillet GTC 25 - 2](/assets/explore_gemms_phil_gtc_2.png)
+
+![Phil Tillet GTC 25 - 3](/assets/explore_gemms_phil_gtc_3.png)
+
+
+## Autotuning
+
+
 ## References
 
 - [Simon Boehm's CUDA Matrix Multiplication](https://siboehm.com/articles/22/CUDA-MMM) - Original blog post that inspired this article
@@ -2448,6 +2540,11 @@ We pretty much doubled our performance compared to previous best warptiled doubl
 - [Warp Matrix Functions](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#warp-matrix-functions)
 - [Cuda_hgemm repo](https://github.com/Bruce-Lee-LY/cuda_hgemm/tree/master)
 - [GPU Mode Lectures](https://www.youtube.com/watch?v=hQ9GPnV0-50)
+- [Triton Linear Layout](https://www.lei.chat/posts/triton-linear-layout-concept/)
+- [Tutorial: Matrix Transpose in CUTLASS](https://research.colfax-intl.com/tutorial-matrix-transpose-in-cutlass/)
+- [Introduction to CUDA Programming and Performance Optimization](https://www.nvidia.com/en-us/on-demand/session/gtc24-s62191/)
+- [CUTLASS Tutorial: Fast Matrix-Multiplication with WGMMA on NVIDIA® Hopper™ GPUs](https://research.colfax-intl.com/cutlass-tutorial-wgmma-hopper/)
+- ![CUTLASS Tutorial: Efficient GEMM kernel designs with Pipelining](https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/)
 
 
 <script src="/assets/js/gemm-optimization-visualizer.js"></script>
