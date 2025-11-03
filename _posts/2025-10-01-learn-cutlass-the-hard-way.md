@@ -2501,10 +2501,65 @@ Conceptually, this is a deep topic and is an active area of performance work spe
 
 ![Phil Tillet GTC 25 - 2](/assets/explore_gemms_phil_gtc_2.png)
 
-![Phil Tillet GTC 25 - 3](/assets/explore_gemms_phil_gtc_3.png)
+![Phil Tillet GTC 25 - 3](/assets/explore_gemms_persistent_kernel_phil_gtc.png)
 
 
 ## Autotuning
+
+Finally, let's use some autotuning to find the best configuration for different tensor sizes. We define auto-tuning config based on following parameters:
+
+```cpp
+struct GemmConfigEntry
+{
+    int BM, BN, BK;
+    int WM, WN, WK;
+    int IM, IN, IK;
+    int stages;
+};
+```
+> We add a new parameter stages that defines number of pipeline stages used in the kernel.
+{: .prompt-info}
+
+I am skipping the full kernel here since it looks similar to previous cutlass kernel except for adding 2 more template parameters. For all the kernels here, we use `GemmIdentityThreadblockSwizzle`. Here's a full set of configs we test:
+
+```cpp
+constexpr GemmConfigEntry kConfigs[] = {
+    {128, 256, 64, 64, 64, 64, 16, 8, 16, 3},
+    {64, 256, 32, 32, 64, 32, 16, 8, 16, 4},
+    {128, 128, 32, 64, 64, 32, 16, 8, 16, 4},
+    {128, 64, 32, 64, 32, 32, 16, 8, 16, 4},
+    {64, 128, 32, 32, 64, 32, 16, 8, 16, 4},
+    {128, 32, 32, 64, 32, 32, 16, 8, 16, 4},
+    {64, 32, 32, 32, 32, 32, 16, 8, 16, 5},
+    {32, 64, 32, 32, 32, 32, 16, 8, 16, 5},
+    {128, 128, 64, 64, 64, 64, 16, 8, 16, 4},
+    {128, 64, 64, 64, 32, 64, 16, 8, 16, 4},
+    {64, 128, 64, 32, 64, 64, 16, 8, 16, 4},
+    {256, 256, 32, 64, 64, 32, 16, 8, 16, 3},
+    {256, 128, 32, 64, 64, 32, 16, 8, 16, 3},
+    {128, 256, 32, 64, 64, 32, 16, 8, 16, 3},
+    {64, 64, 32, 32, 32, 32, 16, 8, 16, 5},
+    {256, 256, 64, 64, 64, 64, 16, 8, 16, 3},
+    {256, 128, 64, 64, 64, 64, 16, 8, 16, 3},
+    {128, 256, 64, 64, 64, 64, 16, 8, 16, 4},
+    {256, 256, 64, 64, 64, 64, 16, 8, 16, 4},
+    {128, 128, 64, 64, 64, 64, 16, 8, 16, 3},
+};
+
+template <int IDX, typename T>
+struct GetConfig
+{
+    static constexpr auto cfg = kConfigs[IDX];
+    using type = GemmCfg<
+        cfg.BM, cfg.BN, cfg.BK,
+        cfg.WM, cfg.WN, cfg.WK,
+        cfg.IM, cfg.IN, cfg.IK,
+        cfg.stages, T>;
+};
+```
+
+![Autotuning Results](/assets/explore_gemms_autotuning_results.png)
+
 
 
 ## References
