@@ -1,8 +1,8 @@
 ---
-title: "Learn CUTLASS THE HARD WAY!"
+title: "Learn CUTLASS the hard way!"
 description: >-
-  Interactive walkthrough of optimization techniques for GEMMs from a naive fp32 kernel to Cutlass bf16 fully optimized kernel
-date: 2025-10-01
+  Walkthrough of optimization techniques for GEMMs from a naive fp32 kernel to CUTLASS bf16 kernel
+date: 2025-11-01
 categories: [Blog]
 tags: [Triton, CUDA, GPU, GEMM, Performance]
 pin: true
@@ -10,17 +10,22 @@ math: true
 author: ks
 ---
 
-Matrix multiplication (GEMM - General Matrix Multiply) is a fundamental operations in deep learning. Understanding how to optimize GEMM kernels on GPUs provides good insights into GPU architecture, compute and memory hierarchy.
+If one is remotely interested in CUDA or Triton programming, they have likely come across [this gemm of a post](https://siboehm.com/articles/22/CUDA-MMM) -- pun intended -- by Simon Boehm. There was [another amazing post](https://www.aleksagordic.com/blog/matmul) on GPU architecture from Aleksa Gordić more recently, which I encountered while writing this blog post. 
 
-If the reader is remotely interested in CUDA or Triton programming, they have likely come across [this gemm of a post](https://siboehm.com/articles/22/CUDA-MMM) -- pun intended -- by Simon Boehm. There was [another amazing post](https://www.aleksagordic.com/blog/matmul) on GPU architecture from Aleksa Gordić. This one is more recent and I encountered it while writing this one. 
+I have been curious about learning the details of GEMMs beyond the basics i.e. the typical shared memory cache kernel from [PMPP book](https://www.amazon.com/Programming-Massively-Parallel-Processors-Hands/dp/0323912311). There are so many more concepts to learn to understand modern GEMMs and all of the info is distributed across blog posts, conference talks, etc. In this post, I'll build on blog posts I mentioned and walk through several of these optimization stages but also go into some detail on tensorcores, wmma, swizzling, pipelining etc. 
 
-In this post, we'll build on these and walk through several optimization stages, each with some interactive visualizations to help understand the concepts.
+My goal here was to understand a basic CUTLASS kernel. The problem with looking at something like CUTLASS without knowing all the basics is you will understand the code but not what it is doing under the hood. So, my goal was to build upto a basic cutlass kernel and try to beat PyTorch matmul on my RTX 4090. The whole process and the blog post took me about a month.
 
-## Code Repository and Structure
+## Prologue
+
+### Code
 
 [Full implementation of all kernels](https://github.com/gpusgobrr/explore-gemm)
 
-In the following sections, we will go over several steps in optimizing GEMM kernel, each time discussing a new concept. In the later sections, we will look at fp16/bf16 matmul kernels and tensor cores. In the end, we'll look into cutlass to show how it maps APIs to the GPU menory hierarchy. 
+In the following sections, we will go over several steps in optimizing GEMM kernel, each time discussing a new concept. In the later sections, we will look at fp16/bf16 matmul kernels and tensor cores. In the end, we'll look into cutlass to show how it maps APIs to the GPU memory hierarchy. 
+
+> I used Claude Code to create some javascript visualizations, which I hope readers will find useful. Claude Code was also great at writing some of the python scripts to do plotly graphs for performance benchmarking!
+{: .prompt-info}
 
 ## GEMM Basics
 
@@ -100,7 +105,7 @@ All benchmarks in this post were run on an **NVIDIA GeForce RTX 4090** 🚀. Bel
 
 ### Concept
 
-The simplest approach to calculate GEMM assign each thread to compute one output element.
+The simplest approach to calculate GEMM assigns each thread to compute one output element.
 
 > **What does the memory access pattern look like in this naive case?**
 >
@@ -111,7 +116,7 @@ The simplest approach to calculate GEMM assign each thread to compute one output
 > 4. Writes one element to $C$
 {: .prompt-tip}
 
-Let's look an interactive visualization of it below
+Let's look at an interactive visualization of it below
 
 <div id="naive-viz"></div>
 
@@ -293,7 +298,7 @@ Thread 63 ; Warp 1: Multiplying A[31][0] * B[0][1] = C[31][1]
 
 Now that we have general hardware fundamentals, we can see that the naive kernel's memory access pattern is inefficient. For each thread in a warp, it is accessing `A[k][0]` values where k is the thread id in a warp. When threads in a warp access scattered memory locations, each access requires a separate memory transaction. It is totally solvable by memory coalescing such that we restructure the thread-to-output mapping so threads in the same warp access consecutive memory locations, enabling the hardware to combine multiple accesses into a single transaction.
 
-Turns out the only change we need is swap % and / across row and col calculations for C.
+Turns out the only change we need is to swap % and / across row and col calculations for C.
 
 ```c
     // Map 1D thread ID to 2D output position for coalesced memory access
@@ -402,7 +407,7 @@ We can see that performance improved but still way slower than the pytorch versi
 
 ### Concept
 
-Before diving into shared memory optimization, let's understand the RTX 4090's memory hierarchy and why shared memory is so critical for performance. Shared memory provides significant **bandwidth advantage** compared to global memory, since it on chip. As a result, latency of loads/stores are at least one order of magnitude better compared to global memory. I could not find any public numbers on the differences though.
+Before diving into shared memory optimization, let's understand the RTX 4090's memory hierarchy and why shared memory is so critical for performance. Shared memory provides significant **bandwidth advantage** compared to global memory, since it is on-chip. As a result, latency of loads/stores are at least one order of magnitude better compared to global memory. I could not find any public numbers on the differences though.
 
 {: .prompt-warning}
 > Even with coalesced access, both the naive and coalesced kernels repeatedly read the same data from global memory:
@@ -556,7 +561,7 @@ Running the shared memory kernel for M = N = K = 4096:
 > - **9.5× faster than naive** (0.64 → 6.10 TFLOPS)
 > - Still only **7.8% of PyTorch's performance**, indicating more optimization needed
 >
-> **Key Insight:**d
+> **Key Insight:**
 > - Shared memory caching provides modest improvement (~24%) over just coalescing
 > - The relatively small gain suggests we're not yet effectively hiding memory latency
 {: .prompt-info}
@@ -633,7 +638,7 @@ for (int i = 0; i < deviceCount; ++i) {
 
 ### Why Occupancy Matters
 
-GPUs hide memory latency through **massive parallelism**. When one warp waits for memory, the SM immediately switches to execute another warp. Occupancy does not enable performance directly but primariy through latency hiding. Higher occupancy effectively means more warps available for compute and we can hide latency more effectively. If occupancy is low, hardware sits idle waiting for data. However, **occupancy is not everything**. A kernel with 100% occupancy but poor memory access patterns can still perform poorly since that could lead to lower register/shared memory per thread. So, it is imporatant to keep into account other factors apart from just optimizing for occupancy. 
+GPUs hide memory latency through **massive parallelism**. When one warp waits for memory, the SM immediately switches to execute another warp. Occupancy does not enable performance directly but primarily through latency hiding. Higher occupancy effectively means more warps available for compute and we can hide latency more effectively. If occupancy is low, hardware sits idle waiting for data. However, **occupancy is not everything**. A kernel with 100% occupancy but poor memory access patterns can still perform poorly since that could lead to lower register/shared memory per thread. So, it is important to take into account other factors apart from just optimizing for occupancy. 
 
 #### Key Considerations
 
@@ -1078,7 +1083,7 @@ by putting #pragma unroll directive right before the loop. The good thing about 
 void sgemm_blocktiling_2d(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
                           torch::Tensor &output_matrix, float alpha, float beta)
 {
-    // ... same as most prevoius kernelz
+    // ... same as previous kernels
     constexpr int BM = 64;
     constexpr int BN = 64;
     constexpr int BK = 8;
@@ -2558,7 +2563,19 @@ struct GetConfig
 };
 ```
 
+I evaluated 20 different CUTLASS configurations across various tiles sizes to identify optimal shapes for each problem size. Optimal shapes and configuration below:
+
+
 ![Autotuning Results](/assets/explore_gemms_autotuning_results.png)
+
+
+> **Small Matrices (64-512)**: Autotuning discovered configurations that achieve up to **2.0× speedup compared to PyTorch** with larger thread blocks (128×64×32) and 4-5 pipeline stages. Seems like higher pipeline stages help with hiding latency really well
+> **Medium to Large Matrices (1024-2048)**: Performance close to pytorch with speedups ranging up to **1.09x**
+> **Larger Matrices (4096-8192)**: Much better performance with upto 15% speedup!
+{: .prompt-info}
+
+## Epilogue
+
 
 
 
