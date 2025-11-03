@@ -2599,7 +2599,7 @@ struct GetConfig
 - [Tutorial: Matrix Transpose in CUTLASS](https://research.colfax-intl.com/tutorial-matrix-transpose-in-cutlass/)
 - [Introduction to CUDA Programming and Performance Optimization](https://www.nvidia.com/en-us/on-demand/session/gtc24-s62191/)
 - [CUTLASS Tutorial: Fast Matrix-Multiplication with WGMMA on NVIDIA® Hopper™ GPUs](https://research.colfax-intl.com/cutlass-tutorial-wgmma-hopper/)
-- ![CUTLASS Tutorial: Efficient GEMM kernel designs with Pipelining](https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/)
+- [CUTLASS Tutorial: Efficient GEMM kernel designs with Pipelining](https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/)
 
 
 <script src="/assets/js/gemm-optimization-visualizer.js"></script>
