@@ -24,7 +24,7 @@ My goal here was to understand a basic CUTLASS kernel. The problem with looking 
 
 In the following sections, we will go over several steps in optimizing GEMM kernel, each time discussing a new concept. In the later sections, we will look at fp16/bf16 matmul kernels and tensor cores. In the end, we'll look into cutlass to show how it maps APIs to the GPU memory hierarchy. 
 
-> I used Claude Code to create some javascript visualizations, which I hope readers will find useful. Claude Code was also great at writing some of the python scripts to do plotly graphs for performance benchmarking!
+> (Not an endorsement) I used Claude Code to create some of the javascript visualizations, which I hope readers will find useful. Claude Code was also great at writing some of the python scripts to do plotly graphs for performance benchmarking!
 {: .prompt-info}
 
 ## GEMM Basics
@@ -64,7 +64,7 @@ For matrices of size $M \times K$, $K \times N$:
 
 ## Hardware Specifications
 
-All benchmarks in this post were run on an **NVIDIA GeForce RTX 4090** 🚀. Below are the key specifications:
+All benchmarks in this post were run on **NVIDIA GeForce RTX 4090**. Below are the key specifications:
 
 ### SM Architecture
 
@@ -77,29 +77,28 @@ All benchmarks in this post were run on an **NVIDIA GeForce RTX 4090** 🚀. Bel
 | **Architecture** | Ada Lovelace (TSMC 4nm) |
 | **CUDA Cores** | 16,384 |
 | **Streaming Multiprocessors (SMs)** | 128 |
-| **GPU Boost Clock** | 2,520 MHz |
 | **FP32 Performance** | 82.6 TFLOPS |
 | **Tensor Cores** | 512 (4th Gen) |
 | **Tensor Performance (FP8)** | 660.6 TFLOPS |
 | **RT Cores** | 128 (3rd Gen) |
 | **Memory Size** | 24 GB GDDR6X |
-| **Memory Clock** | 21 Gbps |
 | **Memory Bandwidth** | 1,008 GB/s |
 | **L1 Cache / Shared Memory (Total)** | 16,384 KB (16 MB) |
 | **L2 Cache** | 72 MB |
 | **Shared Memory per SM** | 128 KB |
 | **Registers per SM** | 256 KB |
-| **TGP** | 450 W |
-| **Transistor Count** | 76.3 Billion |
-| **Die Size** | 608.5 mm² |
 
-> **Important hardware details for GEMM Performance:**
-> - **128 SMs** with 128 KB shared memory each
-> - **82.6 TFLOPS FP32** theoretical peak
-> - **1,008 GB/s** max memory bandwidth
-> - **72 MB L2 cache**
-> - **16,384 KB total L1/shared memory**
+### Roofline Model
+
+[Roofline model](https://en.wikipedia.org/wiki/Roofline_model) helps us visualize the performance limitations of our GEMM kernels. I use the number for RTX 4090 below. 
+
+1. **Compute Bound** (flat ceiling): Maximum FLOPS achievable (82.6 TFLOPS for FP32)
+2. **Memory Bound** (diagonal line): Performance limited by memory bandwidth (1,008 GB/s)
+
+> The transition point between memory-bound and compute-bound occurs at an arithmetic intensity of approximately **82 FLOP/byte**. GEMM operations typically have high arithmetic intensity (hundreds of FLOP/byte), making them typically compute-bound workloads.
 {: .prompt-tip}
+
+<div id="roofline-viz"></div>
 
 ## Naive Implementation
 
@@ -2588,7 +2587,6 @@ I evaluated 20 different CUTLASS configurations across various tiles sizes to id
 - [CUTLASS: Fast Linear Algebra in CUDA C++](https://developer.nvidia.com/blog/cutlass-linear-algebra-cuda/)
 - [Triton Tutorial: Matrix Multiplication](https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html)
 - [NVIDIA Performance Guidelines](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/)
-- [Understanding GPU Memory](https://developer.nvidia.com/blog/how-access-global-memory-efficiently-cuda-c-kernels/)
 - [Shared Memory](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#shared-memory)
 - [Reddit: What's the point of warp-level gemm](https://www.reddit.com/r/CUDA/comments/1hk4410/whats_the_point_of_warplevel_gemm/)
 - [Implementing Strassen’s Algorithm with CUTLASS on NVIDIA Volta GPUs](https://arxiv.org/pdf/1808.07984)
@@ -2603,11 +2601,12 @@ I evaluated 20 different CUTLASS configurations across various tiles sizes to id
 - [Developing CUDA Kernels to Push Tensor Cores to the Absolute Limit on NVIDIA A100](https://www.nvidia.com/en-us/on-demand/session/gtcsj20-s21745/)
 - [CUDA Toolkit Documentation](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-instructions-mma-and-friends)
 - [Programming Tensor Cores](https://developer.download.nvidia.com/video/gputechconf/gtc/2019/presentation/s9593-cutensor-high-performance-tensor-operations-in-cuda-v2.pdf)
+- [Matrix Multiplication Background User's Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html)
 - [CUDA Techniques to Maximize Memory Bandwidth and Hide Latency](https://www.nvidia.com/en-us/on-demand/session/gtc25-s72683/)
 - [CUTLASS Tutorial: Persistent Kernels and Stream-K](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/)
 - [CUTLASS Tutorial: Efficient GEMM kernel designs with Pipelining](https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/)
-- [NVIDIA Tensor Core Evolution: From Volta To Blackwell
-](https://newsletter.semianalysis.com/p/nvidia-tensor-core-evolution-from-volta-to-blackwell)
+- [NVIDIA Tensor Core Evolution: From Volta To Blackwell](https://newsletter.semianalysis.com/p/nvidia-tensor-core-evolution-from-volta-to-blackwell)
+- [Demystifying the Nvidia Ampere Architecture](https://arxiv.org/pdf/2208.11174)
 - [Programming Tensor Cores in CUDA 9](https://developer.nvidia.com/blog/programming-tensor-cores-cuda-9/)
 - [Warp Matrix Functions](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#warp-matrix-functions)
 - [Cuda_hgemm repo](https://github.com/Bruce-Lee-LY/cuda_hgemm/tree/master)
@@ -2616,13 +2615,13 @@ I evaluated 20 different CUTLASS configurations across various tiles sizes to id
 - [Tutorial: Matrix Transpose in CUTLASS](https://research.colfax-intl.com/tutorial-matrix-transpose-in-cutlass/)
 - [Introduction to CUDA Programming and Performance Optimization](https://www.nvidia.com/en-us/on-demand/session/gtc24-s62191/)
 - [CUTLASS Tutorial: Fast Matrix-Multiplication with WGMMA on NVIDIA® Hopper™ GPUs](https://research.colfax-intl.com/cutlass-tutorial-wgmma-hopper/)
-- [CUTLASS Tutorial: Efficient GEMM kernel designs with Pipelining](https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/)
 
 
 <script src="/assets/js/gemm-optimization-visualizer.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize all visualizations (only if div exists)
+    if (document.getElementById('roofline-viz')) new RooflineViz('roofline-viz');
     if (document.getElementById('naive-viz')) new NaiveKernelViz('naive-viz');
     if (document.getElementById('coalesced-matrix-viz')) new CoalescedMatrixViz('coalesced-matrix-viz');
     if (document.getElementById('memory-hierarchy-viz')) new MemoryHierarchyViz('memory-hierarchy-viz');

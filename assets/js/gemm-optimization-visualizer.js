@@ -3285,6 +3285,389 @@ class WmmaTensorcoreViz {
     }
 }
 
+// Roofline Model Visualization
+class RooflineViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) return;
+
+        // RTX 4090 specifications
+        this.peakFLOPS = 82.6; // TFLOPS for FP32
+        this.peakBandwidth = 1.008; // TB/s (1008 GB/s)
+        this.ridgePoint = this.peakFLOPS / this.peakBandwidth; // ~82 FLOP/byte
+
+        // Kernel performance data (for 4096x4096 matrices)
+        // Only showing PyTorch for reference
+        this.kernels = [
+            { name: 'PyTorch', tflops: 84.19, bandwidth: 123.33, color: '#32CD32' }
+        ];
+
+        // Calculate arithmetic intensity for each kernel
+        // AI = FLOPS / Bandwidth (in FLOP/byte)
+        this.kernels.forEach(k => {
+            k.arithmeticIntensity = k.tflops * 1000 / k.bandwidth; // Convert TFLOPS to GFLOPS
+        });
+
+        this.init();
+    }
+
+    init() {
+        this.container.innerHTML = `
+            ${commonStyles}
+            <div class="viz-container">
+                <div class="viz-title">Roofline Model - RTX 4090 GEMM Performance</div>
+                <canvas id="roofline-canvas" width="1200" height="900" style="width: 100%; height: auto;"></canvas>
+            </div>
+        `;
+
+        this.canvas = document.getElementById('roofline-canvas');
+        this.ctx = this.canvas.getContext('2d');
+
+        // Default settings
+        this.showLabels = true;
+        this.showGrid = true;
+
+        // Tooltip handling
+        this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+        this.canvas.addEventListener('mouseout', () => this.handleMouseOut());
+
+        this.hoveredKernel = null;
+        this.draw();
+    }
+
+    draw() {
+        const canvas = this.canvas;
+        const ctx = this.ctx;
+        const width = canvas.width;
+        const height = canvas.height;
+
+        // Clear canvas
+        ctx.fillStyle = '#252525';
+        ctx.fillRect(0, 0, width, height);
+
+        // Margins
+        const margin = { top: 40, right: 150, bottom: 150, left: 150 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+
+        // Scales (logarithmic)
+        const minAI = 0.1;
+        const maxAI = 1000;
+        const minPerf = 0.1;
+        const maxPerf = 100;
+
+        const xScale = (ai) => {
+            return margin.left + (Math.log10(ai) - Math.log10(minAI)) /
+                (Math.log10(maxAI) - Math.log10(minAI)) * plotWidth;
+        };
+
+        const yScale = (perf) => {
+            return height - margin.bottom - (Math.log10(perf) - Math.log10(minPerf)) /
+                (Math.log10(maxPerf) - Math.log10(minPerf)) * plotHeight;
+        };
+
+        // Draw grid
+        if (this.showGrid) {
+            this.drawGrid(ctx, xScale, yScale, margin, plotWidth, plotHeight, minAI, maxAI, minPerf, maxPerf);
+        }
+
+        // Draw roofline
+        this.drawRoofline(ctx, xScale, yScale, margin, plotWidth, plotHeight);
+
+        // Draw kernels
+        this.drawKernels(ctx, xScale, yScale, this.showLabels);
+
+        // Draw axes
+        this.drawAxes(ctx, xScale, yScale, margin, width, height, plotWidth, plotHeight, minAI, maxAI, minPerf, maxPerf);
+
+        // Draw legend
+        this.drawLegend(ctx, width, margin);
+
+        // Draw tooltip (must be last so it appears on top)
+        this.drawTooltip(ctx);
+    }
+
+    drawGrid(ctx, xScale, yScale, margin, plotWidth, plotHeight, minAI, maxAI, minPerf, maxPerf) {
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+
+        // Vertical grid lines (AI)
+        const aiValues = [0.1, 1, 10, 100, 1000];
+        aiValues.forEach(ai => {
+            if (ai >= minAI && ai <= maxAI) {
+                const x = xScale(ai);
+                ctx.beginPath();
+                ctx.moveTo(x, margin.top);
+                ctx.lineTo(x, margin.top + plotHeight);
+                ctx.stroke();
+            }
+        });
+
+        // Horizontal grid lines (Performance)
+        const perfValues = [0.1, 1, 10, 100];
+        perfValues.forEach(perf => {
+            if (perf >= minPerf && perf <= maxPerf) {
+                const y = yScale(perf);
+                ctx.beginPath();
+                ctx.moveTo(margin.left, y);
+                ctx.lineTo(margin.left + plotWidth, y);
+                ctx.stroke();
+            }
+        });
+
+        ctx.setLineDash([]);
+    }
+
+    drawRoofline(ctx, xScale, yScale, margin, plotWidth, plotHeight) {
+        ctx.strokeStyle = '#4CAF50';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+
+        // Memory-bound region (diagonal line)
+        const startAI = 0.1;
+        const ridgeAI = this.ridgePoint;
+        const startPerf = startAI * this.peakBandwidth;
+
+        ctx.moveTo(xScale(startAI), yScale(startPerf));
+        ctx.lineTo(xScale(ridgeAI), yScale(this.peakFLOPS));
+
+        // Compute-bound region (horizontal line)
+        ctx.lineTo(xScale(1000), yScale(this.peakFLOPS));
+
+        ctx.stroke();
+
+        // Draw Peak FLOPS horizontal line more prominently
+        ctx.strokeStyle = '#FF6B6B';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(xScale(0.1), yScale(this.peakFLOPS));
+        ctx.lineTo(xScale(1000), yScale(this.peakFLOPS));
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Label the peak FLOPS on the left
+        ctx.fillStyle = '#FF6B6B';
+        ctx.font = 'bold 26px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText(`Peak FP32: ${this.peakFLOPS} TFLOPS`, xScale(0.15), yScale(this.peakFLOPS) - 15);
+
+        // Label the roofline
+        ctx.fillStyle = '#4CAF50';
+        ctx.font = 'bold 28px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Roofline', xScale(200), yScale(this.peakFLOPS) + 35);
+    }
+
+    drawKernels(ctx, xScale, yScale, showLabels) {
+        this.kernels.forEach((kernel, idx) => {
+            const x = xScale(kernel.arithmeticIntensity);
+            const y = yScale(kernel.tflops);
+
+            // Draw point
+            ctx.fillStyle = kernel.color;
+            ctx.beginPath();
+            const radius = this.hoveredKernel === idx ? 12 : 10;
+            ctx.arc(x, y, radius, 0, 2 * Math.PI);
+            ctx.fill();
+
+            // Draw border
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            // Draw label
+            if (showLabels || this.hoveredKernel === idx) {
+                ctx.fillStyle = '#e0e0e0';
+                ctx.font = this.hoveredKernel === idx ? 'bold 22px Arial' : '20px Arial';
+                const labelY = y - 20;
+                const labelX = x + 15;
+                ctx.fillText(kernel.name, labelX, labelY);
+            }
+
+            // Store position for hover detection
+            kernel.x = x;
+            kernel.y = y;
+        });
+    }
+
+    drawAxes(ctx, xScale, yScale, margin, width, height, plotWidth, plotHeight, minAI, maxAI, minPerf, maxPerf) {
+        ctx.strokeStyle = '#666';
+        ctx.lineWidth = 2;
+
+        // X-axis
+        ctx.beginPath();
+        ctx.moveTo(margin.left, height - margin.bottom);
+        ctx.lineTo(margin.left + plotWidth, height - margin.bottom);
+        ctx.stroke();
+
+        // Y-axis
+        ctx.beginPath();
+        ctx.moveTo(margin.left, margin.top);
+        ctx.lineTo(margin.left, height - margin.bottom);
+        ctx.stroke();
+
+        // X-axis ticks
+        ctx.font = '22px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#e0e0e0';
+        const aiTicks = [0.1, 1, 10, 100, 1000];
+        aiTicks.forEach(ai => {
+            if (ai >= minAI && ai <= maxAI) {
+                const x = xScale(ai);
+                ctx.fillText(ai.toString(), x, height - margin.bottom + 50);
+
+                // Tick mark
+                ctx.beginPath();
+                ctx.moveTo(x, height - margin.bottom);
+                ctx.lineTo(x, height - margin.bottom + 10);
+                ctx.stroke();
+            }
+        });
+
+        // Y-axis ticks
+        ctx.textAlign = 'right';
+        const perfTicks = [0.1, 1, 10, 100];
+        perfTicks.forEach(perf => {
+            if (perf >= minPerf && perf <= maxPerf) {
+                const y = yScale(perf);
+                ctx.fillText(perf.toString(), margin.left - 30, y + 8);
+
+                // Tick mark
+                ctx.beginPath();
+                ctx.moveTo(margin.left - 10, y);
+                ctx.lineTo(margin.left, y);
+                ctx.stroke();
+            }
+        });
+
+        // X-axis label (positioned below tick labels with proper spacing)
+        ctx.fillStyle = '#e0e0e0';
+        ctx.font = 'bold 28px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Arithmetic Intensity (FLOP/byte)', width / 2, height - 30);
+
+        // Y-axis label (positioned to the left of tick labels with proper spacing)
+        ctx.save();
+        ctx.translate(40, height / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText('Performance (TFLOPS)', 0, 0);
+        ctx.restore();
+    }
+
+    drawLegend(ctx, width, margin) {
+        const legendX = width - margin.right + 10;
+        let legendY = margin.top + 20;
+
+        ctx.font = 'bold 24px Arial';
+        ctx.fillStyle = '#e0e0e0';
+        ctx.textAlign = 'left';
+        ctx.fillText('Kernels:', legendX, legendY);
+
+        legendY += 30;
+
+        // Show top performing kernels in legend
+        const topKernels = [...this.kernels].sort((a, b) => b.tflops - a.tflops).slice(0, 6);
+
+        topKernels.forEach(kernel => {
+            // Color box
+            ctx.fillStyle = kernel.color;
+            ctx.fillRect(legendX, legendY - 12, 16, 16);
+
+            // Name
+            ctx.fillStyle = '#e0e0e0';
+            ctx.font = '20px Arial';
+            ctx.fillText(kernel.name, legendX + 24, legendY + 2);
+
+            legendY += 28;
+        });
+    }
+
+    handleMouseMove(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const scaleX = this.canvas.width / rect.width;
+        const scaleY = this.canvas.height / rect.height;
+        const mouseX = (e.clientX - rect.left) * scaleX;
+        const mouseY = (e.clientY - rect.top) * scaleY;
+
+        let found = false;
+        this.kernels.forEach((kernel, idx) => {
+            const dx = mouseX - kernel.x;
+            const dy = mouseY - kernel.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance < 15) {
+                this.hoveredKernel = idx;
+                this.hoveredX = mouseX;
+                this.hoveredY = mouseY;
+                found = true;
+                this.canvas.style.cursor = 'pointer';
+            }
+        });
+
+        if (!found && this.hoveredKernel !== null) {
+            this.hoveredKernel = null;
+            this.canvas.style.cursor = 'default';
+        }
+
+        if (found || this.hoveredKernel === null) {
+            this.draw();
+        }
+    }
+
+    handleMouseOut() {
+        if (this.hoveredKernel !== null) {
+            this.hoveredKernel = null;
+            this.canvas.style.cursor = 'default';
+            this.draw();
+        }
+    }
+
+    drawTooltip(ctx) {
+        if (this.hoveredKernel === null) return;
+
+        const kernel = this.kernels[this.hoveredKernel];
+        const padding = 25;
+        const lineHeight = 40;
+        const tooltipWidth = 500;
+        const tooltipHeight = 180;
+
+        // Position tooltip near the mouse
+        let tooltipX = this.hoveredX + 30;
+        let tooltipY = this.hoveredY - tooltipHeight / 2;
+
+        // Keep tooltip within canvas bounds
+        if (tooltipX + tooltipWidth > this.canvas.width - 30) {
+            tooltipX = this.hoveredX - tooltipWidth - 30;
+        }
+        if (tooltipY < 30) tooltipY = 30;
+        if (tooltipY + tooltipHeight > this.canvas.height - 30) {
+            tooltipY = this.canvas.height - tooltipHeight - 30;
+        }
+
+        // Draw tooltip background
+        ctx.fillStyle = 'rgba(26, 26, 26, 0.95)';
+        ctx.strokeStyle = kernel.color;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.roundRect(tooltipX, tooltipY, tooltipWidth, tooltipHeight, 12);
+        ctx.fill();
+        ctx.stroke();
+
+        // Draw tooltip text
+        ctx.fillStyle = '#e0e0e0';
+        ctx.font = 'bold 28px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText(kernel.name, tooltipX + padding, tooltipY + padding + 24);
+
+        ctx.font = '24px Arial';
+        ctx.fillText(`Performance: ${kernel.tflops.toFixed(2)} TFLOPS`, tooltipX + padding, tooltipY + padding + 24 + lineHeight);
+        ctx.fillText(`Matrix Size: 4096×4096`, tooltipX + padding, tooltipY + padding + 24 + lineHeight * 2);
+        ctx.fillText(`Arithmetic Intensity: ${kernel.arithmeticIntensity.toFixed(1)} FLOP/byte`, tooltipX + padding, tooltipY + padding + 24 + lineHeight * 3);
+    }
+}
+
 // Export for use in HTML
 if (typeof window !== 'undefined') {
     window.NaiveKernelViz = NaiveKernelViz;
@@ -3299,4 +3682,5 @@ if (typeof window !== 'undefined') {
     window.WarpTilingViz = WarpTilingViz;
     window.WmmaTensorcoreViz = WmmaTensorcoreViz;
     window.PerformanceComparison = PerformanceComparison;
+    window.RooflineViz = RooflineViz;
 }
