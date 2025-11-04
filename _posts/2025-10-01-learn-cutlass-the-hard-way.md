@@ -1577,7 +1577,8 @@ I am leaving out the kernel implementation for this part so we can focus on WMMA
 
 ![BFP16 Baseline](/assets/explore_gemm_bf16_baseline.png)
 
-> Quick Takeaway: without tensorcores we can't match the performance of pytorch. So, let's look at that next:
+> Quick Takeaway: without tensorcores we can't match the performance of pytorch. So, let's look at that next!!
+{: .prompt-tip}
 
 ## WMMA and Tensorcores
 
@@ -1619,6 +1620,11 @@ asm(
 
 > Here, `mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32` can be understood as `mma.sync.aligned` instruction over matrix dimentsion of `M=16, N=8, K=8 (computes C[16×8] = A[16×8] × B[8×8] + C[16×8])`. `row.col` represents row-major/column-major layouts for A and B, respectivelly and finally `f32.f16.f16.f32` represents data types such that output is 32-bit float (fp32) with A and B as fp16 and accumulation happening in fp32.
 {: .prompt-info}
+
+
+### SM80 TC Instruction
+
+Below is the Tensorcore operation on my RTX 4090 for Ada.
 
 ![SM80 TC Instruction](/assets/explore_gemms_tensorcore_instruction_sm80.png)
 
@@ -1830,7 +1836,7 @@ Now just to confirm that we are using the right instructions, ran pytorch matmul
 
 ![Torch empty experiment](/assets/explore_gemm_torch_empty_experiment.png)
 
-At this point, I was wondering about changing the interface of the kernels such that we allocate C inside the kernel itself. But, let's get back to this later!
+
 
 ## Double Buffering
 
@@ -2070,7 +2076,7 @@ At this point, we have the foundational understanding of how we have to utilize 
 
 CUTLASS started as an implementation of the hierarchical GEMM structure and provides CUDA C++ template classes for efficient GEMM kernels. Underneath, tile loaders move data effectively from global --> shared --> registers. In addition, it provides a plethora of other libraries, tools, and a python DSL to further abstract away the complexity of writing GEMMS. 
 
-[GPU Mode] had a couple of really good lectures (shown below) on CUTLASS to get started. One of them goes into the layout algebra and the other on tensorcores. 
+[GPU Mode](https://github.com/gpu-mode) had a couple of really good lectures (shown below) on CUTLASS to get started. One of them goes into the layout algebra and the other on tensorcores. 
 
 {% include embed/youtube.html id='G6q719ck7ww' %}
 
@@ -2085,7 +2091,9 @@ CUTLASS also provides premitives such as Epilogue to fuse downstream operations 
 
 ### Kernel
 
-After all the pain and suffering, we can write a cutlass kernel finally. Here is an "off the shelf" GEMM kernel using cutlass, with some minimal modifications. I think the code is pretty self explanatory!
+After all the pain and suffering, we can finally write a CUTLASS kernel. Remember the **"HARD WAY"** part.
+
+Here is an "off the shelf" GEMM kernel using cutlass, with some minimal modifications. I think the code is pretty self explanatory at this point, which was precisely the point of looking at the previous 10+ kernels!
 
 ```c
 #include <torch/torch.h>
@@ -2291,7 +2299,6 @@ We pretty much doubled our performance compared to previous best warptiled doubl
 
 ![CUTLASS Performance](/assets/explore_gemms_cutlass_performance_1.png)
 
-#### FLOPs Improvement
 
 > CUTLASS significantly outperforms all previous kernels:
 > - vs. Tensor Core Naive: **1.5-12.6× faster**
@@ -2312,7 +2319,7 @@ We pretty much doubled our performance compared to previous best warptiled doubl
 | 8192×8192 | 150.154 | 153.085 | 84.604 | **1.02×** | 1.81× |
 
 
-If we look at the main [Gemm abstraction](https://ipd.graylab.jhu.edu/rfdiffusion2/cutlass-3.5.1/docs/classcutlass_1_1gemm_1_1device_1_1Gemm.html) we used, it also has few more arguments that we did not use earlier. The ones we will explictly focus on in this section are `ThreadblockSwizzle_` and `Stages`! Adding these arguments to template:
+If we look at the main [Gemm abstraction](https://ipd.graylab.jhu.edu/rfdiffusion2/cutlass-3.5.1/docs/classcutlass_1_1gemm_1_1device_1_1Gemm.html) we used, it also has few more arguments that we did not use earlier. The ones we will explictly focus on in the next sections are `ThreadblockSwizzle_` and `Stages`! Adding these arguments to template:
 
 ```cpp
 constexpr auto swizzle_type ...;
@@ -2348,7 +2355,7 @@ We discussed this briefly earlier but let's dig into more details. Shared memory
 {: .prompt-tip}
 
 
-**How Does Swizzling Help?:** Swizzling is an address-remapping technique that changes how data is laid out in shared memory to minimize these bank conflicts. Instead of writing matrix tiles in a simple row-major or column-major order, the memory indices are re-permuted to make to different address locations. Swizzling adjusts certain low-order address bits so that consecutive threads in a warp — which often access elements in the same column or row — get mapped to different banks. 
+**How Does Swizzling Help?:** Swizzling is an address-remapping technique that changes how data is laid out in shared memory to minimize these bank conflicts. Instead of writing matrix tiles in a simple row-major or column-major order, the memory indices are re-permuted to make them hold different address locations. Swizzling adjusts certain low-order address bits so that consecutive threads in a warp,, which often access elements in the same column or row, get mapped to different banks. 
 
 I found [Lei.Chat's Article on Layouts](https://www.lei.chat/posts/triton-linear-layout-concept/) the simplest one I could find which drives home the point. Let's look at the following example:
 
@@ -2374,7 +2381,7 @@ Here's a couple of more layouts from [Nvidia docs](https://docs.nvidia.com/cuda/
 
 ![MN Major](/assets/explore_gemms_mn_major_swizzling_nvidia_docs.png)
 
-> In my view, key takeaway from Swizzling should be that to avoid bank conflict, you remap shared memory layouts to some alternate (i.e. swizzled) layout to ensure threads don't fight for the same hardware resources (i.e. banks)! There are a few more resources in the References section that I read or skimmed - specially the ones from [Colfax Research](https://research.colfax-intl.com/cutlass-tutorial-wgmma-hopper/) are good but need a lot of brain compute. 
+> I am still learning but in my view, key takeaway from Swizzling should be that to avoid bank conflict, you remap shared memory layouts to some alternate (i.e. swizzled) layout to ensure threads don't fight for the same hardware resources (i.e. banks)! There are a few more resources in the References section that I read or skimmed - specially the ones from [Colfax Research](https://research.colfax-intl.com/cutlass-tutorial-wgmma-hopper/) are good but need a lot of brain compute. 
 {: .prompt-tip}
 
 ## Persistent Kernels/Software Pipelining
@@ -2385,11 +2392,11 @@ I think, below talk from 2024 Triton Conference is a good beginner's guide
 
 {% include embed/youtube.html id='PAsL680eWUw' %}
 
-**Persistent Kernels**: Conceptually, we move the GEMM kernels to "remain active" or persistent such taht we push different "stages" to be asynchronous and overlapped. The main goal is the overall loads, computes, kernel launches, epilogues, prologues, etc to be running continously. Here is a nice simple illustration from [Colfax blog post](https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/):
+**Persistent Kernels**: Conceptually, we move the GEMM kernels to "remain active" or persistent such that we push different "stages" to be asynchronous and overlapped. The main goal is the overall loads, computes, kernel launches, epilogues, prologues, etc to be running continously. Here is a nice simple illustration from [Colfax blog post](https://research.colfax-intl.com/cutlass-tutorial-design-of-a-gemm-kernel/):
 
 ![Software Pipelining](/assets/explore_gemms_software_pipeling_colfax.png)
 
-Conceptually, this is a deep topic and is an active area of performance work specially for Blackwell (with its shiny new features e.g. 2 CTAs). I really liked this more recent talks from [Phil Tillet from GTC 25](https://www.nvidia.com/en-us/on-demand/session/gtc25-s72876/) and [another from Chris Sullivan at 2025 Triton conference](https://www.youtube.com/watch?v=GL7ImGZj-Oc). To drive the point home, I will leave screenshots from [Phil's presentation at GTC](https://semianalysis.com/wp-content/uploads/2025/03/Blackwell-Programming-for-the-Masses-With-OpenAI-Triton-Phil-Tillet.pdf).
+Conceptually, this is a deep topic and is an active area of performance work specially for Blackwell (with its shiny new features e.g. 2 CTAs). I really liked this more recent talk from [Phil Tillet from GTC 25](https://www.nvidia.com/en-us/on-demand/session/gtc25-s72876/) and [another from Chris Sullivan at 2025 Triton conference](https://www.youtube.com/watch?v=GL7ImGZj-Oc). To provide some more flavor to overlapping compute and load, I will leave some screenshots from [Phil's presentation at GTC](https://semianalysis.com/wp-content/uploads/2025/03/Blackwell-Programming-for-the-Masses-With-OpenAI-Triton-Phil-Tillet.pdf).
 
 ![Phil Tillet GTC 25 - 1](/assets/explore_gemms_phil_gtc_1.png)
 
@@ -2397,10 +2404,13 @@ Conceptually, this is a deep topic and is an active area of performance work spe
 
 ![Phil Tillet GTC 25 - 3](/assets/explore_gemms_persistent_kernel_phil_gtc.png)
 
+Highlly recommend watching those talks to understand more.
 
 ## Autotuning
 
-Finally, let's use some autotuning to find the best configuration for different tensor sizes. We define auto-tuning config based on following parameters:
+Finally, let's use some autotuning to find the best configuration for different tensor sizes. We noticed that our CUTLASS kernels were still pretty slow for small to medium matrix sizes. Now we can tune them to improve the performance. 
+
+We define auto-tuning config based on following parameters:
 
 ```cpp
 struct GemmConfigEntry
@@ -2414,7 +2424,7 @@ struct GemmConfigEntry
 > We add a new parameter stages that defines number of pipeline stages used in the kernel.
 {: .prompt-info}
 
-I am skipping the full kernel here since it looks similar to previous cutlass kernel except for adding 2 more template parameters. For all the kernels here, we use `GemmIdentityThreadblockSwizzle`. Here's a full set of configs we test:
+I am skipping the full kernel here since it looks similar to previous cutlass kernel except for adding 2 more template parameters. For all the kernels here, we use `GemmIdentityThreadblockSwizzle` (Default - I did not play around with swizzling). Here's a full set of configs we test:
 
 ```cpp
 constexpr GemmConfigEntry kConfigs[] = {
@@ -2452,20 +2462,26 @@ struct GetConfig
 };
 ```
 
-I evaluated 20 different CUTLASS configurations across various tiles sizes to identify optimal shapes for each problem size. Optimal shapes and configuration below:
+I evaluated 20 different CUTLASS configurations across various tiles sizes to identify optimal tile shapes for each problem size. We can now consistently beat the PyTorch kernel for all kernel sizes. 
 
 
 ![Autotuning Results](/assets/explore_gemms_autotuning_results.png)
 
 
 > **Small Matrices (64-512)**: Autotuning discovered configurations that achieve up to **2.0× speedup compared to PyTorch** with larger thread blocks (128×64×32) and 4-5 pipeline stages. Seems like higher pipeline stages help with hiding latency really well
+>
 > **Medium to Large Matrices (1024-2048)**: Performance close to pytorch with speedups ranging up to **1.09x**
+>
 > **Larger Matrices (4096-8192)**: Much better performance with upto 15% speedup!
 {: .prompt-info}
 
 ## Epilogue
 
+### More to explore
 
+- Modern Hopper and Blackwell Hardware
+- FP8 and FP4 variants
+- Other kernels types such as Grouped GEMM
 
 
 ## References

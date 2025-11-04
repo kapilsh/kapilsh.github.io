@@ -2503,7 +2503,7 @@ class WarpTilingViz {
                         <span>Warp Fragment (register_n)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-box" style="background: #E91E63;"></div>
+                        <div class="legend-box" style="background: #FF6B6B;"></div>
                         <span>Computing Thread Tile</span>
                     </div>
                     <div class="legend-item">
