@@ -467,7 +467,7 @@ class CoalescedMatrixViz {
                 <div class="legend">
                     <div class="legend-item">
                         <div class="legend-box" style="background: #4CAF50;"></div>
-                        <span>Current Warp (4 threads)</span>
+                        <span>Current Warp</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-box" style="background: #FFA726;"></div>
@@ -778,43 +778,6 @@ class Tiling1DViz {
         this.container.innerHTML = commonStyles + `
             <div class="viz-container">
                 <div class="viz-title">1D Block Tiling: Register-Level Optimization</div>
-                <div class="viz-info" style="margin-bottom: 15px;">
-                    <h4>Building on Shared Memory:</h4>
-                    <p style="margin: 10px 0; line-height: 1.8;">
-                        We still use shared memory tiles (<code>tile_a</code>, <code>tile_b</code>), but now each thread computes <code>TM = ${this.TM} outputs</code> instead of just 1. Let's see how this works below:
-                    </p>
-
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0; padding: 15px; background: #2a2a2a; border-radius: 8px;">
-                        <div style="border-right: 2px solid #444; padding-right: 15px;">
-                            <div style="font-weight: 600; color: #FF9800; margin-bottom: 10px;">❌ Previous (Shared Memory Only)</div>
-                            <ul style="margin: 0; padding-left: 20px; line-height: 1.8; font-size: 13px;">
-                                <li>Load 1 value from <code>tile_b</code></li>
-                                <li>Load 1 value from <code>tile_a</code></li>
-                                <li>Compute 1 output</li>
-                                <li><strong style="color: #FF6B6B;">No register reuse!</strong></li>
-                            </ul>
-                            <div style="margin-top: 10px; padding: 8px; background: #1a1a1a; border-radius: 4px; font-size: 12px;">
-                                <strong>Ratio:</strong> 2 SMEM reads → 1 output<br>
-                                <strong>Efficiency:</strong> 0.5 outputs/read
-                            </div>
-                        </div>
-                        <div style="padding-left: 15px;">
-                            <div style="font-weight: 600; color: #4CAF50; margin-bottom: 10px;">✅ Now (1D Block Tiling)</div>
-                            <ul style="margin: 0; padding-left: 20px; line-height: 1.8; font-size: 13px;">
-                                <li>Load 1 value into <code style="color: #00BCD4;">b_tmp</code> register</li>
-                                <li>Load TM values from <code>tile_a</code></li>
-                                <li><strong style="color: #8BC34A;">Compute TM outputs!</strong></li>
-                                <li><strong style="color: #00BCD4;">b_tmp reused ${this.TM}×</strong></li>
-                            </ul>
-                            <div style="margin-top: 10px; padding: 8px; background: #1a1a1a; border-radius: 4px; font-size: 12px;">
-                                <strong>Ratio:</strong> (1+TM) SMEM reads → TM outputs<br>
-                                <strong>Efficiency:</strong> ${(this.TM / (1 + this.TM)).toFixed(2)} outputs/read (${((this.TM / (1 + this.TM)) / 0.5).toFixed(1)}× better!)
-                            </div>
-                        </div>
-                    </div>
-
-                    <p style="margin-top: 10px; color: #FFA726;"><strong>Key Insight:</strong> By caching <code>b_tmp</code> in a register and reusing it ${this.TM} times, we reduce shared memory traffic and increase arithmetic intensity!</p>
-                </div>
                 <div class="viz-controls">
                     <button class="viz-btn" id="tiling1dAnimate">Animate</button>
                     <button class="viz-btn" id="tiling1dReset">Reset</button>
@@ -1660,33 +1623,6 @@ class Tiling2DViz {
         this.container.innerHTML = commonStyles + `
             <div class="viz-container">
                 <div class="viz-title">2D Block Tiling: Outer Product</div>
-                <div class="viz-info" style="margin-bottom: 15px;">
-                    <h4>Building on 1D Tiling:</h4>
-                    <p style="margin: 10px 0; line-height: 1.8;">
-                        Now each thread computes <strong>TM × TN = ${this.TM}×${this.TN} outputs</strong> instead of just TM!
-                    </p>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 15px 0; padding: 15px; background: #2a2a2a; border-radius: 8px;">
-                        <div style="border-right: 2px solid #444; padding-right: 15px;">
-                            <div style="font-weight: 600; color: #FFA726; margin-bottom: 10px;">🟠 1D Block Tiling</div>
-                            <ul style="margin: 0; padding-left: 20px; line-height: 1.8; font-size: 13px;">
-                                <li>Cache 1 <code>b_tmp</code> value</li>
-                                <li>Load TM values from <code>tile_a</code></li>
-                                <li>Compute TM outputs</li>
-                                <li><strong>TM reuse per b_tmp</strong></li>
-                            </ul>
-                        </div>
-                        <div style="padding-left: 15px;">
-                            <div style="font-weight: 600; color: #4CAF50; margin-bottom: 10px;">✅ 2D Block Tiling</div>
-                            <ul style="margin: 0; padding-left: 20px; line-height: 1.8; font-size: 13px;">
-                                <li>Cache <code style="color: #9C27B0;">register_m[TM]</code> values</li>
-                                <li>Cache <code style="color: #00BCD4;">register_n[TN]</code> values</li>
-                                <li><strong style="color: #4CAF50;">Compute TM×TN outputs via outer product!</strong></li>
-                                <li><strong>Bidirectional reuse: TM×TN per register pair</strong></li>
-                            </ul>
-                        </div>
-                    </div>
-                    <p style="margin-top: 10px; color: #FFA726;"><strong>Key Insight:</strong> Outer product pattern: each <code>register_m[i]</code> × <code>register_n[j]</code> generates one output, creating a ${this.TM}×${this.TN} tile!</p>
-                </div>
                 <div class="viz-controls">
                     <button class="viz-btn" id="tiling2dAnimate">Animate</button>
                     <button class="viz-btn" id="tiling2dReset">Reset</button>

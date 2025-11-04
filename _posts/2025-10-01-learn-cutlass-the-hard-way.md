@@ -14,7 +14,7 @@ If one is remotely interested in CUDA or Triton programming, they have likely co
 
 I have been curious about learning the details of GEMMs beyond the basics i.e. the typical shared memory cache kernel from [PMPP book](https://www.amazon.com/Programming-Massively-Parallel-Processors-Hands/dp/0323912311). There are so many more concepts to learn to understand modern GEMMs and all of the info is distributed across blog posts, conference talks, etc. In this post, I'll build on blog posts I mentioned and walk through several of these optimization stages but also go into some detail on tensorcores, wmma, swizzling, pipelining etc. 
 
-My goal here was to understand a basic CUTLASS kernel. The problem with looking at something like CUTLASS without knowing all the basics is you will understand the code but not what it is doing under the hood. So, my goal was to build upto a basic cutlass kernel and try to beat PyTorch matmul on my RTX 4090. The whole process and the blog post took me about a month.
+My goal here was to understand a basic CUTLASS kernel. The problem with looking at something like CUTLASS without knowing all the basics is you will understand the code but not what it is doing under the hood. So, I build upto a basic cutlass kernel and try to beat PyTorch matmul on my RTX 4090. The whole process and the blog post took me about a month and was definitely a rewarding experience!
 
 ## Prologue
 
@@ -22,7 +22,7 @@ My goal here was to understand a basic CUTLASS kernel. The problem with looking 
 
 [Full implementation of all kernels](https://github.com/gpusgobrr/explore-gemm)
 
-In the following sections, we will go over several steps in optimizing GEMM kernel, each time discussing a new concept. In the later sections, we will look at fp16/bf16 matmul kernels and tensor cores. In the end, we'll look into cutlass to show how it maps APIs to the GPU memory hierarchy. 
+In the following sections, we will go over several steps in optimizing GEMM kernel, each time discussing a new concept. In the later sections, we will look at fp16/bf16 matmul kernels and tensor cores. In the end, we'll look into CUTLASS to show how it makes it easy to map the concepts that we'll discuss to a simple API!
 
 > (Not an endorsement) I used Claude Code to create some of the javascript visualizations, which I hope readers will find useful. Claude Code was also great at writing some of the python scripts to do plotly graphs for performance benchmarking!
 {: .prompt-info}
@@ -43,7 +43,7 @@ where:
 {: .prompt-tip}
 > - The standard matrix product $C = AB$ is a special case with $\alpha = 1$ and $\beta = 0$
 > - When $\beta \neq 0$, GEMM accumulates into a pre-existing matrix $C$
-> - This formulation also enables fused operations, avoiding separate kernel launches. We'll see this in cutlass section.
+> - This formulation also enables fused operations, avoiding separate kernel launches. We'll see this in CUTLASS section.
 
 ### Computational Complexity
 
@@ -60,7 +60,6 @@ For matrices of size $M \times K$, $K \times N$:
 > For a $4096 \times 4096$ matrix multiplication ($M = N = K = 4096$):
 > - Total operations: $2 \times 4096^3 \approx 137$ GFLOPs
 > - Memory required: $3 \times 4096^2 \times 4$ bytes $\approx$ 201 MB (float32)
-> - **Arithmetic Intensity**: $\frac{137 \text{ GFLOPs}}{201 \text{ MB}} \approx 682$ FLOPs/byte
 
 ## Hardware Specifications
 
@@ -88,9 +87,49 @@ All benchmarks in this post were run on **NVIDIA GeForce RTX 4090**. Below are t
 | **Shared Memory per SM** | 128 KB |
 | **Registers per SM** | 256 KB |
 
+You can load these details directly using `cudaDeviceProp` as well:
+
+```cpp
+std::cout << "Number of CUDA devices: " << deviceCount << "\n\n";
+
+for (int i = 0; i < deviceCount; ++i) {
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, i);
+
+    std::cout << "Device " << i << ": " << prop.name << "\n";
+    std::cout << "  Compute capability: " << prop.major << "." << prop.minor << "\n";
+    std::cout << "  Total global memory: " << (prop.totalGlobalMem >> 20) << " MB\n";
+    std::cout << "  Shared memory per block: " << prop.sharedMemPerBlock << " bytes\n";
+    std::cout << "  Shared memory per SM: " << prop.sharedMemPerMultiprocessor << " bytes\n";
+    std::cout << "  Registers per block: " << prop.regsPerBlock << "\n";
+    std::cout << "  Warp size: " << prop.warpSize << "\n";
+    std::cout << "  Max threads per block: " << prop.maxThreadsPerBlock << "\n";
+    std::cout << "  Max threads per SM: " << prop.maxThreadsPerMultiProcessor << "\n";
+    std::cout << "  Number of SMs: " << prop.multiProcessorCount << "\n";
+    std::cout << "  Max blocks per SM: " << prop.maxBlocksPerMultiProcessor << "\n";
+    std::cout << "  Max grid dimensions: ["
+                << prop.maxGridSize[0] << ", "
+                << prop.maxGridSize[1] << ", "
+                << prop.maxGridSize[2] << "]\n";
+    std::cout << "  Max threads dim (block): ["
+                << prop.maxThreadsDim[0] << ", "
+                << prop.maxThreadsDim[1] << ", "
+                << prop.maxThreadsDim[2] << "]\n";
+    std::cout << "  Clock rate: " << prop.clockRate / 1000 << " MHz\n";
+    std::cout << "  Memory Clock Rate: " << prop.memoryClockRate / 1000 << " MHz\n";
+    std::cout << "  Memory Bus Width: " << prop.memoryBusWidth << " bits\n";
+    std::cout << "  L2 Cache Size: " << prop.l2CacheSize << " bytes\n";
+    std::cout << "  Registers per SM: " << prop.regsPerMultiprocessor << " registers\n";
+    std::cout << "  Registers per Block: " << prop.regsPerBlock;
+    std::cout << "  Registers per Block: " << prop.warpSize;
+
+    std::cout << std::endl;
+}
+```
+
 ### Roofline Model
 
-[Roofline model](https://en.wikipedia.org/wiki/Roofline_model) helps us visualize the performance limitations of our GEMM kernels. I use the number for RTX 4090 below. 
+[Roofline model](https://en.wikipedia.org/wiki/Roofline_model) helps us visualize the performance limitations of our GEMM kernels. I use the numbers for RTX 4090 below. 
 
 1. **Compute Bound** (flat ceiling): Maximum FLOPS achievable (82.6 TFLOPS for FP32)
 2. **Memory Bound** (diagonal line): Performance limited by memory bandwidth (1,008 GB/s)
@@ -99,6 +138,8 @@ All benchmarks in this post were run on **NVIDIA GeForce RTX 4090**. Below are t
 {: .prompt-tip}
 
 <div id="roofline-viz"></div>
+
+Let's look at some kernels now...
 
 ## Naive Implementation
 
@@ -203,36 +244,6 @@ void sgemm_naive(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
 
 ### Performance Analysis
 
-I ran the naive kernel and PyTorch GEMM kernels on my RTX 4090 to experiment. Let's see the results below:
-
-```
-2025-10-07 07:11:33.403 | INFO     | __main__:run_benchmarks:745 - 📊 Comparison (baseline: PyTorch)
-2025-10-07 07:11:33.404 | INFO     | __main__:run_benchmarks:746 - ────────────────────────────────────────────────────────────────────────────────
-2025-10-07 07:11:33.404 | INFO     | __main__:run_benchmarks:770 - PyTorch             : 1.00× (baseline) 🎯
-2025-10-07 07:11:33.404 | INFO     | __main__:run_benchmarks:773 - CUDA Naive          : 0.01× 🐢
-2025-10-07 07:11:33.404 | INFO     | __main__:run_benchmarks:775 - 
-
-2025-10-07 07:11:33.406 | INFO     | __main__:run_benchmarks:655 - ================================================================================
-2025-10-07 07:11:33.406 | INFO     | __main__:run_benchmarks:656 - 📐 Matrix dimensions: (4096, 4096) @ (4096, 4096) = (4096, 4096)
-2025-10-07 07:11:33.406 | INFO     | __main__:run_benchmarks:661 - 💾 Expected memory usage: 0.20 GB (0.07 GB per matrix)
-2025-10-07 07:11:33.406 | INFO     | __main__:run_benchmarks:664 - ================================================================================
-2025-10-07 07:11:33.406 | INFO     | __main__:run_benchmarks:700 - 
-🔵 Benchmarking PyTorch...
-2025-10-07 07:11:33.599 | INFO     | __main__:run_benchmarks:713 -    ⏱️  Time: 1.6782 ms (min: 1.6128, max: 2.0460)
-2025-10-07 07:11:33.599 | SUCCESS  | __main__:run_benchmarks:716 -    💪 Performance: 81.90 TFLOPS
-2025-10-07 07:11:33.599 | SUCCESS  | __main__:run_benchmarks:717 -    🌊 Bandwidth: 119.97 GB/s
-2025-10-07 07:11:33.599 | INFO     | __main__:run_benchmarks:700 - 
-🔴 Benchmarking CUDA Naive...
-2025-10-07 07:11:58.810 | INFO     | __main__:run_benchmarks:713 -    ⏱️  Time: 222.9623 ms (min: 219.4291, max: 232.7135)
-2025-10-07 07:11:58.810 | SUCCESS  | __main__:run_benchmarks:716 -    💪 Performance: 0.62 TFLOPS
-2025-10-07 07:11:58.810 | SUCCESS  | __main__:run_benchmarks:717 -    🌊 Bandwidth: 0.90 GB/s
-2025-10-07 07:11:58.810 | INFO     | __main__:run_benchmarks:744 - 
-```
-> For M = N = K = 4096:
-> - The naive CUDA kernel is 133× slower than PyTorch (0.01× speedup)
-> - Achieves only 0.76% of PyTorch's TFLOPS
-> - Bandwidth utilization is 133× worse (0.90 GB/s vs 119.97 GB/s)
-{: .prompt-info}
 
 Below are the full benchmark results comparing the naive CUDA kernel against PyTorch's optimized GEMM implementation across different shapes:
 
@@ -240,13 +251,19 @@ Below are the full benchmark results comparing the naive CUDA kernel against PyT
 
 As we can see, the naive implementation is significantly slower than PyTorch's optimized kernel, achieving only ~1% of PyTorch's performance. 
 
+> For M = N = K = 4096:
+> - The naive CUDA kernel is 133× slower than PyTorch (0.01× speedup)
+> - Achieves only 0.76% of PyTorch's TFLOPS
+> - Bandwidth utilization is 133× worse (0.90 GB/s vs 119.97 GB/s)
+{: .prompt-info}
+
 ## Global Memory Coalescing
 
 Let's take a brief digression before we look into why naive kernel is so slow.
 
 ### Concept
 
-Apart from [PMPP book](https://www.amazon.com/Programming-Massively-Parallel-Processors-Hands/dp/0323912311), slides from [an NVidia GTC talk](https://www.nvidia.com/en-us/on-demand/session/gtcfall22-a41101/) is a really good reference to understand the memory hierarchy details and why memory access patterns are the primary consideration when we think about GPU/CUDA performance. For recent architectures, cutlass/cute documentation is really good reference as well.
+Apart from [PMPP book](https://www.amazon.com/Programming-Massively-Parallel-Processors-Hands/dp/0323912311), slides from [an NVidia GTC talk](https://www.nvidia.com/en-us/on-demand/session/gtcfall22-a41101/) is a really good reference to understand the memory hierarchy details and why memory access patterns are the primary consideration when we think about GPU/CUDA performance. For recent architectures, CUTLASS/CUTE documentation is really good reference as well.
 
 #### Some Basics
 
@@ -262,7 +279,7 @@ To understand memory coalescing, we need to understand GPU execution hierarchy:
 **In addition, other things to note about SMs include**:
 - Each SM has limited resources (registers, shared memory)
 - Multiple thread blocks compete for these resources
-- SMs can switch between warps in a **single clock cycle**, enabling **latency hiding** while one warp waits for memory, another executes
+- SMs can switch between warps in a single clock cycle, enabling latency hiding while one warp waits for memory, another executes
 - GEMM efficiency depends on keeping all warp schedulers busy with coalesced memory access patterns
 
 #### Why is Naive Kernel Slow?
@@ -295,7 +312,7 @@ Thread 63 ; Warp 1: Multiplying A[31][0] * B[0][1] = C[31][1]
 > **Problem**: Threads access memory in a scattered, non-coalesced pattern.
 {: .prompt-warning}
 
-Now that we have general hardware fundamentals, we can see that the naive kernel's memory access pattern is inefficient. For each thread in a warp, it is accessing `A[k][0]` values where k is the thread id in a warp. When threads in a warp access scattered memory locations, each access requires a separate memory transaction. It is totally solvable by memory coalescing such that we restructure the thread-to-output mapping so threads in the same warp access consecutive memory locations, enabling the hardware to combine multiple accesses into a single transaction.
+We can see that the naive kernel's memory access pattern is inefficient. For each thread in a warp, it is accessing `A[k][0]` values where k is the thread id in a warp. When threads in a warp access scattered memory locations, each access requires a separate memory transaction. It is solvable by memory coalescing such that we restructure the thread-to-output mapping so threads in the same warp access consecutive memory locations, enabling the hardware to combine multiple accesses into a single transaction.
 
 Turns out the only change we need is to swap % and / across row and col calculations for C.
 
@@ -317,7 +334,7 @@ Let's visualize how the coalesced kernel accesses memory during matrix multiplic
 
 ### Kernel
 
-```cuda
+```c
 template <const uint block_size>
 __global__ void sgemm_global_mem_coalesce_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
                                                  float alpha, const float *matrix_a,
@@ -352,39 +369,11 @@ __global__ void sgemm_global_mem_coalesce_kernel(int num_rows_a, int num_cols_b,
 
 ### Performance Analysis
 
+Below are the full benchmark results comparing the naive + coallesced memory access CUDA kernel against PyTorch's optimized GEMM implementation across different shapes:
+
+![Global coalesced](/assets/explore_gemm_global_coalesced.png)
+
 Just like the naive version, we ran a benchmark for N = M = K = 4096 to get the FLOPs and memory bandwidth numbers.
-
-```
-────────────────────────────────────────────────────────────────────────────────
-2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:745 - 📊 Comparison (baseline: PyTorch)
-2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:746 - ────────────────────────────────────────────────────────────────────────────────
-2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:770 - PyTorch             : 1.00× (baseline) 🎯
-2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:773 - CUDA Naive          : 0.01× 🐢
-2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:773 - CUDA Coalesced      : 0.07× 🐢
-2025-10-07 10:41:26.466 | INFO     | __main__:run_benchmarks:775 - 
-
-2025-10-07 10:41:26.468 | INFO     | __main__:run_benchmarks:655 - ================================================================================
-2025-10-07 10:41:26.468 | INFO     | __main__:run_benchmarks:656 - 📐 Matrix dimensions: (4096, 4096) @ (4096, 4096) = (4096, 4096)
-2025-10-07 10:41:26.468 | INFO     | __main__:run_benchmarks:661 - 💾 Expected memory usage: 0.20 GB (0.07 GB per matrix)
-2025-10-07 10:41:26.468 | INFO     | __main__:run_benchmarks:664 - ================================================================================
-2025-10-07 10:41:26.469 | INFO     | __main__:run_benchmarks:700 - 
-🔵 Benchmarking PyTorch...
-2025-10-07 10:41:26.663 | INFO     | __main__:run_benchmarks:713 -    ⏱️  Time: 1.6991 ms (min: 1.6189, max: 1.9333)
-2025-10-07 10:41:26.663 | SUCCESS  | __main__:run_benchmarks:716 -    💪 Performance: 80.89 TFLOPS
-2025-10-07 10:41:26.663 | SUCCESS  | __main__:run_benchmarks:717 -    🌊 Bandwidth: 118.49 GB/s
-2025-10-07 10:41:26.663 | INFO     | __main__:run_benchmarks:700 - 
-🔴 Benchmarking CUDA Naive...
-2025-10-07 10:41:51.896 | INFO     | __main__:run_benchmarks:713 -    ⏱️  Time: 222.4662 ms (min: 219.6237, max: 235.8671)
-2025-10-07 10:41:51.896 | SUCCESS  | __main__:run_benchmarks:716 -    💪 Performance: 0.62 TFLOPS
-2025-10-07 10:41:51.896 | SUCCESS  | __main__:run_benchmarks:717 -    🌊 Bandwidth: 0.90 GB/s
-2025-10-07 10:41:51.896 | INFO     | __main__:run_benchmarks:700 - 
-🟢 Benchmarking CUDA Coalesced...
-2025-10-07 10:41:55.180 | INFO     | __main__:run_benchmarks:713 -    ⏱️  Time: 29.0288 ms (min: 28.4549, max: 29.5383)
-2025-10-07 10:41:55.180 | SUCCESS  | __main__:run_benchmarks:716 -    💪 Performance: 4.73 TFLOPS
-2025-10-07 10:41:55.180 | SUCCESS  | __main__:run_benchmarks:717 -    🌊 Bandwidth: 6.94 GB/s
-2025-10-07 10:41:55.180 | INFO     | __main__:run_benchmarks:744 - 
-────────────────────────────────────────────────────────────────────────────────
-```
 
 > **Throughput:**
 > - 7.63× TFLOPS improvement (0.62 → 4.73 TFLOPS)
@@ -394,11 +383,6 @@ Just like the naive version, we ran a benchmark for N = M = K = 4096 to get the 
 > - 7.71× bandwidth improvement (0.90 → 6.94 GB/s)
 > - Better memory utilization through coalesced access patterns
 {: .prompt-info}
-
-
-Below are the full benchmark results comparing the naive CUDA kernel against PyTorch's optimized GEMM implementation across different shapes:
-
-![Global coalesced](/assets/explore_gemm_global_coalesced.png)
 
 We can see that performance improved but still way slower than the pytorch version.
 
@@ -415,7 +399,7 @@ Before diving into shared memory optimization, let's understand the RTX 4090's m
 
 #### Using the Shared Memory
 
-RTX 4090 has **128 KB of shared memory per SM** that serves as a fast on-chip cache/shared memory. This shared memory is partitioned among thread blocks (each block gets its own chunk), accessible by all threads within a block. With 128 SMs on the RTX 4090, there's a total of **16.4 MB of shared memory** distributed across the chip. Instead of repeatedly reading the same data from slow global memory, as an optimization strategy, we can load tiles (chunks) of matrices A and B into this fast shared memory, compute partial results using the cached tile data with high reuse across multiple threads, then slide these tiles across the matrices to compute the final result—effectively transforming a bandwidth-bound problem into a compute-bound one. Let's look at how this works below:
+RTX 4090 has **128 KB of shared memory per SM** (16MB / 128 SMs) that serves as a fast on-chip cache/shared memory. This shared memory is partitioned among thread blocks (each block gets its own chunk), accessible by all threads within a block. With 128 SMs on the RTX 4090, there's a total of **16.4 MB of shared memory** distributed across the chip. Instead of repeatedly reading the same data from slow global memory, as an optimization strategy, we can load tiles (chunks) of matrices A and B into this fast shared memory, compute partial results using the cached tile data with high reuse across multiple threads, then slide these tiles across the matrices to compute the final result—effectively transforming a bandwidth-bound problem into a compute-bound one. Let's look at how this works below:
 
 <div id="shared-memory-viz"></div>
 
@@ -514,64 +498,27 @@ __global__ void sgemm_shared_mem_kernel(int num_rows_a, int num_cols_b, int num_
 
 ### Performance Analysis
 
+Below are all the results from the benchmarking:
+
+![Kernel with shared mem](/assets/explore_gemm_shared_mem.png)
+
 Running the shared memory kernel for M = N = K = 4096:
-
-```
-────────────────────────────────────────────────────────────────────────────────
-2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:766 - 📊 Comparison (baseline: PyTorch)
-2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:767 - ────────────────────────────────────────────────────────────────────────────────
-2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:791 - PyTorch             : 1.00× (baseline) 🎯
-2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:794 - CUDA Naive          : 0.01× 🐢
-2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:794 - CUDA Coalesced      : 0.06× 🐢
-2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:794 - CUDA Shared Mem     : 0.09× 🐢
-2025-10-08 06:57:47.542 | INFO     | __main__:run_benchmarks:796 -
-
-2025-10-08 06:57:47.544 | INFO     | __main__:run_benchmarks:675 - ================================================================================
-2025-10-08 06:57:47.544 | INFO     | __main__:run_benchmarks:676 - 📐 Matrix dimensions: (4096, 4096) @ (4096, 4096) = (4096, 4096)
-2025-10-08 06:57:47.544 | INFO     | __main__:run_benchmarks:681 - 💾 Expected memory usage: 0.20 GB (0.07 GB per matrix)
-2025-10-08 06:57:47.544 | INFO     | __main__:run_benchmarks:684 - ================================================================================
-2025-10-08 06:57:47.545 | INFO     | __main__:run_benchmarks:721 -
-🔵 Benchmarking PyTorch...
-2025-10-08 06:57:47.743 | INFO     | __main__:run_benchmarks:734 -    ⏱️  Time: 1.7483 ms (min: 1.6170, max: 2.0234)
-2025-10-08 06:57:47.743 | SUCCESS  | __main__:run_benchmarks:737 -    💪 Performance: 78.61 TFLOPS
-2025-10-08 06:57:47.743 | SUCCESS  | __main__:run_benchmarks:738 -    🌊 Bandwidth: 115.16 GB/s
-2025-10-08 06:57:47.743 | INFO     | __main__:run_benchmarks:721 -
-🔴 Benchmarking CUDA Naive...
-2025-10-08 06:58:11.687 | INFO     | __main__:run_benchmarks:734 -    ⏱️  Time: 214.7259 ms (min: 209.7582, max: 226.1811)
-2025-10-08 06:58:11.687 | SUCCESS  | __main__:run_benchmarks:737 -    💪 Performance: 0.64 TFLOPS
-2025-10-08 06:58:11.687 | SUCCESS  | __main__:run_benchmarks:738 -    🌊 Bandwidth: 0.94 GB/s
-2025-10-08 06:58:11.687 | INFO     | __main__:run_benchmarks:721 -
-🟢 Benchmarking CUDA Coalesced...
-2025-10-08 06:58:14.762 | INFO     | __main__:run_benchmarks:734 -    ⏱️  Time: 27.8368 ms (min: 26.9005, max: 29.5887)
-2025-10-08 06:58:14.762 | SUCCESS  | __main__:run_benchmarks:737 -    💪 Performance: 4.94 TFLOPS
-2025-10-08 06:58:14.762 | SUCCESS  | __main__:run_benchmarks:738 -    🌊 Bandwidth: 7.23 GB/s
-2025-10-08 06:58:14.762 | INFO     | __main__:run_benchmarks:721 -
-🟣 Benchmarking CUDA Shared Mem...
-2025-10-08 06:58:17.257 | INFO     | __main__:run_benchmarks:734 -    ⏱️  Time: 22.5301 ms (min: 21.8061, max: 24.0466)
-2025-10-08 06:58:17.257 | SUCCESS  | __main__:run_benchmarks:737 -    💪 Performance: 6.10 TFLOPS
-2025-10-08 06:58:17.257 | SUCCESS  | __main__:run_benchmarks:738 -    🌊 Bandwidth: 8.94 GB/s
-2025-10-08 06:58:17.257 | INFO     | __main__:run_benchmarks:765 -
-────────────────────────────────────────────────────────────────────────────────
-```
 
 > **Performance Improvement:**
 > - **1.24× TFLOPS improvement** over coalesced (4.94 → 6.10 TFLOPS)
 > - **1.24× bandwidth improvement** (7.23 → 8.94 GB/s)
 > - **9.5× faster than naive** (0.64 → 6.10 TFLOPS)
-> - Still only **7.8% of PyTorch's performance**, indicating more optimization needed
+> - Still only **7.8% of PyTorch's performance**
 >
 > **Key Insight:**
 > - Shared memory caching provides modest improvement (~24%) over just coalescing
 > - The relatively small gain suggests we're not yet effectively hiding memory latency
 {: .prompt-info}
 
-Below are all the results from the benchmarking:
-
-![Kernel with shared mem](/assets/explore_gemm_shared_mem.png)
 
 ## Understanding GPU Occupancy
 
-Before diving into more advanced optimizations, we need to understand **occupancy**—a critical metric that determines how well we utilize the GPU's resources.
+Before diving into more advanced optimizations, we need to understand **occupancy**, which determines how well we utilize the GPU's resources.
 
 ### What is Occupancy?
 
@@ -579,65 +526,14 @@ Before diving into more advanced optimizations, we need to understand **occupanc
 
 $$\text{Occupancy} = \frac{\text{Active Warps per SM}}{\text{Maximum Warps per SM}}$$
 
-Here is a really nice diagram from [Modal GPU Glossary](https://modal.com/gpu-glossary/perf/occupancy)
+Here is a really nice diagram and description from [Modal GPU Glossary](https://modal.com/gpu-glossary/perf/occupancy)
 
 ![GPU Glossary occupancy](/assets/explore_gemms_occupancy_modal.png)
 
-For the RTX 4090 (Compute Capability 8.9), below are the relevant device specs:
-
-| Specification | RTX 4090 Value |
-|---------------|----------------|
-| **Registers per Block** | 65,536 |
-| **Max Threads per Block** | 1,024 |
-| **Max Threads per SM** | 1,536 |
-| **Number of SMs** | 128 |
-| **Max Blocks per SM** | 24 |
-| **Shared Memory per SM** | 102,400 bytes (100 KB) |
-| **Shared Memory per Block** | 49,152 bytes (48 KB) |
-
-You can load these details directly using `cudaDeviceProp`:
-
-```cpp
-std::cout << "Number of CUDA devices: " << deviceCount << "\n\n";
-
-for (int i = 0; i < deviceCount; ++i) {
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, i);
-
-    std::cout << "Device " << i << ": " << prop.name << "\n";
-    std::cout << "  Compute capability: " << prop.major << "." << prop.minor << "\n";
-    std::cout << "  Total global memory: " << (prop.totalGlobalMem >> 20) << " MB\n";
-    std::cout << "  Shared memory per block: " << prop.sharedMemPerBlock << " bytes\n";
-    std::cout << "  Shared memory per SM: " << prop.sharedMemPerMultiprocessor << " bytes\n";
-    std::cout << "  Registers per block: " << prop.regsPerBlock << "\n";
-    std::cout << "  Warp size: " << prop.warpSize << "\n";
-    std::cout << "  Max threads per block: " << prop.maxThreadsPerBlock << "\n";
-    std::cout << "  Max threads per SM: " << prop.maxThreadsPerMultiProcessor << "\n";
-    std::cout << "  Number of SMs: " << prop.multiProcessorCount << "\n";
-    std::cout << "  Max blocks per SM: " << prop.maxBlocksPerMultiProcessor << "\n";
-    std::cout << "  Max grid dimensions: ["
-                << prop.maxGridSize[0] << ", "
-                << prop.maxGridSize[1] << ", "
-                << prop.maxGridSize[2] << "]\n";
-    std::cout << "  Max threads dim (block): ["
-                << prop.maxThreadsDim[0] << ", "
-                << prop.maxThreadsDim[1] << ", "
-                << prop.maxThreadsDim[2] << "]\n";
-    std::cout << "  Clock rate: " << prop.clockRate / 1000 << " MHz\n";
-    std::cout << "  Memory Clock Rate: " << prop.memoryClockRate / 1000 << " MHz\n";
-    std::cout << "  Memory Bus Width: " << prop.memoryBusWidth << " bits\n";
-    std::cout << "  L2 Cache Size: " << prop.l2CacheSize << " bytes\n";
-    std::cout << "  Registers per SM: " << prop.regsPerMultiprocessor << " registers\n";
-    std::cout << "  Registers per Block: " << prop.regsPerBlock;
-    std::cout << "  Registers per Block: " << prop.warpSize;
-
-    std::cout << std::endl;
-}
-```
 
 ### Why Occupancy Matters
 
-GPUs hide memory latency through **massive parallelism**. When one warp waits for memory, the SM immediately switches to execute another warp. Occupancy does not enable performance directly but primarily through latency hiding. Higher occupancy effectively means more warps available for compute and we can hide latency more effectively. If occupancy is low, hardware sits idle waiting for data. However, **occupancy is not everything**. A kernel with 100% occupancy but poor memory access patterns can still perform poorly since that could lead to lower register/shared memory per thread. So, it is important to take into account other factors apart from just optimizing for occupancy. 
+GPUs hide memory latency through massive parallelism. When one warp waits for memory, the SM immediately switches to execute another warp. Occupancy does not enable performance directly but primarily through latency hiding. Higher occupancy effectively means more warps available for compute and we can hide latency more effectively. If occupancy is low, hardware sits idle waiting for data. However, **occupancy is not everything**. A kernel with 100% occupancy but poor memory access patterns can still perform poorly since that could lead to lower register/shared memory per thread (covered later). So, it is important to take into account other factors apart from just optimizing for occupancy. 
 
 #### Key Considerations
 
@@ -677,13 +573,13 @@ Lastly, number of threads per block affects how many blocks can fit on an SM and
 
 Let's analyze our current shared memory kernel:
 
-```cuda
+```c
 constexpr uint BLOCKSIZE = 32;
 dim3 block_dim(BLOCKSIZE * BLOCKSIZE);  // 1024 threads per block
 ```
 
 **Shared memory usage:**
-```cuda
+```c
 __shared__ float tile_a[32 * 32];  // 4 KB
 __shared__ float tile_b[32 * 32];  // 4 KB
 // Total: 8 KB per block
@@ -714,12 +610,9 @@ Now, looking at the summary - it provides some ideas on why the kernel is still 
 
 ![ncu summary shared mem](/assets/explore_gemm_summary_shared_mem_ncu.png)
 
-Next, looking at the instruction mix, we can see that LDS dominates the instruction mix -- LDS = load within shared memory window -- **which is not good.**
+Next, looking at the instruction mix, we can see that LDS dominates the instruction mix, LDS = load within shared memory window, **which is not good.**
 
 ![LDS Too much](/assets/explore_gemm_lds_too_much.png)
-
-> Use Tip I Found: NVIDIA provides [`cudaOccupancyMaxActiveBlocksPerMultiprocessor()`](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__HIGHLEVEL.html#group__CUDART__HIGHLEVEL_1g5a5d67a3c907371559ba692195e8a38c) to calculate theoretical occupancy at runtime. Most profilers (Nsight Compute) also report achieved occupancy.
-{: .prompt-tip}
 
 ## 1D Block Tiling
 
@@ -732,7 +625,7 @@ Next, instead of each thread computing exactly one output element of the tile, e
 > In essence, we are trying to improve the arithmetic intensity of the kernel, which effectively means computing more results per thread with the same loaded data i.e. increase FLOPS/byte
 {: .prompt-tip}
 
-To accomplish this, we effectively just add TM accumulators i.e. 
+To accomplish this, we effectively just add TM accumulators to accumulated TM outputs per thread i.e. 
 
 ```c
 float thread_results[TM] = {0.0f};
@@ -750,16 +643,18 @@ for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
 
 ```
 
+Let's look at a visualization: 
+
 <div id="1d-tiling-viz"></div>
 
 ### Kernel
 
-Full listing below:
+We now evolve our kernel to introduce paramters that we will need later. We expand on the existing block_size to make them configurable such BM, BN, BK, etc. They represent the block sizes we are operating on. In addition, we add TM as a parameter that determines, how many values calculated per thread! Full listing below:
 
 {: .prompt-info}
 > NOTE: [Simon Boehm's Kernels](https://github.com/siboehm/SGEMM_CUDA/blob/master/src/kernels/4_kernel_1D_blocktiling.cuh) did not handle bounds check i.e. non block multiple kernels will be incorrect. I tried to add the bounds check here but we can see that it starts to make the code fairly complex. We will the bounds check as long as we can but will drop it later sections to focus on core concepts.
 
-```cuda
+```c
 template <const int BM, const int BN, const int BK, const int TM>
 __global__ void sgemm_blocktiling_1d_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
                                             float alpha, const float *matrix_a,
@@ -876,12 +771,9 @@ void sgemm_blocktiling_1d(const torch::Tensor &matrix_a, const torch::Tensor &ma
 
 ### Performance Analysis
 
-```
-🟠 Benchmarking CUDA 1D Block Tiling...
-2025-10-11 07:30:59.509 | INFO     | __main__:run_benchmarks:755 -    ⏱️  Time: 7.4340 ms (min: 7.4025, max: 7.4721)
-2025-10-11 07:30:59.509 | SUCCESS  | __main__:run_benchmarks:758 -    💪 Performance: 18.49 TFLOPS
-2025-10-11 07:30:59.509 | SUCCESS  | __main__:run_benchmarks:759 -    🌊 Bandwidth: 27.08 GB/s
-```
+Let's look at overall performance across several batch sizes
+
+![1D block tiling performance](/assets/explore_gemm_id_blocktiling_performance.png)
 
 > **Performance Improvement:**
 > - **3.03× TFLOPS improvement** over shared memory (6.10 → 18.49 TFLOPS)
@@ -891,7 +783,7 @@ void sgemm_blocktiling_1d(const torch::Tensor &matrix_a, const torch::Tensor &ma
 >
 > **Key Insight:**
 > - Register-level tiling provides **3× improvement** by increasing arithmetic intensity
-> - By caching `b_tmp` in registers and reusing it TM times, we reduce shared memory traffic by ~37.5%
+> - By caching `b_tmp` in registers and reusing it TM times, we reduce shared memory traffic
 > - Each thread now computes TM=8 outputs instead of 1, amortizing memory access costs
 {: .prompt-info}
 
@@ -905,9 +797,6 @@ void sgemm_blocktiling_1d(const torch::Tensor &matrix_a, const torch::Tensor &ma
 | **1D Block Tiling** | **7.43** | **18.49** | **21.8%** | **28.9×** |
 | PyTorch  | 1.62 | 84.62 | 100% | 132.1× |
 
-Let's look at overall performance across several batch sizes
-
-![1D block tiling performance](/assets/explore_gemm_id_blocktiling_performance.png)
 
 ### NCU profiling
 
@@ -949,20 +838,19 @@ The shared memory bandwidth used is also showed in the memory charts. See the co
 
 ### Concept
 
-2D block tiling extends the 1D approach by having each thread compute a **TM × TN tile** of outputs instead of just TM outputs. This creates bidirectional register reuse:
+2D tiling enables each thread to compute TM × TN outputs (e.g., 8 × 8 = 64 outputs) instead of just TM outputs (e.g., 8 outputs) in 1D tiling, resulting in TN× more computation per thread with more register usage. Of course, we would need to keep within the register memory bounds but this is how we can increase arithmetic intensity further by reusing shared memory. This creates bidirectional register reuse:
+
 - Each value from A (loaded into `register_m[TM]`) is reused across TN computations
 - Each value from B (loaded into `register_n[TN]`) is reused across TM computations
-- This forms an "outer product" pattern and increases arithmetic intensity
+- This forms an "outer product" pattern at the register level
 
-2D tiling enables each thread to compute TM × TN outputs (e.g., 8 × 8 = 64 outputs) instead of just TM outputs (e.g., 8 outputs) in 1D tiling, resulting in TN× more computation per thread with more register usage. Of course, we would need to keep within the register memory bounds but this is how we can increase arithmetic intensity further by reusing shared memory. 
 
-In the code, I implemented two separate kernels such that a **Main Kernel** (No Bounds Checking) handles all **interior blocks** where every memory access is guaranteed to be in-bounds -- which helps with zero thread divergence since all threads can execute the same logic. An **Edge Kernel** (With Bounds Checking) handles **boundary blocks** at the right edge, bottom edge, and corner. This structures the code well but the code is starting to look fairly complex at this point.
+In the code, I implemented two separate kernels such that a **Main Kernel** (No Bounds Checking) handles all **interior blocks** where every memory access is guaranteed to be in-bounds, helping with zero thread divergence since all threads can execute the same logic. An **Edge Kernel** (With Bounds Checking) handles **boundary blocks** at the right edge, bottom edge, and corner. This structures the code well but the code is starting to look fairly complex at this point.
 
 ### Kernel
 
-We show just the main kernel -- I had Claude put a bunch of comments on this kernel so steps are clear. 
 
-```cuda
+```c
 template <const int BM, const int BN, const int BK, const int TM, const int TN>
 __global__ void sgemm_blocktiling_2d_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
                                             float alpha, const float *matrix_a,
@@ -1072,12 +960,12 @@ b[3] = 3;
 b[4] = 4;
 ```
 
-by putting #pragma unroll directive right before the loop. The good thing about the unrolled version is that it involves less processing load for the processor. 
+by putting #pragma unroll directive right before the loop. I mostly used it since I found it in bunch of other example kernels I saw. 
 
 
 ### Caller
 
-```cuda
+```c
 
 void sgemm_blocktiling_2d(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
                           torch::Tensor &output_matrix, float alpha, float beta)
@@ -1153,7 +1041,7 @@ As next steps, when we check our kernel in Nsight compute, we get more pointers 
 
 ### Concept
 
-As we have realized already, GEMMs are **bandwidth-bound**, meaning their performance is limited by memory transfer speed rather than compute throughput on GPUs. Another optimization that can increase effective bandwidth utilization is to use **vectorized memory operations**.
+As we have realized already, GEMMs are **bandwidth-bound**, meaning their performance is bottlenecked by memory transfer speed. Another optimization that can increase effective bandwidth utilization is to use **vectorized memory operations**.
 
 CUDA provides built-in vector types (`float2`, `float4`, `int2`, `int4`) that enable loading or storing multiple values in a single instruction. Instead of issuing four separate 32-bit loads, a single `float4` load can fetch **128 bits (16 bytes)** at once.
 
@@ -1162,7 +1050,7 @@ CUDA provides built-in vector types (`float2`, `float4`, `int2`, `int4`) that en
 
 In our 2D block tiling kernel, each thread loads elements from shared memory to registers. Currently, these loads happen as individual 32-bit transactions:
 
-```cuda
+```c
 // Current approach: scalar loads
 for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
     // Load TM elements from tile_a into registers
@@ -1181,7 +1069,7 @@ for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
 
 If `TM=8`, we're issuing 8 separate load instructions. With vectorization, we can combine these into 2 loads of `float4`. Let's see how this works:
 
-```cuda
+```c
 // Vectorized approach: load 4 elements at once
 for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
     // Load 8 elements from tile_a using 2× float4 instead of 8× float
@@ -1198,8 +1086,6 @@ for (uint dot_idx = 0; dot_idx < BK; ++dot_idx) {
 }
 ```
 
-### How Vector Loads Work
-
 When you load a `float4`, the compiler emits a **128-bit vectorized instruction** (`LDG.E.128`) instead of four 32-bit loads (`LDG.E`):
 
 | Load Type | Size | Instruction | Elements | Instructions Needed |
@@ -1213,7 +1099,7 @@ When you load a `float4`, the compiler emits a **128-bit vectorized instruction*
 {: .prompt-warning}
 
 
-```cuda
+```c
 /*
 - 1 vectorized load instruction
 - Guaranteed single 128-bit memory transaction
@@ -1233,7 +1119,7 @@ float d = vec.w;
 
 ### Kernel
 
-```cuda
+```c
 template <const int BM, const int BN, const int BK, const int TM, const int TN>
 __global__ void sgemm_vectorize_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
                                        float alpha, const float *matrix_a,
@@ -1351,6 +1237,10 @@ The vectorized kernel shows **mixed results** — performance **degrades** compa
 > - **59.7× faster than naive** (0.653 → 39.00 TFLOPS)
 {: .prompt-info}
 
+#### Performance Across Matrix Sizes
+
+![Vectorized performance](/assets/explore_gemm_performance_vectorized.png)
+
 **Comparison vs Previous Kernels (4096×4096):**
 
 | Kernel | Time (ms) | TFLOPS | Bandwidth (GB/s) | vs PyTorch | Speedup over Naive |
@@ -1363,9 +1253,9 @@ The vectorized kernel shows **mixed results** — performance **degrades** compa
 | **Vectorized** | **3.52** | **39.00** | **57.14** | **46.3%** | **59.7×** |
 | PyTorch | 1.63 | 84.23 | 123.38 | 100% | 129.0× |
 
-#### Performance Across Matrix Sizes
 
-![Vectorized performance](/assets/explore_gemm_performance_vectorized.png)
+
+Nice! We are at almost 60% for the peak performance for 4096 x 4096!
 
 
 ## Warp Tiling
@@ -1381,7 +1271,7 @@ As we have discussed previously, a **warp** is the fundamental execution unit in
 ![CUTLASS Memory Hierarchy](/assets/explore_gemm_cutlass_hierarchy.png)
 *Source: [NVIDIA CUTLASS Blog](https://developer.nvidia.com/blog/cutlass-linear-algebra-cuda/)*
 
-To take advantage of the this hierarchy, warp provide another layer of tiling such that while loading data from shared memory into registers, we do it at warp tile level. In addition, each thread in the warp then calculates its own small fraction of computation. 
+To take advantage of the this hierarchy, warps can offer another layer of tiling such that while loading data from shared memory into registers, we do it at warp tile level. In addition, each thread in the warp then calculates its own small fraction of computation. 
 
 ![Nvidia blog warp tiling](/assets/explore_gemms_warp_tiling_nvidia_blog_2.png)
 
@@ -1410,7 +1300,7 @@ for (k = 0; k < K; k += BK) {
 
 ```
 
-In the later sections, we will look into tensorcores and this is key requirement for us to get there. But let's first look how this works through below visualization:
+In the later sections, we will look into tensorcores and this is a key requirement for us to get there. But let's first look how this works through below visualization:
 
 <div id="warp-tiling-viz"></div>
 
@@ -1422,7 +1312,7 @@ In the later sections, we will look into tensorcores and this is key requirement
 {: .prompt-info}
 > NOTE: I have removed the non-block size mulitple kernel handling below since the code is getting fairly complicated with multiple layers of nesting for different levels of tiles. I will continue to ignore tail handling in subsequent sections. 
 
-```cuda
+```c
 constexpr int WARPSIZE = 32;
 
 /*
