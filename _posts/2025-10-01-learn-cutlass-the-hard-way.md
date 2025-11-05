@@ -2066,11 +2066,11 @@ Next, I wondered about asynchronous loads and stores while we overlap compute. T
 
 ## CUTLASS
 
-### **Ugh! might as well write [CUTLASS](https://docs.nvidia.com/cutlass/media/docs/cpp/quickstart.html) Kernels!**
+### **Ugh! might as well write [CUTLASS](https://docs.nvidia.com/cutlass/media/docs/cpp/quickstart.html) at this point!**
 
 ![Ugh](https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExY3J6a2J6emxpeTMxZnN5N3N5YmI1MGhrNzRrbnRhZWcyYWp4NjhhdyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/BY8ORoRpnJDXeBNwxg/giphy.gif)
 
-At this point, we have the foundational understanding of how we have to utilize the hardware to get performance out of our GEMMs. This post was focussed on an older version of consumer grade GPU. It is much harder as we get to Hopper and Blackwell. That is where the abstractions that CUTLASS provides are really useful. 
+Now that we have the foundational understanding of how we have to utilize the hardware to get performance out of our GEMMs. This post is focussed on an older version of consumer grade GPU. It is much harder as we get to Hopper and Blackwell. That is where the abstractions that CUTLASS provides are really useful. 
 
 ### What is CUTLASS
 
@@ -2475,16 +2475,23 @@ I evaluated 20 different CUTLASS configurations across various tiles sizes to id
 > **Larger Matrices (4096-8192)**: Much better performance with upto 15% speedup!
 {: .prompt-info}
 
+Triton also has [persistent kernel implementation](https://triton-lang.org/main/getting-started/tutorials/09-persistent-matmul.html) in the tutorials. So, next I also added it to benchmark/autotune script to test it against autotuned CUTLASS kernel, and PyTorch. Performance is pretty bad: may be it is not fully optimized/autotuned for hardware I am running it on or I am missing something obvious. At this point though, I was ready to close out this post. But, fwiw here are the results:
+
+![Autotune results with triton](/assets/explore_gemms_autotune_results_with_triton.png)
+
 ## Epilogue
 
-### More to explore
+Writing this post was a pretty rewarding experience for me to get beyond the cuda tutorial hell of *"oh...shared memory cache.. blah blah"*. I think it helped be appreciate why writing optimal GEMMs continues to be hard problem and I have barely scratched the surface. There is so much more to explore here and I might write more when I get to it. It took me about a month and a half to explore, write the kernels, and the post (with PyTorch Conference somewhere in there as well). Nevertheless, for the curious reader, the few things I wanted to explore next were:
 
-- Modern Hopper and Blackwell Hardware
-- FP8 and FP4 variants
-- Other kernels types such as Grouped GEMM
-
+- Run it on Hopper and Blackwell Hardware
+- FP8 variant
+- CUTLASS 3.x and 4.x API (this is just boiler plate and I could just LLM it but I found 2.x version more intuitive for now)
+- CUTE python DSL
+- Other kernels such as Grouped GEMM
 
 ## References
+
+Here is full list of resources and links that I skimmed, referred, read, or watched. For anything cuda though, I feel NVidia Developer Blog and GTC talks were the most helpful!
 
 - [Simon Boehm's CUDA Matrix Multiplication](https://siboehm.com/articles/22/CUDA-MMM) - Original blog post that inspired this article
 - [Simon's GEMM Repo](https://github.com/siboehm/SGEMM_CUDA/tree/master)
@@ -2521,6 +2528,17 @@ I evaluated 20 different CUTLASS configurations across various tiles sizes to id
 - [Tutorial: Matrix Transpose in CUTLASS](https://research.colfax-intl.com/tutorial-matrix-transpose-in-cutlass/)
 - [Introduction to CUDA Programming and Performance Optimization](https://www.nvidia.com/en-us/on-demand/session/gtc24-s62191/)
 - [CUTLASS Tutorial: Fast Matrix-Multiplication with WGMMA on NVIDIA® Hopper™ GPUs](https://research.colfax-intl.com/cutlass-tutorial-wgmma-hopper/)
+- [CUDA Performance](https://docs.google.com/presentation/d/1cvVpf3ChFFiY4Kf25S4e4sPY6Y5uRUO-X-A4nJ7IhFE/edit?slide=id.g2bd7b45cc89_0_59#slide=id.g2bd7b45cc89_0_59)
+- [CUTLASS Tutorial: Writing GEMM Kernels Using Tensor Memory For NVIDIA® Blackwell GPUs](https://research.colfax-intl.com/cutlass-tutorial-writing-gemm-kernels-using-tensor-memory-for-nvidia-blackwell-gpus/)
+- [CUDA Shared Memory Swizzling](https://leimao.github.io/blog/CUDA-Shared-Memory-Swizzling/)
+- [Understanding CuTe Swizzling - The Math Behind 32B, 64B, and 128B Patterns](https://veitner.bearblog.dev/understanding-cute-swizzling-the-math-behind-32b-64b-and-128b-patterns/)
+- [Advanced Performance Optimization in CUDA](https://www.nvidia.com/en-us/on-demand/session/gtc24-s62192/)
+- [Notes About Nvidia GPU Shared Memory Banks](https://feldmann.nyc/blog/smem-microbenchmarks)
+- [Boosting CUDA Efficiency with Essential Techniques for New Developers](https://developer.nvidia.com/blog/boosting-cuda-efficiency-with-essential-techniques-for-new-developers/)
+- [Developing Optimal CUDA Kernels on Hopper Tensor Cores](https://www.nvidia.com/en-us/on-demand/session/gtcspring23-s51413/)
+- [PROGRAMMING TENSOR CORES](https://developer.download.nvidia.com/video/gputechconf/gtc/2019/presentation/s9593-cutensor-high-performance-tensor-operations-in-cuda-v2.pdf)
+- [Outperforming cuBLAS on H100: a Worklog](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog)
+- [CUDA Techniques to Maximize Compute and Instruction Throughput](https://www.nvidia.com/en-us/on-demand/session/gtc25-s72685/)
 
 
 <script src="/assets/js/gemm-optimization-visualizer.js"></script>
