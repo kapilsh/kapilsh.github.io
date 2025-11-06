@@ -784,7 +784,7 @@ class Tiling1DViz {
                         <span>b_tmp (Register)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-box" style="background: #E91E63;"></div>
+                        <div class="legend-box" style="background: #FF6B6B;"></div>
                         <span>Computing</span>
                     </div>
                     <div class="legend-item">
@@ -937,7 +937,7 @@ class Tiling1DViz {
                         // Compute 1 output
                         const prevCellC = this.prevMatrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
                         if (prevCellC) {
-                            prevCellC.style.background = '#E91E63'; // Computing
+                            prevCellC.style.background = '#FF6B6B'; // Computing
                         }
 
                         await sleep(80);
@@ -985,12 +985,12 @@ class Tiling1DViz {
                         const cellC = this.matrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
 
                         // Show b_tmp being reused
-                        regN.style.background = '#E91E63';
+                        regN.style.background = '#FF6B6B';
                         regIndex.textContent = `×${tm + 1}`;
-                        regIndex.style.color = '#E91E63';
+                        regIndex.style.color = '#FF6B6B';
 
                         if (cellC) {
-                            cellC.style.background = '#E91E63'; // Computing
+                            cellC.style.background = '#FF6B6B'; // Computing
                         }
 
                         await sleep(100);
@@ -1078,7 +1078,7 @@ class Tiling1DPipelineViz {
                             <div style="color: #999;">Thread tiles: TM=${this.TM} per thread</div>
                         </div>
                         <div style="text-align: center; padding: 10px; background: #1a1a1a; border-radius: 6px;">
-                            <div style="font-weight: 600; color: #E91E63; margin-bottom: 5px;">4. CUDA Cores</div>
+                            <div style="font-weight: 600; color: #FF6B6B; margin-bottom: 5px;">4. CUDA Cores</div>
                             <div style="color: #999;">FMA operations</div>
                         </div>
                     </div>
@@ -1208,12 +1208,12 @@ class Tiling1DPipelineViz {
                 </div>
 
                 <!-- Arrow Down -->
-                <div style="text-align: center; color: #E91E63; font-size: 32px; height: 20px;">↓</div>
+                <div style="text-align: center; color: #FF6B6B; font-size: 32px; height: 20px;">↓</div>
 
                 <!-- Stage 4: CUDA Cores -->
-                <div style="background: #1a1a1a; padding: 20px; border-radius: 8px; border: 2px solid #E91E63;">
+                <div style="background: #1a1a1a; padding: 20px; border-radius: 8px; border: 2px solid #FF6B6B;">
                     <div style="text-align: center; margin-bottom: 15px;">
-                        <div style="font-size: 16px; font-weight: 700; color: #E91E63; margin-bottom: 5px;">
+                        <div style="font-size: 16px; font-weight: 700; color: #FF6B6B; margin-bottom: 5px;">
                             4. CUDA Cores - Computation
                         </div>
                         <div style="font-size: 12px; color: #999;">FMA: result[i] += thread_tile_a[i] * b_tmp</div>
@@ -1221,7 +1221,7 @@ class Tiling1DPipelineViz {
                     <div style="display: flex; justify-content: center; align-items: center; gap: 20px;">
                         <div id="cudaCores" style="display: flex; gap: 10px;"></div>
                     </div>
-                    <div style="margin-top: 15px; text-align: center; font-size: 11px; color: #E91E63;">
+                    <div style="margin-top: 15px; text-align: center; font-size: 11px; color: #FF6B6B;">
                         <strong>Each thread executes TM=${this.TM} FMA operations per K iteration</strong>
                     </div>
                 </div>
@@ -1332,7 +1332,7 @@ class Tiling1DPipelineViz {
             await sleep(900);
 
             // Step 4: Compute FMA operations
-            this.updateStats(`<strong style="color: #E91E63;">4. Compute</strong>: ${this.TM} FMA ops (b_tmp reused ${this.TM}×)`);
+            this.updateStats(`<strong style="color: #FF6B6B;">4. Compute</strong>: ${this.TM} FMA ops (b_tmp reused ${this.TM}×)`);
             await this.computeCudaCores(kIter);
             await sleep(700);
 
@@ -1512,7 +1512,7 @@ class Tiling1DPipelineViz {
 
         for (let i = 0; i < this.TM; i++) {
             const core = document.querySelector(`[data-core="${i}"]`);
-            core.style.background = '#E91E63';
+            core.style.background = '#FF6B6B';
             core.style.border = '2px solid #F06292';
             core.textContent = 'FMA';
 
@@ -1633,7 +1633,7 @@ class Tiling2DViz {
                         <span>register_n[TN] (from tile_b)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-box" style="background: #E91E63;"></div>
+                        <div class="legend-box" style="background: #FF6B6B;"></div>
                         <span>Computing Outer Product</span>
                     </div>
                     <div class="legend-item">
@@ -1812,12 +1812,12 @@ class Tiling2DViz {
                     // Highlight registers being used
                     const regM = document.getElementById(`reg2d-m-${i}`);
                     const regN = document.getElementById(`reg2d-n-${j}`);
-                    regM.style.background = '#E91E63';
-                    regN.style.background = '#E91E63';
+                    regM.style.background = '#FF6B6B';
+                    regN.style.background = '#FF6B6B';
 
                     // Highlight output cell
                     const cellC = this.matrixC.querySelector(`[data-row="${i}"][data-col="${j}"]`);
-                    if (cellC) cellC.style.background = '#E91E63';
+                    if (cellC) cellC.style.background = '#FF6B6B';
 
                     await sleep(50);
 
@@ -2558,7 +2558,7 @@ class WarpTilingViz {
                             <div style="font-size: 12px; color: #9C27B0; margin-bottom: 8px;">register_m[WM]</div>
                             <div id="warpRegM" style="display: flex; flex-direction: column; gap: 8px;"></div>
                         </div>
-                        <div style="font-size: 30px; color: #E91E63;">⊗</div>
+                        <div style="font-size: 30px; color: #FF6B6B;">⊗</div>
                         <div style="text-align: center;">
                             <div style="font-size: 12px; color: #00BCD4; margin-bottom: 8px;">register_n[WN]</div>
                             <div id="warpRegN" style="display: flex; gap: 8px;"></div>
@@ -2741,14 +2741,14 @@ class WarpTilingViz {
                     // Highlight the registers being used
                     const regM = document.getElementById(`warp-reg-m-${i}`);
                     const regN = document.getElementById(`warp-reg-n-${j}`);
-                    if (regM) regM.style.background = '#E91E63';
-                    if (regN) regN.style.background = '#E91E63';
+                    if (regM) regM.style.background = '#FF6B6B';
+                    if (regN) regN.style.background = '#FF6B6B';
 
                     // Highlight output cell
                     const cellOut = this.threadOutput.querySelector(`[data-row="${i}"][data-col="${j}"]`);
                     if (cellOut) {
-                        cellOut.style.background = '#E91E63';
-                        cellOut.style.borderColor = '#E91E63';
+                        cellOut.style.background = '#FF6B6B';
+                        cellOut.style.borderColor = '#FF6B6B';
                     }
 
                     await sleep(80);
@@ -2862,8 +2862,8 @@ class WmmaTensorcoreViz {
                 </div>
 
                 <div class="viz-info" style="margin-bottom: 15px;">
-                    <div style="padding: 12px; background: #1a1a1a; border-radius: 6px; margin-top: 10px; border: 2px solid #E91E63;">
-                        <strong style="color: #E91E63;">Real Kernel Dimensions:</strong>
+                    <div style="padding: 12px; background: #1a1a1a; border-radius: 6px; margin-top: 10px; border: 2px solid #FF6B6B;">
+                        <strong style="color: #FF6B6B;">Real Kernel Dimensions:</strong>
                         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 8px; font-size: 12px;">
                             <div style="padding: 8px; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #FF9800;">
                                 <div style="color: #999; font-size: 10px;">Block Tile</div>
@@ -2877,9 +2877,9 @@ class WmmaTensorcoreViz {
                                 <div style="color: #999; font-size: 10px;">Warp Tiles</div>
                                 <div style="color: #00BCD4; font-weight: 600;">${this.WARP_ROW_TILES}×${this.WARP_COL_TILES} WMMA ops per warp</div>
                             </div>
-                            <div style="padding: 8px; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #E91E63;">
+                            <div style="padding: 8px; background: #2a2a2a; border-radius: 4px; border-left: 3px solid #FF6B6B;">
                                 <div style="color: #999; font-size: 10px;">WMMA Tile</div>
-                                <div style="color: #E91E63; font-weight: 600;">${this.WMMA_M}×${this.WMMA_N}×${this.WMMA_K}</div>
+                                <div style="color: #FF6B6B; font-weight: 600;">${this.WMMA_M}×${this.WMMA_N}×${this.WMMA_K}</div>
                             </div>
                         </div>
                         <div style="font-size: 11px; color: #999; margin-top: 10px; text-align: center; font-style: italic;">
@@ -2900,7 +2900,7 @@ class WmmaTensorcoreViz {
                         <span>Warp Processing Area</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-box" style="background: #E91E63;"></div>
+                        <div class="legend-box" style="background: #FF6B6B;"></div>
                         <span>WMMA Fragment (16×16)</span>
                     </div>
                     <div class="legend-item">
@@ -2974,14 +2974,14 @@ class WmmaTensorcoreViz {
 
                 <!-- Arrow down -->
                 <div style="font-size: 30px; color: #FFA726;">↓</div>
-                <div style="font-size: 11px; color: #E91E63; font-weight: 600; margin-top: -25px;">
+                <div style="font-size: 11px; color: #FF6B6B; font-weight: 600; margin-top: -25px;">
                     TensorCore executes D = A × B + C (16×16×16 matrix multiply-accumulate)
                 </div>
 
                 <!-- Level 3: TensorCore Operation -->
-                <div style="display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 20px; background: #2a2a2a; border-radius: 8px; border: 2px solid #E91E63;">
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 20px; background: #2a2a2a; border-radius: 8px; border: 2px solid #FF6B6B;">
                     <div style="text-align: center;">
-                        <div style="font-size: 16px; color: #E91E63; margin-bottom: 10px; font-weight: 600;">
+                        <div style="font-size: 16px; color: #FF6B6B; margin-bottom: 10px; font-weight: 600;">
                             TensorCore WMMA Operation (${this.WMMA_M}×${this.WMMA_N}×${this.WMMA_K})
                         </div>
                         <div style="font-size: 11px; color: #999; margin-bottom: 8px;">
@@ -2990,15 +2990,15 @@ class WmmaTensorcoreViz {
                     </div>
                     <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap; justify-content: center;">
                         <div style="text-align: center;">
-                            <div style="font-size: 12px; color: #E91E63; margin-bottom: 8px;">A_frag (${this.WMMA_M}×${this.WMMA_K})</div>
+                            <div style="font-size: 12px; color: #FF6B6B; margin-bottom: 8px;">A_frag (${this.WMMA_M}×${this.WMMA_K})</div>
                             <div id="wmmaTcA"></div>
                         </div>
-                        <div style="font-size: 24px; color: #E91E63;">×</div>
+                        <div style="font-size: 24px; color: #FF6B6B;">×</div>
                         <div style="text-align: center;">
-                            <div style="font-size: 12px; color: #E91E63; margin-bottom: 8px;">B_frag (${this.WMMA_K}×${this.WMMA_N})</div>
+                            <div style="font-size: 12px; color: #FF6B6B; margin-bottom: 8px;">B_frag (${this.WMMA_K}×${this.WMMA_N})</div>
                             <div id="wmmaTcB"></div>
                         </div>
-                        <div style="font-size: 24px; color: #E91E63;">+</div>
+                        <div style="font-size: 24px; color: #FF6B6B;">+</div>
                         <div style="text-align: center;">
                             <div style="font-size: 12px; color: #00BCD4; margin-bottom: 8px;">ACC_frag (${this.WMMA_M}×${this.WMMA_N})</div>
                             <div id="wmmaTcAcc"></div>
@@ -3080,7 +3080,7 @@ class WmmaTensorcoreViz {
                 overlay.style.left = `${tc * tileWidth}px`;
                 overlay.style.width = `${tileWidth}px`;
                 overlay.style.height = `${tileHeight}px`;
-                overlay.style.border = '2px solid #E91E63';
+                overlay.style.border = '2px solid #FF6B6B';
                 overlay.style.borderRadius = '2px';
                 overlay.style.pointerEvents = 'none';
                 overlay.style.opacity = '0.6';
@@ -3093,7 +3093,7 @@ class WmmaTensorcoreViz {
                 label.style.top = '2px';
                 label.style.left = '2px';
                 label.style.fontSize = '9px';
-                label.style.color = '#E91E63';
+                label.style.color = '#FF6B6B';
                 label.style.fontWeight = '700';
                 label.style.background = 'rgba(0,0,0,0.7)';
                 label.style.padding = '1px 3px';
@@ -3145,9 +3145,9 @@ class WmmaTensorcoreViz {
                 }
 
                 // Animate TensorCore operation
-                await this.highlightMatrix(this.tcA, '#E91E63');
+                await this.highlightMatrix(this.tcA, '#FF6B6B');
                 await sleep(200);
-                await this.highlightMatrix(this.tcB, '#E91E63');
+                await this.highlightMatrix(this.tcB, '#FF6B6B');
                 await sleep(200);
                 await this.highlightMatrix(this.tcAcc, '#00BCD4');
                 await sleep(200);
