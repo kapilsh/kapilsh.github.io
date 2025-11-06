@@ -2353,7 +2353,7 @@ using Gemm = cutlass::gemm::device::Gemm<
 
 ### Bank Conflicts
 
-We discussed this briefly earlier but let's dig into more details. Shared memory is divided into multiple banks — typically 32 banks, each servicing one 32-bit word per cycle. When a warp of 32 threads issues a shared-memory load or store, the hardware maps each thread’s memory address to a specific bank based on the address’s lower bits. If two or more threads in the warp access different addresses that map to the same bank, the accesses must be serialized, resulting in performance hit. Below is a nice visualization from [Modal's GPU Glossary]()
+We discussed this briefly earlier but let's dig into more details. Shared memory is divided into multiple banks — typically 32 banks, each servicing one 32-bit word per cycle. When a warp of 32 threads issues a shared-memory load or store, the hardware maps each thread’s memory address to a specific bank based on the address’s lower bits. If two or more threads in the warp access different addresses that map to the same bank, the accesses must be serialized, resulting in performance hit. Below is a nice visualization from [Modal's GPU Glossary](https://modal.com/gpu-glossary/perf/bank-conflict)
 
 ![Shared Memory Bank Conflict](/assets/explore_gemms_shared_memory_bank_conflict.png)
 
