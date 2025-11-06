@@ -571,15 +571,6 @@ class SharedMemoryViz {
                     <button class="viz-btn" id="sharedAnimate">Animate Tiling</button>
                     <button class="viz-btn" id="sharedReset">Reset</button>
                 </div>
-                <div class="viz-info" style="margin-bottom: 15px;">
-                    <h4>How Tiling Works:</h4>
-                    <ol style="margin: 10px 0; padding-left: 20px; line-height: 1.8;">
-                        <li><strong>Load tiles</strong> from global memory into fast shared memory</li>
-                        <li><strong>Compute each C element</strong> one at a time using the cached tiles</li>
-                        <li><strong>Slide to next K tile</strong> and accumulate partial results</li>
-                        <li><strong>Move to next output tile</strong> and repeat</li>
-                    </ol>
-                </div>
                 <div class="viz-canvas" id="sharedCanvas"></div>
                 <div class="legend">
                     <div class="legend-item">
@@ -817,7 +808,7 @@ class Tiling1DViz {
                 <!-- Previous Kernel (Shared Memory Only) -->
                 <div style="border: 2px solid #FF6B6B; border-radius: 8px; padding: 15px; background: #1a1a1a;">
                     <div style="text-align: center; margin-bottom: 15px;">
-                        <div style="font-size: 16px; font-weight: 700; color: #FF6B6B; margin-bottom: 5px;">❌ Previous: Shared Memory Only</div>
+                        <div style="font-size: 16px; font-weight: 700; color: #FF6B6B; margin-bottom: 5px;">Previous: Shared Memory Only</div>
                         <div style="font-size: 12px; color: #999;">Each thread computes 1 output</div>
                     </div>
                     <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
@@ -841,7 +832,7 @@ class Tiling1DViz {
                 <!-- Current Kernel (1D Block Tiling) -->
                 <div style="border: 2px solid #4CAF50; border-radius: 8px; padding: 15px; background: #1a1a1a;">
                     <div style="text-align: center; margin-bottom: 15px;">
-                        <div style="font-size: 16px; font-weight: 700; color: #4CAF50; margin-bottom: 5px;">✅ Now: 1D Block Tiling</div>
+                        <div style="font-size: 16px; font-weight: 700; color: #4CAF50; margin-bottom: 5px;">Now: 1D Block Tiling</div>
                         <div style="font-size: 12px; color: #999;">Each thread computes TM=${this.TM} outputs</div>
                     </div>
                     <div style="display: flex; flex-direction: column; align-items: center; gap: 15px;">
@@ -995,7 +986,7 @@ class Tiling1DViz {
 
                         // Show b_tmp being reused
                         regN.style.background = '#E91E63';
-                        regIndex.textContent = `✅ ×${tm + 1}`;
+                        regIndex.textContent = `×${tm + 1}`;
                         regIndex.style.color = '#E91E63';
 
                         if (cellC) {
@@ -1075,19 +1066,19 @@ class Tiling1DPipelineViz {
                     </p>
                     <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 15px 0; padding: 15px; background: #2a2a2a; border-radius: 8px; font-size: 12px;">
                         <div style="text-align: center; padding: 10px; background: #1a1a1a; border-radius: 6px;">
-                            <div style="font-weight: 600; color: #4CAF50; margin-bottom: 5px;">1️⃣ Global Memory</div>
+                            <div style="font-weight: 600; color: #4CAF50; margin-bottom: 5px;">1. Global Memory</div>
                             <div style="color: #999;">Full ${this.matrixSizeM}×${this.matrixSizeK} & ${this.matrixSizeK}×${this.matrixSizeN} matrices</div>
                         </div>
                         <div style="text-align: center; padding: 10px; background: #1a1a1a; border-radius: 6px;">
-                            <div style="font-weight: 600; color: #FF9800; margin-bottom: 5px;">2️⃣ Shared Memory</div>
+                            <div style="font-weight: 600; color: #FF9800; margin-bottom: 5px;">2. Shared Memory</div>
                             <div style="color: #999;">Block tiles: ${this.BM}×${this.BK} & ${this.BK}×${this.BN}</div>
                         </div>
                         <div style="text-align: center; padding: 10px; background: #1a1a1a; border-radius: 6px;">
-                            <div style="font-weight: 600; color: #00BCD4; margin-bottom: 5px;">3️⃣ Registers</div>
+                            <div style="font-weight: 600; color: #00BCD4; margin-bottom: 5px;">3. Registers</div>
                             <div style="color: #999;">Thread tiles: TM=${this.TM} per thread</div>
                         </div>
                         <div style="text-align: center; padding: 10px; background: #1a1a1a; border-radius: 6px;">
-                            <div style="font-weight: 600; color: #E91E63; margin-bottom: 5px;">4️⃣ CUDA Cores</div>
+                            <div style="font-weight: 600; color: #E91E63; margin-bottom: 5px;">4. CUDA Cores</div>
                             <div style="color: #999;">FMA operations</div>
                         </div>
                     </div>
@@ -1117,7 +1108,7 @@ class Tiling1DPipelineViz {
                 <div style="background: #1a1a1a; padding: 20px; border-radius: 8px; border: 2px solid #4CAF50;">
                     <div style="text-align: center; margin-bottom: 15px;">
                         <div style="font-size: 16px; font-weight: 700; color: #4CAF50; margin-bottom: 5px;">
-                            1️⃣ Global Memory (GMEM)
+                            1. Global Memory (GMEM)
                         </div>
                         <div style="font-size: 12px; color: #999;">Full matrices stored in GPU DRAM</div>
                     </div>
@@ -1154,7 +1145,7 @@ class Tiling1DPipelineViz {
                 <div style="background: #1a1a1a; padding: 20px; border-radius: 8px; border: 2px solid #FF9800;">
                     <div style="text-align: center; margin-bottom: 15px;">
                         <div style="font-size: 16px; font-weight: 700; color: #FF9800; margin-bottom: 5px;">
-                            2️⃣ Shared Memory (SMEM) - Thread Block Tiles
+                            2. Shared Memory (SMEM) - Thread Block Tiles
                         </div>
                         <div style="font-size: 12px; color: #999;">Each thread block loads tiles from global memory</div>
                     </div>
@@ -1185,7 +1176,7 @@ class Tiling1DPipelineViz {
                 <div style="background: #1a1a1a; padding: 20px; border-radius: 8px; border: 2px solid #00BCD4;">
                     <div style="text-align: center; margin-bottom: 15px;">
                         <div style="font-size: 16px; font-weight: 700; color: #00BCD4; margin-bottom: 5px;">
-                            3️⃣ Registers (Thread Tiles) - Per Thread
+                            3. Registers (Thread Tiles) - Per Thread
                         </div>
                         <div style="font-size: 12px; color: #999;">Each thread caches data for its TM=${this.TM} outputs</div>
                     </div>
@@ -1223,7 +1214,7 @@ class Tiling1DPipelineViz {
                 <div style="background: #1a1a1a; padding: 20px; border-radius: 8px; border: 2px solid #E91E63;">
                     <div style="text-align: center; margin-bottom: 15px;">
                         <div style="font-size: 16px; font-weight: 700; color: #E91E63; margin-bottom: 5px;">
-                            4️⃣ CUDA Cores - Computation
+                            4. CUDA Cores - Computation
                         </div>
                         <div style="font-size: 12px; color: #999;">FMA: result[i] += thread_tile_a[i] * b_tmp</div>
                     </div>
@@ -1322,36 +1313,36 @@ class Tiling1DPipelineViz {
             const kOffset = kIter * this.BK;
             const isLastIteration = (kIter === numKIterations - 1);
 
-            this.updateStats(`<strong style="color: #FFA726;">📍 K Iteration ${kIter + 1}/${numKIterations}</strong> - Processing K tiles [${kOffset}:${kOffset + this.BK}]`);
+            this.updateStats(`<strong style="color: #FFA726;">K Iteration ${kIter + 1}/${numKIterations}</strong> - Processing K tiles [${kOffset}:${kOffset + this.BK}]`);
             await sleep(300);
 
             // Step 1: Highlight GMEM blocks being loaded
-            this.updateStats(`<strong style="color: #4CAF50;">1️⃣ GMEM → SMEM</strong>: Loading blocks from Global Memory`);
+            this.updateStats(`<strong style="color: #4CAF50;">1. GMEM → SMEM</strong>: Loading blocks from Global Memory`);
             await this.highlightGMEMBlocks(kIter);
             await sleep(700);
 
             // Step 2: Show blocks loaded in SMEM
-            this.updateStats(`<strong style="color: #FF9800;">2️⃣ SMEM Ready</strong>: tile_a[${this.BM}×${this.BK}] ⊗ tile_b[${this.BK}×${this.BN}]`);
+            this.updateStats(`<strong style="color: #FF9800;">2. SMEM Ready</strong>: tile_a[${this.BM}×${this.BK}] ⊗ tile_b[${this.BK}×${this.BN}]`);
             await this.loadSharedMemory(kIter);
             await sleep(700);
 
             // Step 3: Highlight thread's tile in SMEM and load to registers
-            this.updateStats(`<strong style="color: #00BCD4;">3️⃣ SMEM → Registers</strong>: Thread loads ${this.TM} values + b_tmp`);
+            this.updateStats(`<strong style="color: #00BCD4;">3. SMEM → Registers</strong>: Thread loads ${this.TM} values + b_tmp`);
             await this.loadRegisters(kIter);
             await sleep(900);
 
             // Step 4: Compute FMA operations
-            this.updateStats(`<strong style="color: #E91E63;">4️⃣ Compute</strong>: ${this.TM} FMA ops (b_tmp reused ${this.TM}×)`);
+            this.updateStats(`<strong style="color: #E91E63;">4. Compute</strong>: ${this.TM} FMA ops (b_tmp reused ${this.TM}×)`);
             await this.computeCudaCores(kIter);
             await sleep(700);
 
             // Step 5: Show partial results (pink) or final results (green)
             if (!isLastIteration) {
-                this.updateStats(`<strong style="color: #FF1493;">5️⃣ Partial Results</strong>: Accumulating... (${kIter + 1}/${numKIterations} complete)`);
+                this.updateStats(`<strong style="color: #FF1493;">5. Partial Results</strong>: Accumulating... (${kIter + 1}/${numKIterations} complete)`);
                 await this.showPartialResults(kIter);
                 await sleep(600);
             } else {
-                this.updateStats(`<strong style="color: #8BC34A;">5️⃣ Final Results</strong>: Writing ${this.TM} outputs to Global Memory`);
+                this.updateStats(`<strong style="color: #8BC34A;">5. Final Results</strong>: Writing ${this.TM} outputs to Global Memory`);
                 await this.showFinalResults();
                 await sleep(800);
             }
@@ -1361,7 +1352,7 @@ class Tiling1DPipelineViz {
             await sleep(400);
         }
 
-        this.updateStats(`✅ <strong>Complete!</strong> All ${numKIterations} K tiles processed. Matrix multiplication done!`);
+        this.updateStats(`<strong>Complete!</strong> All ${numKIterations} K tiles processed. Matrix multiplication done!`);
 
         this.isAnimating = false;
         document.getElementById('pipeline1dAnimate').disabled = false;
@@ -1523,7 +1514,7 @@ class Tiling1DPipelineViz {
             const core = document.querySelector(`[data-core="${i}"]`);
             core.style.background = '#E91E63';
             core.style.border = '2px solid #F06292';
-            core.textContent = '⚡FMA';
+            core.textContent = 'FMA';
 
             await sleep(100);
 
@@ -1550,12 +1541,12 @@ class Tiling1DPipelineViz {
     updateStats(message = '') {
         const stats = document.getElementById('pipeline1dStats');
         const stepsInfo = [
-            '⏸️  Ready to start',
-            '1️⃣  Loading block tiles from global memory (GMEM → SMEM)',
-            '2️⃣  Block tiles cached in shared memory',
-            '3️⃣  Thread loading data into registers (SMEM → Registers)',
-            '4️⃣  Computing FMA operations on CUDA cores',
-            '5️⃣  ✅ Complete - Results written back to global memory'
+            'Ready to start',
+            '1. Loading block tiles from global memory (GMEM → SMEM)',
+            '2. Block tiles cached in shared memory',
+            '3. Thread loading data into registers (SMEM → Registers)',
+            '4. Computing FMA operations on CUDA cores',
+            '5. Complete - Results written back to global memory'
         ];
 
         stats.innerHTML = `
@@ -2215,7 +2206,7 @@ class IndexTransformViz {
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; min-width: 700px;">
                         <!-- Naive Kernel -->
                         <div style="border: 2px solid #e74c3c; padding: 15px; border-radius: 8px;">
-                            <h3 style="text-align: center; color: #e74c3c; margin-bottom: 12px; font-size: 16px;">🐌 Naive Kernel</h3>
+                            <h3 style="text-align: center; color: #e74c3c; margin-bottom: 12px; font-size: 16px;">Naive Kernel</h3>
                             <div style="background: #2a2a2a; padding: 8px; border-radius: 6px; margin-bottom: 12px; font-family: monospace; font-size: 11px;">
                                 <div>x = blockIdx.x * ${this.blockSize} + (threadIdx.x % ${this.blockSize})</div>
                                 <div>y = blockIdx.y * ${this.blockSize} + (threadIdx.x / ${this.blockSize})</div>
@@ -2225,7 +2216,7 @@ class IndexTransformViz {
                         </div>
                         <!-- Coalesced Kernel -->
                         <div style="border: 2px solid #27ae60; padding: 15px; border-radius: 8px;">
-                            <h3 style="text-align: center; color: #27ae60; margin-bottom: 12px; font-size: 16px;">🚀 Coalesced Kernel</h3>
+                            <h3 style="text-align: center; color: #27ae60; margin-bottom: 12px; font-size: 16px;">Coalesced Kernel</h3>
                             <div style="background: #2a2a2a; padding: 8px; border-radius: 6px; margin-bottom: 12px; font-family: monospace; font-size: 11px;">
                                 <div>x = blockIdx.x * ${this.blockSize} + (threadIdx.x / ${this.blockSize})</div>
                                 <div>y = blockIdx.y * ${this.blockSize} + (threadIdx.x % ${this.blockSize})</div>
@@ -2362,9 +2353,9 @@ class IndexTransformViz {
                 ${i > 0 ? `
                     <div style="margin-top: 8px; padding: 8px; background: #1a1a1a; border-radius: 4px;">
                         ${naiveRow !== prevNaiveX ?
-                        `❌ <strong style="color: #e74c3c;">Different row</strong> from Thread ${i - 1}<br>
+                        `<strong style="color: #e74c3c;">Different row</strong> from Thread ${i - 1}<br>
                              <span style="color: #999;">Stride: K elements (scattered)</span>` :
-                        `✅ <strong style="color: #27ae60;">Same row</strong> as Thread ${i - 1}`}
+                        `<strong style="color: #27ae60;">Same row</strong> as Thread ${i - 1}`}
                     </div>
                 ` : '<div style="color: #999; margin-top: 8px;">First thread in warp</div>'}
             `;
@@ -2373,8 +2364,8 @@ class IndexTransformViz {
                 <div style="font-weight: bold; margin-bottom: 8px; color: #4CAF50;">Threads ${Math.floor(i / this.blockSize) * this.blockSize}-${Math.floor(i / this.blockSize) * this.blockSize + this.blockSize - 1} Memory Access</div>
                 <div style="margin-bottom: 4px;">Matrix Row: <strong>A[${coalescedX}][0..3]</strong></div>
                 <div style="margin-top: 8px; padding: 8px; background: #1a1a1a; border-radius: 4px;">
-                    ✅ <strong style="color: #27ae60;">All 4 threads load row together</strong><br>
-                    <span style="color: #4CAF50;">1 coalesced memory transaction (128 bits) 🚀</span><br>
+                    <strong style="color: #27ae60;">All 4 threads load row together</strong><br>
+                    <span style="color: #4CAF50;">1 coalesced memory transaction (128 bits)</span><br>
                     <span style="font-size: 11px; color: #999; margin-top: 4px;">Thread gets A[${coalescedX}][${coalescedY}]</span>
                 </div>
             `;
@@ -2397,14 +2388,14 @@ class IndexTransformViz {
         // Show completion message
         document.getElementById('naiveMemAccess').innerHTML = `
             <div style="text-align: center; padding: 15px;">
-                <div style="font-size: 14px; color: #e74c3c; font-weight: bold;">❌ Non-coalesced Access</div>
+                <div style="font-size: 14px; color: #e74c3c; font-weight: bold;">Non-coalesced Access</div>
                 <div style="margin-top: 8px; color: #999;">→ ${this.blockSize} separate memory transactions for ${this.blockSize} threads</div>
             </div>
         `;
 
         document.getElementById('coalescedMemAccess').innerHTML = `
             <div style="text-align: center; padding: 15px;">
-                <div style="font-size: 14px; color: #27ae60; font-weight: bold;">✅ Coalesced Access</div>
+                <div style="font-size: 14px; color: #27ae60; font-weight: bold;">Coalesced Access</div>
                 <div style="margin-top: 8px; color: #999;">→ 1 memory transaction per row of ${this.blockSize} threads (128-bit load)</div>
             </div>
         `;
@@ -2769,7 +2760,7 @@ class WarpTilingViz {
                             cellOut.textContent = `~${k + 1}`;
                         } else {
                             cellOut.style.background = '#4CAF50'; // Final result
-                            cellOut.textContent = '✓';
+                            cellOut.textContent = '';
                         }
                         cellOut.style.borderColor = '#4CAF50';
                     }

@@ -10,11 +10,9 @@ math: true
 author: ks
 ---
 
-If one is remotely interested in CUDA or Triton programming, they have likely come across [this gemm of a post](https://siboehm.com/articles/22/CUDA-MMM) -- pun intended -- by Simon Boehm. There was [another amazing post](https://www.aleksagordic.com/blog/matmul) on GPU architecture from Aleksa Gordić more recently, which I encountered while writing this blog post. 
+If one is remotely interested in CUDA or Triton programming, they have likely come across [this gemm of a post](https://siboehm.com/articles/22/CUDA-MMM) (pun intended) by Simon Boehm. I have been curious about learning the details of GEMMs beyond the basics i.e. the typical shared memory cache kernel from [PMPP book](https://www.amazon.com/Programming-Massively-Parallel-Processors-Hands/dp/0323912311). There are so many more concepts to learn to understand modern GEMMs and all of the info is distributed across blog posts, conference talks, etc. In this post, I'll build on blog posts I mentioned and walk through several of these optimization stages but also go into some detail on tensorcores, wmma, swizzling, pipelining etc. There was [another amazing post](https://www.aleksagordic.com/blog/matmul) on GPU architecture and GEMMs from Aleksa Gordić more recently, which I encountered while writing this blog post. 
 
-I have been curious about learning the details of GEMMs beyond the basics i.e. the typical shared memory cache kernel from [PMPP book](https://www.amazon.com/Programming-Massively-Parallel-Processors-Hands/dp/0323912311). There are so many more concepts to learn to understand modern GEMMs and all of the info is distributed across blog posts, conference talks, etc. In this post, I'll build on blog posts I mentioned and walk through several of these optimization stages but also go into some detail on tensorcores, wmma, swizzling, pipelining etc. 
-
-My goal here was to understand a basic CUTLASS kernel. The problem with looking at something like CUTLASS without knowing all the basics is you will understand the code but not what it is doing under the hood. So, I build upto a basic cutlass kernel and try to beat PyTorch matmul on my RTX 4090. The whole process and the blog post took me about a month and was definitely a rewarding experience!
+My goal was originally to understand a basic CUTLASS kernel. The problem with looking at something like CUTLASS without knowing all the basics is you will understand the code but not what it is doing under the hood. So, I decided to follow a process to work up to a basic cutlass kernel and try to beat PyTorch matmul on my RTX 4090. The whole process and the blog post took me about a month or so and was definitely a rewarding experience!
 
 ## Prologue
 
@@ -22,9 +20,9 @@ My goal here was to understand a basic CUTLASS kernel. The problem with looking 
 
 [Full implementation of all kernels](https://github.com/gpusgobrr/explore-gemm)
 
-In the following sections, we will go over several steps in optimizing GEMM kernel, each time discussing a new concept. In the later sections, we will look at fp16/bf16 matmul kernels and tensor cores. In the end, we'll look into CUTLASS to show how it makes it easy to map the concepts that we'll discuss to a simple API!
+In the following sections, we will go over several steps in optimizing GEMM kernel, each time discussing a new concept. Initial sections will look close to several things Simon covered in his blog post as well. In the later sections, we will look at fp16/bf16 matmul kernels and tensor cores. In the end, we'll look into CUTLASS kernel and try to optimize/tune it to get the best performance we can get.
 
-> (Not an endorsement) I used Claude Code to create some of the javascript visualizations, which I hope readers will find useful. Claude Code was also great at writing some of the python scripts to do plotly graphs for performance benchmarking!
+> I used Claude Code to create some of the javascript visualizations in this psot, which I hope readers will find useful. It is not an endorsment of Claude Code but yeah it was pretty good at a lot of javascript tasks. Claude Code was also great at writing some of the python scripts to do plotly graphs for performance benchmarking!
 {: .prompt-info}
 
 ## GEMM Basics
@@ -73,7 +71,7 @@ All benchmarks in this post were run on **NVIDIA GeForce RTX 4090**. Below are t
 
 | Specification | RTX 4090 (Ada Lovelace) |
 |---------------|--------------------------|
-| **Architecture** | Ada Lovelace (TSMC 4nm) |
+| **Architecture** | Ada Lovelace |
 | **CUDA Cores** | 16,384 |
 | **Streaming Multiprocessors (SMs)** | 128 |
 | **FP32 Performance** | 82.6 TFLOPS |
@@ -170,7 +168,7 @@ __global__ void sgemm_naive_kernel(int num_rows_a, int num_cols_b, int num_cols_
                                    float alpha, const float *matrix_a,
                                    const float *matrix_b, float beta, float *output_matrix)
 {
-    // Map 1D thread ID to 2D output position for coalesced memory access
+    // Map 1D thread ID to 2D output position
     const int output_row = blockIdx.x * block_size + (threadIdx.x % block_size);
     const int output_col = blockIdx.y * block_size + (threadIdx.x / block_size);
 
@@ -267,7 +265,7 @@ Apart from [PMPP book](https://www.amazon.com/Programming-Massively-Parallel-Pro
 
 #### Some Basics
 
-To understand memory coalescing, we need to understand GPU execution hierarchy:
+To understand memory coalescing, we need to first understand GPU execution hierarchy:
 
 1. **Threads**: Individual execution units in your CUDA kernel
 2. **Warps**: Groups of 32 threads that execute the same instruction simultaneously (SIMT - Single Instruction, Multiple Thread)
@@ -411,9 +409,7 @@ RTX 4090 has **128 KB of shared memory per SM** (16MB / 128 SMs) that serves as 
 ### Kernel
 
 ```c
-
-constexpr uint BLOCKSIZE =  32;
-
+template <const uint block_size>
 __global__ void sgemm_shared_mem_kernel(int num_rows_a, int num_cols_b, int num_cols_a,
                                         float alpha, const float *matrix_a,
                                         const float *matrix_b, float beta,
@@ -422,62 +418,62 @@ __global__ void sgemm_shared_mem_kernel(int num_rows_a, int num_cols_b, int num_
     const uint block_row = blockIdx.x;
     const uint block_col = blockIdx.y;
 
-    __shared__ float tile_a[BLOCKSIZE * BLOCKSIZE];
-    __shared__ float tile_b[BLOCKSIZE * BLOCKSIZE];
+    __shared__ float tile_a[block_size * block_size];
+    __shared__ float tile_b[block_size * block_size];
 
-    const uint thread_row = threadIdx.x / BLOCKSIZE;
-    const uint thread_col = threadIdx.x % BLOCKSIZE;
+    const uint thread_row = threadIdx.x / block_size;
+    const uint thread_col = threadIdx.x % block_size;
 
     // Calculate global row and column indices for this thread
-    const uint global_row = block_row * BLOCKSIZE + thread_row;
-    const uint global_col = block_col * BLOCKSIZE + thread_col;
+    const uint global_row = block_row * block_size + thread_row;
+    const uint global_col = block_col * block_size + thread_col;
 
     // Move pointers to the starting position for this block
-    matrix_a += block_row * BLOCKSIZE * num_cols_a; // row=block_row, col=0
-    matrix_b += block_col * BLOCKSIZE;              // row=0, col=block_col
-    matrix_c += block_row * BLOCKSIZE * num_cols_b + block_col * BLOCKSIZE;
+    matrix_a += block_row * block_size * num_cols_a; // row=block_row, col=0
+    matrix_b += block_col * block_size;              // row=0, col=block_col
+    matrix_c += block_row * block_size * num_cols_b + block_col * block_size;
 
     float accumulator = 0.0f;
 
     // Loop over all tiles along K dimension
-    for (int tile_idx = 0; tile_idx < num_cols_a; tile_idx += BLOCKSIZE)
+    for (int tile_idx = 0; tile_idx < num_cols_a; tile_idx += block_size)
     {
         // Load tile from matrix A into shared memory with bounds checking
         // thread_col is consecutive for coalesced memory access
         if (global_row < num_rows_a && (tile_idx + thread_col) < num_cols_a)
         {
-            tile_a[thread_row * BLOCKSIZE + thread_col] =
+            tile_a[thread_row * block_size + thread_col] =
                 matrix_a[thread_row * num_cols_a + thread_col];
         }
         else
         {
-            tile_a[thread_row * BLOCKSIZE + thread_col] = 0.0f;
+            tile_a[thread_row * block_size + thread_col] = 0.0f;
         }
 
         // Load tile from matrix B into shared memory with bounds checking
         // thread_col is consecutive for coalesced memory access
         if ((tile_idx + thread_row) < num_cols_a && global_col < num_cols_b)
         {
-            tile_b[thread_row * BLOCKSIZE + thread_col] =
+            tile_b[thread_row * block_size + thread_col] =
                 matrix_b[thread_row * num_cols_b + thread_col];
         }
         else
         {
-            tile_b[thread_row * BLOCKSIZE + thread_col] = 0.0f;
+            tile_b[thread_row * block_size + thread_col] = 0.0f;
         }
 
         // Block threads until cache is fully populated
         __syncthreads();
 
         // Advance pointers to next tile
-        matrix_a += BLOCKSIZE;
-        matrix_b += BLOCKSIZE * num_cols_b;
+        matrix_a += block_size;
+        matrix_b += block_size * num_cols_b;
 
         // Compute partial dot product using shared memory
-        for (int dot_idx = 0; dot_idx < BLOCKSIZE; ++dot_idx)
+        for (int dot_idx = 0; dot_idx < block_size; ++dot_idx)
         {
-            accumulator += tile_a[thread_row * BLOCKSIZE + dot_idx] *
-                           tile_b[dot_idx * BLOCKSIZE + thread_col];
+            accumulator += tile_a[thread_row * block_size + dot_idx] *
+                           tile_b[dot_idx * block_size + thread_col];
         }
 
         // Sync again to avoid faster threads fetching next block before slower threads finish
@@ -515,6 +511,7 @@ Running the shared memory kernel for M = N = K = 4096:
 > - The relatively small gain suggests we're not yet effectively hiding memory latency
 {: .prompt-info}
 
+Some improvement but still far behind the baseline performance.
 
 ## Understanding GPU Occupancy
 
@@ -530,8 +527,6 @@ Here is a really nice diagram and description from [Modal GPU Glossary](https://
 
 ![GPU Glossary occupancy](/assets/explore_gemms_occupancy_modal.png)
 
-
-### Why Occupancy Matters
 
 GPUs hide memory latency through massive parallelism. When one warp waits for memory, the SM immediately switches to execute another warp. Occupancy does not enable performance directly but primarily through latency hiding. Higher occupancy effectively means more warps available for compute and we can hide latency more effectively. If occupancy is low, hardware sits idle waiting for data. However, **occupancy is not everything**. A kernel with 100% occupancy but poor memory access patterns can still perform poorly since that could lead to lower register/shared memory per thread (covered later). So, it is important to take into account other factors apart from just optimizing for occupancy. 
 
@@ -569,7 +564,7 @@ Lastly, number of threads per block affects how many blocks can fit on an SM and
 | 512 | 16 | 3 | 48 | 100% |
 | 1024 | 32 | 1 | 32 | 66.7% |
 
-### Calculating Occupancy for Our Shared Memory Kernel
+### Occupancy for Our Shared Memory Kernel
 
 Let's analyze our current shared memory kernel:
 
