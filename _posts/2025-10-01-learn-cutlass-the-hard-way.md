@@ -2550,21 +2550,3 @@ Here is full list of resources and links that I skimmed, referred, read, or watc
 
 
 <script src="/assets/js/gemm-optimization-visualizer.js"></script>
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Initialize all visualizations (only if div exists)
-    if (document.getElementById('roofline-viz')) new RooflineViz('roofline-viz');
-    if (document.getElementById('naive-viz')) new NaiveKernelViz('naive-viz');
-    if (document.getElementById('coalesced-matrix-viz')) new CoalescedMatrixViz('coalesced-matrix-viz');
-    if (document.getElementById('memory-hierarchy-viz')) new MemoryHierarchyViz('memory-hierarchy-viz');
-    if (document.getElementById('index-transform-viz')) new IndexTransformViz('index-transform-viz');
-    if (document.getElementById('shared-memory-viz')) new SharedMemoryViz('shared-memory-viz');
-    if (document.getElementById('1d-tiling-viz')) new Tiling1DViz('1d-tiling-viz');
-    if (document.getElementById('1d-pipeline-viz')) new Tiling1DPipelineViz('1d-pipeline-viz');
-    if (document.getElementById('2d-tiling-viz')) new Tiling2DViz('2d-tiling-viz');
-    if (document.getElementById('vectorized-viz')) new VectorizedViz('vectorized-viz');
-    if (document.getElementById('warp-tiling-viz')) new WarpTilingViz('warp-tiling-viz');
-    if (document.getElementById('wmma-tensorcore-viz')) new WmmaTensorcoreViz('wmma-tensorcore-viz');
-    if (document.getElementById('performance-comparison')) new PerformanceComparison('performance-comparison');
-});
-</script>
