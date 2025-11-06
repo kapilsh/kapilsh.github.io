@@ -2568,4 +2568,3 @@ document.addEventListener('DOMContentLoaded', function() {
     if (document.getElementById('performance-comparison')) new PerformanceComparison('performance-comparison');
 });
 </script>
-<script src="//cdn.jsdelivr.net/github-cards/latest/widget.js"></script>
