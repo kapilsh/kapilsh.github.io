@@ -10,9 +10,11 @@ math: true
 author: ks
 ---
 
-If one is remotely interested in CUDA or Triton programming, they have likely come across [this gemm of a post](https://siboehm.com/articles/22/CUDA-MMM) (pun intended) by Simon Boehm. I have been curious about learning the details of GEMMs beyond the basics i.e. the typical shared memory cache kernel from [PMPP book](https://www.amazon.com/Programming-Massively-Parallel-Processors-Hands/dp/0323912311). There are so many more concepts to learn to understand modern GEMMs and all of the info is distributed across blog posts, conference talks, etc. In this post, I'll build on blog posts I mentioned and walk through several of these optimization stages but also go into some detail on tensorcores, wmma, swizzling, pipelining etc. There was [another amazing post](https://www.aleksagordic.com/blog/matmul) on GPU architecture and GEMMs from Aleksa Gordić more recently, which I encountered while writing this blog post. 
+I have been curious about learning the details of GEMMs beyond the basics, i.e., the typical shared memory cache kernel from the [PMPP book](https://www.amazon.com/Programming-Massively-Parallel-Processors-Hands/dp/0323912311). There are so many more concepts to learn to understand modern GEMMs, and all of the information is distributed across blog posts, conference talks, etc.
 
-My goal was originally to understand a basic CUTLASS kernel. The problem with looking at something like CUTLASS without knowing all the basics is you will understand the code but not what it is doing under the hood. So, I decided to follow a process to work up to a basic cutlass kernel and try to beat PyTorch matmul on my RTX 4090. The whole process and the blog post took me about a month or so and was definitely a rewarding experience!
+If one is remotely interested in CUDA or Triton programming, they have likely come across [this gemm of a post](https://siboehm.com/articles/22/CUDA-MMM) (pun intended) by Simon Boehm, but it was primarily focused on fp32 kernels. The majority of workloads today have shifted to lower precision matmuls such as bf16, fp8, mxfp8, etc. In this post, I'll walk through several of these optimization stages and go into some detail on tensor cores, WMMA, swizzling, pipelining, autotuning, etc. [Pranjal Shankhodhar's Outperforming cuBLAS on H100](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog) and [Aleksa Gordić's Inside NVIDIA GPUs](https://www.aleksagordic.com/blog/matmul) are two recent posts that I encountered while writing this blog post, and they are really good as well!
+
+My goal was originally to understand a basic CUTLASS kernel. The problem with looking at something like CUTLASS without knowing all the basics is that you will understand the code but not what it is doing under the hood. So, I decided to follow a process to work up to a basic CUTLASS kernel and try to beat PyTorch matmul on my RTX 4090. The whole process and the blog post took me about a month or so and was definitely a rewarding experience!
 
 ## Prologue
 
@@ -20,9 +22,9 @@ My goal was originally to understand a basic CUTLASS kernel. The problem with lo
 
 [Full implementation of all kernels](https://github.com/gpusgobrr/explore-gemm)
 
-In the following sections, we will go over several steps in optimizing GEMM kernel, each time discussing a new concept. Initial sections will look close to several things Simon covered in his blog post as well. In the later sections, we will look at fp16/bf16 matmul kernels and tensor cores. In the end, we'll look into CUTLASS kernel and try to optimize/tune it to get the best performance we can get.
+In the following sections, we will go over several steps in optimizing GEMM kernel, each time discussing a new concept. Initial sections will look closely into several things Simon covered in his blog post as well. In the later sections, we will look at fp16/bf16 matmul kernels and tensor cores. In the end, we'll look into CUTLASS kernels and try to optimize/tune it to get the best performance that we can get.
 
-> I used Claude Code to create some of the javascript visualizations in this psot, which I hope readers will find useful. It is not an endorsment of Claude Code but yeah it was pretty good at a lot of javascript tasks. Claude Code was also great at writing some of the python scripts to do plotly graphs for performance benchmarking!
+> I used Claude Code to create some of the javascript visualizations in this post. I hope readers find them useful. It is not an endorsment of Claude Code but yeah it was pretty good at a lot of javascript tasks. Claude Code was also great at writing some of the python scripts to do plotly graphs for performance benchmarking!
 {: .prompt-info}
 
 ## GEMM Basics
@@ -51,7 +53,7 @@ $$C[i,j] = \alpha \sum_{k=0}^{K-1} A[i,k] \times B[k,j] + \beta C[i,j]$$
 
 For matrices of size $M \times K$, $K \times N$:
 - Total dot products: $M \times N$
-- Operations per dot product: $2K$ (K multiplies + K adds) + 3 scalar ops ($\alpha$, $\beta$, addition of $M \times N$ matrix)
+- Operations per dot product: $2K$ (K multiplies + K adds) + 3 scalar ops for linear transformation with $\alpha$, $\beta$
 - **Total FLOPs**: $2MNK + MK$ (dominated by dot products)
 
 {: .prompt-tip}
@@ -66,8 +68,6 @@ All benchmarks in this post were run on **NVIDIA GeForce RTX 4090**. Below are t
 ### SM Architecture
 
 ![SM architecture](/assets/4090_sm.png)
-
-*Source: [NVIDIA Ada GPU Architecture Whitepaper](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf)*
 
 | Specification | RTX 4090 (Ada Lovelace) |
 |---------------|--------------------------|
@@ -84,6 +84,8 @@ All benchmarks in this post were run on **NVIDIA GeForce RTX 4090**. Below are t
 | **L2 Cache** | 72 MB |
 | **Shared Memory per SM** | 128 KB |
 | **Registers per SM** | 256 KB |
+
+*Source: [NVIDIA Ada GPU Architecture Whitepaper](https://images.nvidia.com/aem-dam/Solutions/geforce/ada/nvidia-ada-gpu-architecture.pdf)*
 
 You can load these details directly using `cudaDeviceProp` as well:
 
@@ -127,12 +129,12 @@ for (int i = 0; i < deviceCount; ++i) {
 
 ### Roofline Model
 
-[Roofline model](https://en.wikipedia.org/wiki/Roofline_model) helps us visualize the performance limitations of our GEMM kernels. I use the numbers for RTX 4090 below. 
+[Roofline model](https://en.wikipedia.org/wiki/Roofline_model) helps us visualize the performance limitations of our GEMM kernels. I use the numbers for RTX 4090 below:
 
 1. **Compute Bound** (flat ceiling): Maximum FLOPS achievable (82.6 TFLOPS for FP32)
 2. **Memory Bound** (diagonal line): Performance limited by memory bandwidth (1,008 GB/s)
 
-> The transition point between memory-bound and compute-bound occurs at an arithmetic intensity of approximately **82 FLOP/byte**. GEMM operations typically have high arithmetic intensity (hundreds of FLOP/byte), making them typically compute-bound workloads.
+> The transition point between memory-bound and compute-bound occurs at an arithmetic intensity of approximately **82 FLOP/byte**. Modern optimized GEMM operations typically have high arithmetic intensity, making them compute-bound workloads.
 {: .prompt-tip}
 
 <div id="roofline-viz"></div>
@@ -153,8 +155,6 @@ The simplest approach to calculate GEMM assigns each thread to compute one outpu
 > 3. Computes dot product
 > 4. Writes one element to $C$
 {: .prompt-tip}
-
-Let's look at an interactive visualization of it below
 
 <div id="naive-viz"></div>
 
@@ -243,11 +243,10 @@ void sgemm_naive(const torch::Tensor &matrix_a, const torch::Tensor &matrix_b,
 ### Performance Analysis
 
 
-Below are the full benchmark results comparing the naive CUDA kernel against PyTorch's optimized GEMM implementation across different shapes:
+Below are the full benchmark results comparing the naive CUDA kernel against PyTorch's optimized GEMM implementation across different shapes. 
+As we can see, the naive implementation is significantly slower than PyTorch's optimized kernel, achieving only ~1% of PyTorch's performance. 
 
 ![Naive Only](/assets/explore_gemm_naive_only.png)
-
-As we can see, the naive implementation is significantly slower than PyTorch's optimized kernel, achieving only ~1% of PyTorch's performance. 
 
 > For M = N = K = 4096:
 > - The naive CUDA kernel is 133× slower than PyTorch (0.01× speedup)
@@ -261,7 +260,8 @@ Let's take a brief digression before we look into why naive kernel is so slow.
 
 ### Concept
 
-Apart from [PMPP book](https://www.amazon.com/Programming-Massively-Parallel-Processors-Hands/dp/0323912311), slides from [an NVidia GTC talk](https://www.nvidia.com/en-us/on-demand/session/gtcfall22-a41101/) is a really good reference to understand the memory hierarchy details and why memory access patterns are the primary consideration when we think about GPU/CUDA performance. For recent architectures, CUTLASS/CUTE documentation is really good reference as well.
+> Apart from [PMPP book](https://www.amazon.com/Programming-Massively-Parallel-Processors-Hands/dp/0323912311), slides from [an NVidia GTC talk](https://www.nvidia.com/en-us/on-demand/session/gtcfall22-a41101/) is a really good reference to understand the memory hierarchy details and why memory access patterns are the primary consideration when we think about GPU/CUDA performance. For recent architectures, CUTLASS/CUTE documentation is really good reference as well.
+{: .prompt-tip}
 
 #### Some Basics
 
@@ -277,7 +277,7 @@ To understand memory coalescing, we need to first understand GPU execution hiera
 **In addition, other things to note about SMs include**:
 - Each SM has limited resources (registers, shared memory)
 - Multiple thread blocks compete for these resources
-- SMs can switch between warps in a single clock cycle, enabling latency hiding while one warp waits for memory, another executes
+- SMs can switch between warps in a single clock cycle, enabling latency hiding. While one warp waits for memory, another executes
 - GEMM efficiency depends on keeping all warp schedulers busy with coalesced memory access patterns
 
 #### Why is Naive Kernel Slow?
@@ -307,10 +307,11 @@ Thread 62 ; Warp 1: Multiplying A[30][0] * B[0][1] = C[30][1]
 Thread 63 ; Warp 1: Multiplying A[31][0] * B[0][1] = C[31][1]
 ```
 
+We can see that the naive kernel's memory access pattern is inefficient. For each thread in a warp, it is accessing `A[k][0]` values where k is the thread id in a warp. When threads in a warp access scattered memory locations, each access requires a separate memory transaction. It is solvable by memory coalescing such that we restructure the thread-to-output mapping so that threads in the same warp access consecutive memory locations, enabling the hardware to combine multiple accesses into a single transaction.
+
 > **Problem**: Threads access memory in a scattered, non-coalesced pattern.
 {: .prompt-warning}
 
-We can see that the naive kernel's memory access pattern is inefficient. For each thread in a warp, it is accessing `A[k][0]` values where k is the thread id in a warp. When threads in a warp access scattered memory locations, each access requires a separate memory transaction. It is solvable by memory coalescing such that we restructure the thread-to-output mapping so threads in the same warp access consecutive memory locations, enabling the hardware to combine multiple accesses into a single transaction.
 
 Turns out the only change we need is to swap % and / across row and col calculations for C.
 
@@ -397,14 +398,16 @@ Before diving into shared memory optimization, let's understand the RTX 4090's m
 
 #### Using the Shared Memory
 
-RTX 4090 has **128 KB of shared memory per SM** (16MB / 128 SMs) that serves as a fast on-chip cache/shared memory. This shared memory is partitioned among thread blocks (each block gets its own chunk), accessible by all threads within a block. With 128 SMs on the RTX 4090, there's a total of **16.4 MB of shared memory** distributed across the chip. Instead of repeatedly reading the same data from slow global memory, as an optimization strategy, we can load tiles (chunks) of matrices A and B into this fast shared memory, compute partial results using the cached tile data with high reuse across multiple threads, then slide these tiles across the matrices to compute the final result—effectively transforming a bandwidth-bound problem into a compute-bound one. Let's look at how this works below:
+RTX 4090 has **128 KB of shared memory per SM** (16MB / 128 SMs) that serves as a fast on-chip cache/shared memory. This shared memory is partitioned among thread blocks (each block gets its own chunk), accessible by all threads within a block. With 128 SMs on the RTX 4090, there's a total of **16.4 MB of shared memory** distributed across the chip. Instead of repeatedly reading the same data from slow global memory, as an optimization strategy, we can load tiles (chunks) of matrices A and B into this fast shared memory, compute partial results using the cached tile data with high reuse across multiple threads, then slide these tiles across the matrices to compute the final result, effectively transforming a bandwidth-bound problem into a compute-bound one. Let's look at how this works below:
 
 <div id="shared-memory-viz"></div>
 
 {: .prompt-info}
 > NOTE: We need to synchronize threads after both loading the data into shared memory and also after finishing the tiled matmuls to ensure: 
-> 1) All data is loaded before we do the matmul calculations
-> 2) All calculated data is stored back into matrix C before going to next tiles
+>
+> - All data is loaded before we do the matmul calculations
+>
+> - All calculated data is stored back into matrix C before going to next tiles
 
 ### Kernel
 
@@ -538,7 +541,7 @@ $$\text{Max Threads} = \min\left(\frac{65536 \text{ registers/SM}}{\text{registe
 
 | Registers/Thread | Max Threads | Active Warps | Occupancy |
 |------------------|-------------|--------------|-----------|
-| 32 | 1,536 (limited by max) | 48 | 100% |
+| 32 | 1,536 (limited by hardware max) | 48 | 100% |
 | 64 | 1,024 | 32 | 66.7% |
 | 128 | 512 | 16 | 33.3% |
 
@@ -592,7 +595,7 @@ __shared__ float tile_b[32 * 32];  // 4 KB
 
 **Occupancy**: $\frac{32}{48} = 66.7\%$
 
-> **Problem**: Our large block size (1,024 threads) limits us to only 1 block per SM, resulting in just 66.7% occupancy. 66.7% occupancy is not necessarily bad but let's see more details using nsight-compute
+> **Problem**: Our large block size (1,024 threads) limits us to only 1 block per SM, resulting in just 66.7% occupancy. 66.7% occupancy is not necessarily bad but let's see more details using nsight-compute on how to improve.
 {: .prompt-warning}
 
 ### Nsight Compute Profiling
@@ -609,18 +612,20 @@ Next, looking at the instruction mix, we can see that LDS dominates the instruct
 
 ![LDS Too much](/assets/explore_gemm_lds_too_much.png)
 
+So, next we will focus on how to reduce the LDS instructions in our kernel.
+
 ## 1D Block Tiling
 
 ### Concept
 
-Now that we understand that in the previous kernel, each thread was computing a single output element of matrix C, meaning each thread needed to load elements from shared memory repeatedly, with memory accesses dominating the execution time. 
+In the previous kernel, each thread was computing a single output element of matrix C, meaning each thread needed to load elements from shared memory repeatedly, with memory accesses dominating the execution time. 
 
-Next, instead of each thread computing exactly one output element of the tile, each thread computes multiple output elements along one dimension. To support this, we fetch some data from SMEM into registers (for reuse) within each thread, reducing repeated SMEM loads.
+Next, instead of each thread computing exactly one output element of the tile, each thread computes multiple output elements along one dimension. To support this, we fetch/cache some data from SMEM into registers (for reuse) within each thread, reducing repeated SMEM loads.
 
 > In essence, we are trying to improve the arithmetic intensity of the kernel, which effectively means computing more results per thread with the same loaded data i.e. increase FLOPS/byte
 {: .prompt-tip}
 
-To accomplish this, we effectively just add TM accumulators to accumulated TM outputs per thread i.e. 
+To accomplish this, we introduce TM accumulators for TM outputs per thread i.e. 
 
 ```c
 float thread_results[TM] = {0.0f};
@@ -644,10 +649,10 @@ Let's look at a visualization:
 
 ### Kernel
 
-We now evolve our kernel to introduce paramters that we will need later. We expand on the existing block_size to make them configurable such BM, BN, BK, etc. They represent the block sizes we are operating on. In addition, we add TM as a parameter that determines, how many values calculated per thread! Full listing below:
+We now evolve our kernel to introduce paramters that we will need later. We expand on the existing block_size to make them configurable such as BM, BN, BK, etc. They represent the block sizes we are operating on for M, N, and K dimensions. In addition, we add TM as a parameter that determines, how many values calculated per thread! Full listing below:
 
 {: .prompt-info}
-> NOTE: [Simon Boehm's Kernels](https://github.com/siboehm/SGEMM_CUDA/blob/master/src/kernels/4_kernel_1D_blocktiling.cuh) did not handle bounds check i.e. non block multiple kernels will be incorrect. I tried to add the bounds check here but we can see that it starts to make the code fairly complex. We will the bounds check as long as we can but will drop it later sections to focus on core concepts.
+> NOTE: [Simon Boehm's Kernels](https://github.com/siboehm/SGEMM_CUDA/blob/master/src/kernels/4_kernel_1D_blocktiling.cuh) did not handle bounds check i.e. non-block multiple kernels will be incorrect. I tried to add the bounds check here but we can see that it starts to make the code fairly complex. We will keep the bounds check as long as we can but will drop it later sections to focus on core concepts.
 
 ```c
 template <const int BM, const int BN, const int BK, const int TM>
@@ -833,7 +838,7 @@ The shared memory bandwidth used is also showed in the memory charts. See the co
 
 ### Concept
 
-2D tiling enables each thread to compute TM × TN outputs (e.g., 8 × 8 = 64 outputs) instead of just TM outputs (e.g., 8 outputs) in 1D tiling, resulting in TN× more computation per thread with more register usage. Of course, we would need to keep within the register memory bounds but this is how we can increase arithmetic intensity further by reusing shared memory. This creates bidirectional register reuse:
+2D tiling is a natural extension and enables each thread to compute TM × TN outputs (e.g., 8 × 8 = 64 outputs) instead of just TM outputs (e.g., 8 outputs) in 1D tiling, resulting in TN× more computation per thread with more register usage. Of course, we would need to keep within the register memory bounds but this is how we can increase arithmetic intensity further by reusing shared memory. This creates bidirectional register reuse:
 
 - Each value from A (loaded into `register_m[TM]`) is reused across TN computations
 - Each value from B (loaded into `register_n[TN]`) is reused across TM computations
@@ -939,7 +944,7 @@ __global__ void sgemm_blocktiling_2d_kernel(int num_rows_a, int num_cols_b, int 
 
 You will notice we are using `#pragma unroll` directives in the code. **What does `#pragma unroll` do?**
 
-It is a compiler optimization that can, for example, replace a piece of code like
+It is a compiler optimization technique that can, for example, replace a piece of code like
 
 ```cpp
 for (int i = 0; i < 5; i++ )
@@ -1036,7 +1041,7 @@ As next steps, when we check our kernel in Nsight compute, we get more pointers 
 
 ### Concept
 
-As we have realized already, GEMMs are **bandwidth-bound**, meaning their performance is bottlenecked by memory transfer speed. Another optimization that can increase effective bandwidth utilization is to use **vectorized memory operations**.
+As we have realized already, GEMMs are bottlenecked by memory transfer speed. Another optimization that can increase effective bandwidth utilization is to use **vectorized memory operations**.
 
 CUDA provides built-in vector types (`float2`, `float4`, `int2`, `int4`) that enable loading or storing multiple values in a single instruction. Instead of issuing four separate 32-bit loads, a single `float4` load can fetch **128 bits (16 bytes)** at once.
 
@@ -1109,7 +1114,7 @@ float d = vec.w;
 
 > **Trade-Offs**: Vectorized `float4` loads reduce memory transactions but increase register pressure (potentially lowering occupancy), require tail handling for non-divisible sizes, and may not benefit shared memory accesses with strided layouts without restructuring.
 >
-> **NOTE: In our case, we will skip the tail handling and assume the inputs is aligned to the block sizes used in the kernel just to simplify the kernel**
+> **NOTE: In our case, we will skip the tail handling and assume the inputs are aligned to the block sizes used in the kernel just to simplify the kernel**
 {: .prompt-info }
 
 ### Kernel
@@ -1250,7 +1255,7 @@ The vectorized kernel shows **mixed results** — performance **degrades** compa
 
 
 
-Nice! We are at almost 60% for the peak performance for 4096 x 4096!
+Nice! We are at almost 60% for the peak performance for 4096 x 4096! Let's keep going!
 
 
 ## Warp Tiling
@@ -1261,12 +1266,15 @@ After optimizing thread-level and block-level tiling, the next step is **warp-le
 
 #### What is Warp Tiling?
 
-As we have discussed previously, a **warp** is the fundamental execution unit in NVIDIA GPUs consisting of 32 threads that execute in SIMT (Single Instruction, Multiple Thread) fashion. Warp tiling introduces an additional level in the memory hierarchy. FWIW - we are slowly approaching cutlass territory. Cutlass library implements a sophisticated tiling strategy that mirrors the GPU's memory hierarchy at multiple levels:
+As we have discussed previously, a **warp** is the fundamental execution unit in NVIDIA GPUs consisting of 32 threads that execute in SIMT (Single Instruction, Multiple Thread) fashion. Warp tiling introduces an additional level in the memory hierarchy. 
+
+> FWIW - we are slowly approaching cutlass territory. Cutlass library implements a sophisticated tiling strategy that mirrors the GPU's memory hierarchy at multiple levels
+{: .prompt-info}
 
 ![CUTLASS Memory Hierarchy](/assets/explore_gemm_cutlass_hierarchy.png)
 *Source: [NVIDIA CUTLASS Blog](https://developer.nvidia.com/blog/cutlass-linear-algebra-cuda/)*
 
-To take advantage of the this hierarchy, warps can offer another layer of tiling such that while loading data from shared memory into registers, we do it at warp tile level. In addition, each thread in the warp then calculates its own small fraction of computation. 
+To take advantage of this hierarchy, warps can offer another layer of tiling such that while loading data from shared memory into registers, we do it at warp tile level. In addition, each thread in the warp then calculates its own small fraction of computation. 
 
 ![Nvidia blog warp tiling](/assets/explore_gemms_warp_tiling_nvidia_blog_2.png)
 
@@ -1295,7 +1303,7 @@ for (k = 0; k < K; k += BK) {
 
 ```
 
-In the later sections, we will look into tensorcores and this is a key requirement for us to get there. But let's first look how this works through below visualization:
+In the later sections, we will look into Tensor Cores. Enabling warp-tiling is a key milestone for us to get there. But let's first look at how this works through below visualization with sample values for tile widths and warp size:
 
 <div id="warp-tiling-viz"></div>
 
@@ -1480,6 +1488,9 @@ __global__ void __launch_bounds__(NUM_THREADS)
 }
 ```
 
+> `__launch_bounds__` trick was something I learnt after reading a few kernels. It allows us to control kernel occupancy by setting a limit on per-thread register usage i.e by specifying the thread block size and the target number of blocks per SM, the compiler adjusts register allocation accordingly. [This](https://moderngpu.github.io/performance.html) was a good resource to understand this attribute.
+{: .prompt-info}
+
 ### Caller
 
 ```c
@@ -1524,7 +1535,7 @@ void sgemm_warptiling_default(const torch::Tensor &matrix_a, const torch::Tensor
 
 ### Performance Analysis
 
-The warp tiling kernel demonstrates further performance gains at large matrix sizes, achieving the best performance so far of all our hand-written kernels. It also shows interesting complexity tradeoffs at smaller sizes.
+The warp tiling kernel shows further performance gains at large matrix sizes, achieving the best performance so far. 
 
 > **Performance at 4096×4096:**
 > - **1.17× TFLOPS improvement** over vectorized kernel (39.07 → 45.82 TFLOPS)
@@ -1563,9 +1574,9 @@ The warp tiling kernel demonstrates further performance gains at large matrix si
 
 So far, we have worked only on fp32 kernels. Most workloads today increasingly use 16-bit floating-point formats (FP16 and BF16) and even lower precisions such as fp8, fp4, etc to reduce memory bandwidth requirements and increase throughput. While our warp tiling kernel works for FP32, we can extend it to support lower-precision computations in 16-bit. This mostly requires us adapt the kernel to handle multiple dtypes, which is just templating. Although, one thing to note is to get good numeric behavior on the lower prevision kernels, we need to ensure we do accumulation in higher precision such as fp32. 
 
-I am leaving out the kernel implementation for this part so we can focus on WMMA and Tensor Cores next. However, here is the baseline performance after porting warptiling technique for fp32 above to fp16/bf16. Spoiler alert: the performance is pretty bad and we are down to about 1/4th of pytorch performance.
+I am leaving out the kernel implementation for this part so we can focus on WMMA and Tensor Cores next. However, here is the baseline performance after porting warptiling technique for fp32 above to fp16/bf16. **Spoiler alert: the performance is pretty bad and we are down to about 1/4th of pytorch performance.**
 
-> NOTE: I haven't done any tuning of the tile sizes here - just took fp32 kernel as is and update types and handled vectorized loads using float2!
+> NOTE: I haven't done any tuning of the tile sizes here - just took fp32 kernel as is and update types and handled vectorized loads using float2.
 {: .prompt-info}
 
 ![FP16 Baseline](/assets/explore_gemm_fp16_baseline.png)
@@ -1582,7 +1593,7 @@ The warp-tiling structure that we discussed earlier can also be implemented usin
 > NOTE: CUTLASS provide even more high-level abstractions for GEMMs. We will discuss that later
 {: .prompt-info}
 
-Before we dig further into WMMA, let's look at what are Tensorcores. At a high level, Tensorcores provide warp-level collective operation for MMA such that 32 threads within a warp collectively hold MMA operands. Below we represent 4 x 4 x 4 matrix processing array performing `D = A * B + C`.
+Before we dig further into WMMA, let's look at what are Tensorcores. At a high level, Tensorcores provide warp-level collective operation for MMA such that 32 threads within a warp collectively hold MMA operands. In other words, the thread-tiling register based outer product can be lowered all the way to the hardware using Tensorcores. Below we represent 4 x 4 x 4 matrix processing array performing `D = A * B + C`.
 
 ![WMMA](/assets/explore_gemms_wmma_nvidia_blog.png)
 
@@ -1820,22 +1831,22 @@ We start to do a bit better compared to the warptiled kernel without tensorcores
 > We see the TensorCore instructions now in the kernel!!
 {: .prompt-tip}
 
-Now just to confirm that we are using the right instructions, ran pytorch matmul through ncu and it seems like it uses the same instruction as our kernel!
+Now just to confirm and benchmark against baseline, I ran pytorch matmul through ncu and it uses the same instruction as our kernel! Good!
 
 ![PyTorch Matmul NCU](/assets/explore_gemms_pytorch_matmul_ncu.png)
 
-> Although, I did realize one problem with the benchmarking at this point. We were allocating an elementwise kernel for torch.zeros for every custom kernel we were benchmarking against pytorch. So, I updated the benchmark code to just do torch.empty since beta = 0 implies C doesn't need to be initialized with 0s. 
+> Although, I realized one problem with the benchmarking at this point. We were allocating an elementwise kernel for torch.zeros for every custom kernel we were benchmarking against pytorch. So, I updated the benchmark code to just do torch.empty since beta = 0 implies C doesn't need to be initialized with 0s. Update profile doesn't show elementwise kernel after each matmul call anymore.
 {: .prompt-warning}
+
+![After removing allocation](/assets/explore_gemms_after_removing_the_allocation.png)
 
 ... but did not help much!
 
 ![Torch empty experiment](/assets/explore_gemm_torch_empty_experiment.png)
 
-
-
 ## Double Buffering
 
-Double buffering is in essence a producer/consumer pattern such that you compute based on one buffer while you fill the other buffer. This [Nvidia user post answer](https://forums.developer.nvidia.com/t/what-is-double-buffering/13531) puts it very well! It is also called software pipelining in cuda land to overlap memory access with computation. 
+If you think about matmuls as an async problem, it is essentially a producer-consumer problem. Producer produces data as fast as possible from global -> shared -> registers and consumer computes MMA instructions as fast as it can. Double buffering is in essence this producer/consumer pattern such that you compute based on one buffer while you fill the other buffer. This [Nvidia user post answer](https://forums.developer.nvidia.com/t/what-is-double-buffering/13531) puts it very well! It is also called software pipelining in cuda land to overlap memory access with computation. 
 
 ![Double Buffer](/assets/explore_gemms_double_buffer_user_answer.png)
 
@@ -1848,7 +1859,7 @@ __shared__ InputType tile_a[2][BM * BK];
 __shared__ InputType tile_b[2][BK * BN];
 ```
 
-We can write to the write buffer while we read buffer is used for the gemm operations. We can skip the synchornization in this case. You can also think of it as a special case of circular buffer queue with buffer size = 2!
+We can write to the write buffer while the read buffer is used for the gemm operations. We can skip the synchornization in this case. I think, you can also think of it as a special case of circular buffer queue with buffer size = 2! We will extend this beyond 2 later.
 
 ### Kernel
 
@@ -1910,7 +1921,7 @@ sgemm_tensorcore_double_buffered_kernel(int num_rows_a, int num_cols_b, int num_
     // Temporary fragment for loading existing C values (when beta != 0)
     nvcuda::wmma::fragment<nvcuda::wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> c_frag;
 
-    // Initialize all accumulator fragments to zero
+    // Initialize all accumulator fragments to zero. ?? Unsure whether we can bypass this. ??
 #pragma unroll
     for (int i = 0; i < WARP_ROW_TILES; ++i)
     {
@@ -2057,7 +2068,7 @@ We get a nice 30+% improvement in performance!
 
 ![Double Buffering](/assets/explore_gemms_tensorcore_double_buffered.png.png)
 
-Next, I wondered about asynchronous loads and stores while we overlap compute. This led me down a rabbit hole to read about [`cuda::pipeline`](https://nvidia.github.io/cccl/libcudacxx/extended_api/synchronization_primitives/pipeline.html). I implemented a new kernel using the pipeline but it ended up being slower than previous double buffered kernel. 
+Next, I wondered about asynchronous loads and stores while we overlap compute. This led me down a rabbit hole to read about [`cuda::pipeline`](https://nvidia.github.io/cccl/libcudacxx/extended_api/synchronization_primitives/pipeline.html). I implemented a new kernel using the pipeline but it ended up being slower than previous double buffered kernel so I just moved on to CUTLASS.
 
 ## CUTLASS
 
@@ -2065,7 +2076,7 @@ Next, I wondered about asynchronous loads and stores while we overlap compute. T
 
 ![Ugh](https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExY3J6a2J6emxpeTMxZnN5N3N5YmI1MGhrNzRrbnRhZWcyYWp4NjhhdyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/BY8ORoRpnJDXeBNwxg/giphy.gif)
 
-Now that we have the foundational understanding of how we have to utilize the hardware to get performance out of our GEMMs. This post is focussed on an older version of consumer grade GPU. It is much harder as we get to Hopper and Blackwell. That is where the abstractions that CUTLASS provides are really useful. 
+Now we should have enough foundational understanding of how we have to utilize the hardware to get performance out of our GEMMs. This post is focussed on a consumer grade GPU on Ada generation. The problem is much harder as we get to Hopper and Blackwell with more new shniy features. That is where the abstractions that CUTLASS provides are really useful. 
 
 ### What is CUTLASS
 
@@ -2376,7 +2387,7 @@ Here's a couple of more layouts from [Nvidia docs](https://docs.nvidia.com/cuda/
 
 ![MN Major](/assets/explore_gemms_mn_major_swizzling_nvidia_docs.png)
 
-> I am still learning but in my view, key takeaway from Swizzling should be that to avoid bank conflict, you remap shared memory layouts to some alternate (i.e. swizzled) layout to ensure threads don't fight for the same hardware resources (i.e. banks)! There are a few more resources in the References section that I read or skimmed - specially the ones from [Colfax Research](https://research.colfax-intl.com/cutlass-tutorial-wgmma-hopper/) are good but need a lot of brain compute. 
+> I am still learning but in my view, key takeaway from Swizzling should be that to avoid bank conflict, you remap shared memory layouts to some alternate (i.e. swizzled) layout to ensure threads don't fight for the same hardware resources (i.e. banks)! There are a few more resources in the References section that I read or skimmed - specially the ones from [Colfax Research](https://research.colfax-intl.com/cutlass-tutorial-wgmma-hopper/) are good but need a lot of brain compute to grok. 
 {: .prompt-tip}
 
 ## Persistent Kernels/Software Pipelining
@@ -2399,7 +2410,7 @@ Conceptually, this is a deep topic and is an active area of performance work spe
 
 ![Phil Tillet GTC 25 - 3](/assets/explore_gemms_persistent_kernel_phil_gtc.png)
 
-Highlly recommend watching those talks to understand more.
+Highly recommend watching those talks to understand more.
 
 ## Autotuning
 
@@ -2476,10 +2487,11 @@ Triton also has [persistent kernel implementation](https://triton-lang.org/main/
 
 ## Epilogue
 
-Writing this post was a pretty rewarding experience for me to get beyond the cuda tutorial hell of *"oh...shared memory cache.. blah blah"*. I think it helped be appreciate why writing optimal GEMMs continues to be hard problem and I have barely scratched the surface. There is so much more to explore here and I might write more when I get to it. It took me about a month and a half to explore, write the kernels, and the post (with PyTorch Conference somewhere in there as well). Nevertheless, for the curious reader, the few things I wanted to explore next were:
+Writing this post was a pretty rewarding experience for me to get beyond the cuda tutorial hell of *"oh...shared memory cache.. blah blah"*. I think it helped me appreciate why writing optimal GEMMs continues to be hard problem and I have barely scratched the surface. There is so much more to explore here and I might write more when I get to it. It took me about a month and a half of weekends and nights to explore, write the kernels, and the post (with PyTorch Conference somewhere in there as well). Nevertheless, for the curious reader, the few things I wanted to explore next were:
 
 - Run it on Hopper and Blackwell Hardware
-- FP8 variant
+- fp8 variant
+- mxfp4, mxfp8 variants
 - CUTLASS 3.x and 4.x API (this is just boiler plate and I could just LLM it but I found 2.x version more intuitive for now)
 - CUTE python DSL
 - Other kernels such as Grouped GEMM
@@ -2517,6 +2529,7 @@ Here is full list of resources and links that I skimmed, referred, read, or watc
 - [Demystifying the Nvidia Ampere Architecture](https://arxiv.org/pdf/2208.11174)
 - [Programming Tensor Cores in CUDA 9](https://developer.nvidia.com/blog/programming-tensor-cores-cuda-9/)
 - [Warp Matrix Functions](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#warp-matrix-functions)
+- [Modern GPU wiki](https://moderngpu.github.io/performance.html)
 - [Cuda_hgemm repo](https://github.com/Bruce-Lee-LY/cuda_hgemm/tree/master)
 - [GPU Mode Lectures](https://www.youtube.com/watch?v=hQ9GPnV0-50)
 - [Triton Linear Layout](https://www.lei.chat/posts/triton-linear-layout-concept/)
