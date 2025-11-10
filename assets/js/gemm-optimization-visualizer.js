@@ -1766,9 +1766,9 @@ class Tiling2DViz {
 
         // Simulate one K iteration to show the outer product pattern
         for (let k = 0; k < this.tileSize; k++) {
-            // Step 2: Load register_m[TM] from tile_a
+            // Step 2: Load register_m[TM] from tile_a[k][0..TM-1]
             for (let i = 0; i < this.TM; i++) {
-                const cellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${k}"]`);
+                const cellA = this.sharedA.querySelector(`[data-row="${k}"][data-col="${i}"]`);
                 if (cellA) cellA.classList.add('active');
 
                 const regM = document.getElementById(`reg2d-m-${i}`);
@@ -1779,9 +1779,9 @@ class Tiling2DViz {
             smemReads += this.TM;
             await sleep(300);
 
-            // Step 3: Load register_n[TN] from tile_b
+            // Step 3: Load register_n[TN] from tile_b[0..TN-1][k]
             for (let j = 0; j < this.TN; j++) {
-                const cellB = this.sharedB.querySelector(`[data-row="${k}"][data-col="${j}"]`);
+                const cellB = this.sharedB.querySelector(`[data-row="${j}"][data-col="${k}"]`);
                 if (cellB) cellB.classList.add('active');
 
                 const regN = document.getElementById(`reg2d-n-${j}`);
@@ -1811,9 +1811,9 @@ class Tiling2DViz {
                     // Update output
                     if (cellC) {
                         if (k < this.tileSize - 1) {
-                            cellC.style.background = '#FF6B6B'; // Partial
+                            cellC.style.background = '#FF6B6B';
                         } else {
-                            cellC.style.background = '#4CAF50'; // Complete
+                            cellC.style.background = '#4CAF50';
                             computationsCompleted++;
                         }
                     }
