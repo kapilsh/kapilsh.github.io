@@ -2688,9 +2688,9 @@ class WarpTilingViz {
         for (let k = 0; k < this.BK; k++) {
             // Step 2: Load warp fragment from shared memory to registers
 
-            // Highlight column k from tile_a
+            // Highlight row k from tile_a
             for (let i = 0; i < this.vizWM; i++) {
-                const cellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${k}"]`);
+                const cellA = this.sharedA.querySelector(`[data-row="${k}"][data-col="${i}"]`);
                 if (cellA) {
                     cellA.classList.add('active');
                     cellA.style.background = '#9C27B0';
@@ -2705,9 +2705,9 @@ class WarpTilingViz {
             }
             await sleep(400);
 
-            // Highlight row k from tile_b
+            // Highlight column k from tile_b
             for (let j = 0; j < this.vizWN; j++) {
-                const cellB = this.sharedB.querySelector(`[data-row="${k}"][data-col="${j}"]`);
+                const cellB = this.sharedB.querySelector(`[data-row="${j}"][data-col="${k}"]`);
                 if (cellB) {
                     cellB.classList.add('active');
                     cellB.style.background = '#00BCD4';
