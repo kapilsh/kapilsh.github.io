@@ -915,7 +915,7 @@ class Tiling1DViz {
         const threadsPerRow = this.tileSize / this.TM;
 
         for (let threadRow = 0; threadRow < threadsPerRow; threadRow++) {
-            for (let col = 0; col < this.tileSize; col++) {
+            for (let col = 0; col < this.tileSize; col++) { // traverse tileA left→right for fixed tileB
                 for (let k = 0; k < this.tileSize; k++) {
 
                     // ===== PREVIOUS KERNEL (Left side): Read 2 values, compute 1 output =====
@@ -923,7 +923,7 @@ class Tiling1DViz {
                         const row = threadRow * this.TM + tm;
 
                         // Read from tile_a
-                        const prevCellA = this.prevSharedA.querySelector(`[data-row="${row}"][data-col="${k}"]`);
+                        const prevCellA = this.prevSharedA.querySelector(`[data-row="${k}"][data-col="${row}"]`);
                         if (prevCellA) prevCellA.classList.add('active');
                         prevSMEMReads++;
 
@@ -936,17 +936,14 @@ class Tiling1DViz {
 
                         // Compute 1 output
                         const prevCellC = this.prevMatrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
-                        if (prevCellC) {
-                            prevCellC.style.background = '#FF6B6B'; // Computing
-                        }
-
+                        if (prevCellC) prevCellC.style.background = '#FF6B6B'; // Computing
                         await sleep(80);
 
                         if (prevCellC) {
                             if (k < this.tileSize - 1) {
                                 prevCellC.style.background = '#FF6B6B'; // Partial
                             } else {
-                                prevCellC.style.background = '#4A9B6C'; // Complete (muted green)
+                                prevCellC.style.background = '#8BC34A'; // Complete (muted green)
                             }
                         }
 
@@ -956,15 +953,13 @@ class Tiling1DViz {
                     }
 
                     // ===== CURRENT KERNEL (Right side): Cache b_tmp, compute TM outputs =====
-                    // Load TM values from tile_a
                     for (let tm = 0; tm < this.TM; tm++) {
                         const row = threadRow * this.TM + tm;
-                        const cellA = this.sharedA.querySelector(`[data-row="${row}"][data-col="${k}"]`);
+                        const cellA = this.sharedA.querySelector(`[data-row="${k}"][data-col="${row}"]`);
                         if (cellA) cellA.classList.add('active');
                     }
                     currentSMEMReads += this.TM;
 
-                    // Load 1 value from tile_b into b_tmp register (REUSED!)
                     const cellB = this.sharedB.querySelector(`[data-row="${k}"][data-col="${col}"]`);
                     if (cellB) cellB.classList.add('active');
 
@@ -974,44 +969,36 @@ class Tiling1DViz {
                     regN.style.borderColor = '#00BCD4';
                     regIndex.textContent = `B[${k}][${col}]`;
                     regIndex.style.color = '#00BCD4';
-
                     currentSMEMReads += 1;
 
                     await sleep(200);
 
-                    // Compute TM outputs using the SAME b_tmp (register reuse!)
                     for (let tm = 0; tm < this.TM; tm++) {
                         const row = threadRow * this.TM + tm;
                         const cellC = this.matrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
 
-                        // Show b_tmp being reused
                         regN.style.background = '#FF6B6B';
                         regIndex.textContent = `×${tm + 1}`;
                         regIndex.style.color = '#FF6B6B';
 
-                        if (cellC) {
-                            cellC.style.background = '#FF6B6B'; // Computing
-                        }
-
+                        if (cellC) cellC.style.background = '#FF6B6B';
                         await sleep(100);
 
                         if (cellC) {
                             if (k < this.tileSize - 1) {
-                                cellC.style.background = '#FF6B6B'; // Partial
+                                cellC.style.background = '#FF6B6B';
                             } else {
-                                cellC.style.background = '#8BC34A'; // Complete
+                                cellC.style.background = '#8BC34A';
                                 if (tm === this.TM - 1) computationsCompleted += this.TM;
                             }
                         }
                     }
 
-                    // Reset register
                     regN.style.background = '#333';
                     regN.style.borderColor = '#555';
                     regIndex.textContent = '—';
                     regIndex.style.color = '#999';
 
-                    // Clear active highlights from shared memory
                     this.sharedA.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
                     this.sharedB.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
                 }
@@ -3613,7 +3600,7 @@ if (typeof window !== 'undefined') {
 }
 
 // Auto-initialize all visualizations when DOM is ready
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     if (document.getElementById('roofline-viz')) new RooflineViz('roofline-viz');
     if (document.getElementById('naive-viz')) new NaiveKernelViz('naive-viz');
     if (document.getElementById('coalesced-matrix-viz')) new CoalescedMatrixViz('coalesced-matrix-viz');
