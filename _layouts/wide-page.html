@@ -1,0 +1,43 @@
+---
+layout: default
+---
+
+{% include lang.html %}
+
+<article class="px-1">
+  {% if page.layout == 'wide-page' or page.collection == 'tabs' %}
+    {% assign tab_key = page.title | downcase %}
+    {% assign title = site.data.locales[lang].tabs[tab_key] | default: page.title %}
+    <h1 class="dynamic-title">
+      {{ title }}
+    </h1>
+    <div class="content">
+      {{ content }}
+    </div>
+  {% else %}
+    {{ content }}
+  {% endif %}
+</article>
+
+<style>
+  /* Hide the right sidebar panel on wide-page layout */
+  #panel-wrapper {
+    display: none !important;
+  }
+
+  /* Expand main content to full width - override Bootstrap grid */
+  main.col-12.col-lg-11.col-xl-9 {
+    --bs-gutter-x: 0;
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+
+  /* Adjust tail wrapper to match */
+  #tail-wrapper.col-12.col-lg-11.col-xl-9 {
+    --bs-gutter-x: 0;
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+</style>

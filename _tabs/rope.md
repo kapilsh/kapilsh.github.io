@@ -1,5 +1,5 @@
 ---
-# the default layout is 'page'
+layout: wide-page
 title: RoPE Visualizer
 icon: fas fa-compass
 order: 4

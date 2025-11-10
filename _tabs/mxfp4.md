@@ -1,5 +1,5 @@
 ---
-# the default layout is 'page'
+layout: wide-page
 title: MXFP4 Visualizer
 icon: fas fa-calculator
 order: 3

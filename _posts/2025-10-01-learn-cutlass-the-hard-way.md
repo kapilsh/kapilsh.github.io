@@ -2493,6 +2493,7 @@ Writing this post was a pretty rewarding experience for me to get beyond the cud
 - fp8 variant
 - mxfp4, mxfp8 variants
 - CUTLASS 3.x and 4.x API (this is just boiler plate and I could just LLM it but I found 2.x version more intuitive for now)
+    - UPDATE: Apparently, [this is unsupported](https://github.com/NVIDIA/cutlass/issues/1337) on Ada - only Hopper and Blackwell..so eh...
 - CUTE python DSL
 - Other kernels such as Grouped GEMM
 
