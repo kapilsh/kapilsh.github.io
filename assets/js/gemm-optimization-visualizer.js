@@ -979,7 +979,7 @@ class Tiling1DViz {
                     // Compute TM outputs using the SAME b_tmp (register reuse!)
                     for (let tm = 0; tm < this.TM; tm++) {
                         const row = threadRow * this.TM + tm;
-                        const cellC = this.matrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
+                        const cellC = this.matrixC.querySelector(`[data-row="${row}"][data-col="${k}"]`);
 
                         // Show b_tmp being reused
                         regN.style.background = '#FF6B6B';
@@ -989,13 +989,8 @@ class Tiling1DViz {
                         if (cellC) cellC.style.background = '#FF6B6B';
                         await sleep(100);
 
-                        if (cellC) {
-                            if (k < this.tileSize - 1) {
-                                cellC.style.background = '#FF6B6B';
-                            } else {
-                                cellC.style.background = '#8BC34A';
-                                if (tm === this.TM - 1) computationsCompleted += this.TM;
-                            }
+                        if (col == this.tileSize - 1) {
+                            cellC.style.background = '#8BC34A'; // Complete result (final k)
                         }
                     }
 
