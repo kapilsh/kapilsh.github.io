@@ -915,7 +915,7 @@ class Tiling1DViz {
         const threadsPerRow = this.tileSize / this.TM;
 
         for (let threadRow = 0; threadRow < threadsPerRow; threadRow++) {
-            for (let col = 0; col < this.tileSize; col++) { // traverse tileA left→right for fixed tileB
+            for (let col = 0; col < this.tileSize; col++) {
                 for (let k = 0; k < this.tileSize; k++) {
 
                     // ===== PREVIOUS KERNEL (Left side): Read 2 values, compute 1 output =====
@@ -953,13 +953,15 @@ class Tiling1DViz {
                     }
 
                     // ===== CURRENT KERNEL (Right side): Cache b_tmp, compute TM outputs =====
+                    // Load TM values from tile_a
                     for (let tm = 0; tm < this.TM; tm++) {
                         const row = threadRow * this.TM + tm;
-                        const cellA = this.sharedA.querySelector(`[data-row="${k}"][data-col="${row}"]`);
+                        const cellA = this.sharedA.querySelector(`[data-row="${row}"][data-col="${k}"]`);
                         if (cellA) cellA.classList.add('active');
                     }
                     currentSMEMReads += this.TM;
 
+                    // Load 1 value from tile_b into b_tmp register (REUSED!)
                     const cellB = this.sharedB.querySelector(`[data-row="${k}"][data-col="${col}"]`);
                     if (cellB) cellB.classList.add('active');
 
@@ -969,14 +971,17 @@ class Tiling1DViz {
                     regN.style.borderColor = '#00BCD4';
                     regIndex.textContent = `B[${k}][${col}]`;
                     regIndex.style.color = '#00BCD4';
+
                     currentSMEMReads += 1;
 
                     await sleep(200);
 
+                    // Compute TM outputs using the SAME b_tmp (register reuse!)
                     for (let tm = 0; tm < this.TM; tm++) {
                         const row = threadRow * this.TM + tm;
                         const cellC = this.matrixC.querySelector(`[data-row="${row}"][data-col="${col}"]`);
 
+                        // Show b_tmp being reused
                         regN.style.background = '#FF6B6B';
                         regIndex.textContent = `×${tm + 1}`;
                         regIndex.style.color = '#FF6B6B';
@@ -994,11 +999,13 @@ class Tiling1DViz {
                         }
                     }
 
+                    // Reset register
                     regN.style.background = '#333';
                     regN.style.borderColor = '#555';
                     regIndex.textContent = '—';
                     regIndex.style.color = '#999';
 
+                    // Clear active highlights from shared memory
                     this.sharedA.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
                     this.sharedB.querySelectorAll('.active').forEach(el => el.classList.remove('active'));
                 }
@@ -1766,9 +1773,9 @@ class Tiling2DViz {
 
         // Simulate one K iteration to show the outer product pattern
         for (let k = 0; k < this.tileSize; k++) {
-            // Step 2: Load register_m[TM] from tile_a[k][0..TM-1]
+            // Step 2: Load register_m[TM] from tile_a
             for (let i = 0; i < this.TM; i++) {
-                const cellA = this.sharedA.querySelector(`[data-row="${k}"][data-col="${i}"]`);
+                const cellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${k}"]`);
                 if (cellA) cellA.classList.add('active');
 
                 const regM = document.getElementById(`reg2d-m-${i}`);
@@ -1779,9 +1786,9 @@ class Tiling2DViz {
             smemReads += this.TM;
             await sleep(300);
 
-            // Step 3: Load register_n[TN] from tile_b[0..TN-1][k]
+            // Step 3: Load register_n[TN] from tile_b
             for (let j = 0; j < this.TN; j++) {
-                const cellB = this.sharedB.querySelector(`[data-row="${j}"][data-col="${k}"]`);
+                const cellB = this.sharedB.querySelector(`[data-row="${k}"][data-col="${j}"]`);
                 if (cellB) cellB.classList.add('active');
 
                 const regN = document.getElementById(`reg2d-n-${j}`);
@@ -2688,9 +2695,9 @@ class WarpTilingViz {
         for (let k = 0; k < this.BK; k++) {
             // Step 2: Load warp fragment from shared memory to registers
 
-            // Highlight row k from tile_a
+            // Highlight column k from tile_a
             for (let i = 0; i < this.vizWM; i++) {
-                const cellA = this.sharedA.querySelector(`[data-row="${k}"][data-col="${i}"]`);
+                const cellA = this.sharedA.querySelector(`[data-row="${i}"][data-col="${k}"]`);
                 if (cellA) {
                     cellA.classList.add('active');
                     cellA.style.background = '#9C27B0';
@@ -2707,7 +2714,7 @@ class WarpTilingViz {
 
             // Highlight column k from tile_b
             for (let j = 0; j < this.vizWN; j++) {
-                const cellB = this.sharedB.querySelector(`[data-row="${j}"][data-col="${k}"]`);
+                const cellB = this.sharedB.querySelector(`[data-row="${k}"][data-col="${j}"]`);
                 if (cellB) {
                     cellB.classList.add('active');
                     cellB.style.background = '#00BCD4';
