@@ -131,12 +131,15 @@ For Hopper and beyond, the API was changed to be centered around conceptual GEMM
 
 ![Cutlass 3.x](/assets/explore_gemms_2_cutlass_3x_gemm.png)
 
-The way this translates into GEMM API is shown below. For more detailed intro on GEMM API, [CUTLASS documentation on CUTLASS 3.x GEMM](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/gemm_api_3x.html#) is pretty useful, though I think the documentation was a bit better.
+> The Collective layer is particularly important for Hopper+ kernels. It's where temporal micro-kernels orchestrate the producer-consumer pattern we discussed earlier, where producer warps issue TMA loads and consumer warps execute WGMMA operations, all coordinated through asynchronous transaction barriers. 
+{: .prompt-info}
 
-The Collective layer is particularly important for Hopper+ kernels. It's where temporal micro-kernels orchestrate the producer-consumer pattern we discussed earlier—producer warps issuing TMA loads while consumer warps execute WGMMA operations, all coordinated through asynchronous transaction barriers.
+The way this translates into GEMM API is visualized below. For more detailed intro on GEMM API, [CUTLASS documentation on CUTLASS 3.x GEMM](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/gemm_api_3x.html#) is pretty useful, though I think the documentation was a bit better.
+
+Example kernels are useful though. Most useful example in the CUTLASS repo I found was [Hopper GEMM with Collective Builder](https://github.com/NVIDIA/cutlass/tree/main/examples/49_hopper_gemm_with_collective_builder) example. 
+
 
 <div id="cutlass-3x-hierarchy-viz"></div>
-
 
 ### Producer-Consumer Pipeline
 
