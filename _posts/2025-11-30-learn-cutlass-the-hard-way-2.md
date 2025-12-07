@@ -138,8 +138,25 @@ The way this translates into GEMM API is visualized below. For more detailed int
 
 Example kernels are useful though. Most useful example in the CUTLASS repo I found was [Hopper GEMM with Collective Builder](https://github.com/NVIDIA/cutlass/tree/main/examples/49_hopper_gemm_with_collective_builder) example. 
 
-
 <div id="cutlass-3x-hierarchy-viz"></div>
+
+## Hopper GEMM Kernels
+
+### Warp Specialization
+
+[Warp specialization (also called spatial partitioning)](https://docs.nvidia.com/cuda/cuda-c-programming-guide/#spatial-partitioning-also-known-as-warp-specialization) is a technique where different warps within a thread block are assigned distinct roles rather than executing identical work. Instead of all warps performing the same operations on different data, specialized warps focus on specific tasks i.e. some handle data movement while others perform computation. As GEMMs move to async producer/consumer paradigms, this becomes essential so that a single warp is not holding all the required registers and shared memory resources. It also allows for handling unpredictable cycle counts for memory loads / TMA more efficiently. We will see more paradigms in this later but overall it reduces "empty bubbles" such that some warps can continue executing while others wait on blocking operations. 
+
+#### Simple Warp Specialized Producer-Consumer Pattern
+
+The visualization below shows a simple warp-specialized kernel with one producer and one consumer such that:
+
+- **Producer warps** initiate asynchronous data transfers (e.g., using `cuda::memcpy_async` or TMA operations)
+- **Consumer warps** perform computations on previously loaded data
+- Both groups coordinate using asynchronous barriers
+
+In this arrangement, we overlap memory operations with computation to reduce idle time and improving throughput. Actual timelines can look different depending on memory/compute boundness but this just aims to demostrate the general idea.
+
+<div id="warp-specialization-viz"></div>
 
 ### Producer-Consumer Pipeline
 
@@ -156,6 +173,8 @@ The combination of TMA, async barriers, and warp specialization enables a powerf
 - [NVIDIA Hopper Architecture In-Depth](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/)
 - [CUTLASS Tutorial: Persistent Kernels and Stream-K](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/)
 - [Efficient GEMM in CUDA](https://docs.nvidia.com/cutlass/media/docs/cpp/efficient_gemm.html)
+- [CUDA C++ Programming Guide: Spatial Partitioning (Warp Specialization)](https://docs.nvidia.com/cuda/cuda-c-programming-guide/#spatial-partitioning-also-known-as-warp-specialization)
+- [Warp Specialization Blog Post](https://rohany.github.io/blog/warp-specialization/)
 
 
 <script src="/assets/js/hopper-gemm-pipeline.js"></script>

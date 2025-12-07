@@ -156,21 +156,22 @@ const commonPipelineStyles = `
         }
 
         .pipeline-timeline-wrapper {
-            min-width: 880px;
+            min-width: 600px;
         }
 
         .pipeline-time-axis {
             display: flex;
             align-items: center;
             margin-bottom: 1.5rem;
-            margin-left: 12rem;
+            padding-top: 2rem;
         }
 
         .pipeline-time-label {
+            width: 11rem;
             font-size: 0.875rem;
             color: #9ca3af;
             font-weight: bold;
-            margin-right: 1rem;
+            padding-right: 1rem;
         }
 
         .pipeline-time-track {
@@ -249,7 +250,7 @@ const commonPipelineStyles = `
         .pipeline-lane-track {
             position: relative;
             flex: 1;
-            height: 5rem;
+            height: 3rem;
             background-color: #111827;
             border-radius: 0.25rem;
             border: 1px solid #374151;
@@ -291,7 +292,7 @@ const commonPipelineStyles = `
         }
 
         .pipeline-operation-icon {
-            font-size: 1.5rem;
+            font-size: 1rem;
         }
 
         .pipeline-operation-label {
@@ -1417,5 +1418,349 @@ document.addEventListener('DOMContentLoaded', () => {
     const container = document.getElementById('cutlass-3x-hierarchy-viz');
     if (container) {
         new CutlassHierarchyViz('cutlass-3x-hierarchy-viz');
+    }
+});
+
+// ============================================================================
+// Warp Specialization Visualization
+// ============================================================================
+
+class WarpSpecializationViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+
+        // Configuration
+        this.config = {
+            maxTime: 220,
+            timeScale: 2.5,
+            numTiles: 4,
+            animationInterval: 40,
+        };
+
+        this.opTypes = {
+            TMA_LOAD: { name: 'TMA Load', color: 'pipeline-bg-cyan-500', duration: 20, icon: '📥' },
+            BARRIER_ARRIVE: { name: 'Barrier Arrive', color: 'pipeline-bg-blue-500', duration: 15, icon: '🚪' },
+            BARRIER_WAIT: { name: 'Barrier Wait', color: 'pipeline-bg-orange-500', duration: 15, icon: '⏳' },
+            WGMMA: { name: 'WGMMA Compute', color: 'pipeline-bg-purple-500', duration: 30, icon: '⚡' },
+        };
+
+        this.streams = [
+            { id: 'producer', name: 'Producer Warp', type: 'producer' },
+            { id: 'consumer', name: 'Consumer Warp', type: 'consumer' },
+        ];
+
+        // State
+        this.state = {
+            isPlaying: false,
+            currentTime: 0,
+            operations: [],
+            animationTimer: null,
+        };
+
+        this.init();
+    }
+
+    init() {
+        this.container.innerHTML = commonPipelineStyles + `
+            <div class="pipeline-container">
+                <h1 class="pipeline-title">Warp Specialization: Producer-Consumer Pattern</h1>
+                <p class="pipeline-subtitle">Simple example with 1 producer warp and 1 consumer warp coordinated via async barriers</p>
+
+                <!-- Controls -->
+                <div class="pipeline-controls">
+                    <button id="warpSpecPlayBtn" class="pipeline-btn pipeline-btn-primary">
+                        <span id="warpSpecPlayIcon">▶</span>
+                        <span id="warpSpecPlayText">Play</span>
+                    </button>
+                    <button id="warpSpecResetBtn" class="pipeline-btn pipeline-btn-secondary">
+                        <span>↻</span>
+                        <span>Reset</span>
+                    </button>
+                </div>
+
+                <!-- Legend -->
+                <div class="pipeline-card">
+                    <h3 class="pipeline-card-title">Operation Types</h3>
+                    <div class="pipeline-legend-grid" id="warpSpecLegendGrid"></div>
+                </div>
+
+                <!-- Timeline -->
+                <div class="pipeline-timeline-container">
+                    <div class="pipeline-timeline-wrapper" id="warpSpecTimelineWrapper">
+                        <div class="pipeline-time-axis">
+                            <div class="pipeline-time-label">Time →</div>
+                            <div class="pipeline-time-track" id="warpSpecTimeTrack"></div>
+                        </div>
+                        <div id="warpSpecStreamLanes"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        this.state.operations = this.initializeOperations();
+        this.initializeLegend();
+        this.initializeTimeTrack();
+        this.initializeStreamLanes();
+        this.updateVisualization();
+
+        // Event listeners
+        document.getElementById('warpSpecPlayBtn').addEventListener('click', () => this.togglePlay());
+        document.getElementById('warpSpecResetBtn').addEventListener('click', () => this.resetAnimation());
+    }
+
+    initializeOperations() {
+        const ops = [];
+        let opId = 0;
+
+        for (let tile = 0; tile < this.config.numTiles; tile++) {
+            const baseTime = tile * 50;
+
+            // Producer: TMA Load
+            ops.push({
+                id: opId++,
+                streamId: 'producer',
+                type: 'TMA_LOAD',
+                startTime: baseTime,
+                endTime: baseTime + this.opTypes.TMA_LOAD.duration,
+                tile: tile,
+                label: `Load ${tile}`,
+            });
+
+            // Producer: Barrier Arrive (signals load complete)
+            const arriveTime = baseTime + this.opTypes.TMA_LOAD.duration;
+            ops.push({
+                id: opId++,
+                streamId: 'producer',
+                type: 'BARRIER_ARRIVE',
+                startTime: arriveTime,
+                endTime: arriveTime + this.opTypes.BARRIER_ARRIVE.duration,
+                tile: tile,
+                label: `Arrive ${tile}`,
+            });
+
+            // Consumer: Barrier Wait (waits for data)
+            // Wait starts at the same time as barrier arrive to show synchronization
+            const waitStart = arriveTime;
+            const waitEnd = waitStart + this.opTypes.BARRIER_WAIT.duration;
+            ops.push({
+                id: opId++,
+                streamId: 'consumer',
+                type: 'BARRIER_WAIT',
+                startTime: waitStart,
+                endTime: waitEnd,
+                tile: tile,
+                label: `Wait ${tile}`,
+            });
+
+            // Consumer: WGMMA Compute (starts right after wait completes)
+            const computeStart = waitEnd;
+            ops.push({
+                id: opId++,
+                streamId: 'consumer',
+                type: 'WGMMA',
+                startTime: computeStart,
+                endTime: computeStart + this.opTypes.WGMMA.duration,
+                tile: tile,
+                label: `Compute ${tile}`,
+            });
+        }
+
+        return ops;
+    }
+
+    initializeLegend() {
+        const legendGrid = document.getElementById('warpSpecLegendGrid');
+        legendGrid.innerHTML = '';
+
+        Object.entries(this.opTypes).forEach(([, type]) => {
+            const item = document.createElement('div');
+            item.className = 'pipeline-legend-item';
+            item.innerHTML = `
+                <div class="pipeline-legend-icon ${type.color}">${type.icon}</div>
+                <div class="pipeline-legend-text">
+                    <div class="pipeline-legend-name">${type.name}</div>
+                </div>
+            `;
+            legendGrid.appendChild(item);
+        });
+    }
+
+    initializeTimeTrack() {
+        const timeTrack = document.getElementById('warpSpecTimeTrack');
+        const numMarkers = Math.floor(this.config.maxTime / 40) + 1;
+
+        timeTrack.innerHTML = '';
+
+        // Time markers
+        for (let i = 0; i < numMarkers; i++) {
+            const marker = document.createElement('div');
+            marker.className = 'pipeline-time-marker';
+            marker.style.left = `${i * 40 * this.config.timeScale}px`;
+            marker.textContent = i * 40;
+            timeTrack.appendChild(marker);
+
+            const line = document.createElement('div');
+            line.className = 'pipeline-time-line';
+            line.style.left = `${i * 40 * this.config.timeScale}px`;
+            timeTrack.appendChild(line);
+        }
+
+        // Current time marker
+        const currentMarker = document.createElement('div');
+        currentMarker.id = 'warpSpecCurrentTimeMarker';
+        currentMarker.className = 'pipeline-current-time-marker';
+        currentMarker.innerHTML = '<div class="pipeline-current-time-arrow">▼</div>';
+        timeTrack.appendChild(currentMarker);
+
+        // Set width
+        timeTrack.style.minWidth = `${this.config.maxTime * this.config.timeScale}px`;
+    }
+
+    initializeStreamLanes() {
+        const streamLanes = document.getElementById('warpSpecStreamLanes');
+        streamLanes.innerHTML = '';
+
+        this.streams.forEach(stream => {
+            const lane = document.createElement('div');
+            lane.className = 'pipeline-stream-lane';
+            lane.innerHTML = `
+                <div class="pipeline-stream-label pipeline-${stream.type}">
+                    <div class="pipeline-stream-name">${stream.name}</div>
+                    <div class="pipeline-stream-type">${stream.type === 'producer' ? 'Memory Ops' : 'Compute Ops'}</div>
+                </div>
+                <div class="pipeline-lane-track" id="warpSpec-lane-${stream.id}" style="min-width: ${this.config.maxTime * this.config.timeScale}px"></div>
+            `;
+            streamLanes.appendChild(lane);
+        });
+
+        // Create operation elements
+        this.state.operations.forEach(op => {
+            const opType = this.opTypes[op.type];
+            const lane = document.getElementById(`warpSpec-lane-${op.streamId}`);
+
+            const opElement = document.createElement('div');
+            opElement.id = `warpSpec-op-${op.id}`;
+            opElement.className = `pipeline-operation ${opType.color}`;
+            opElement.style.left = `${op.startTime * this.config.timeScale}px`;
+            opElement.style.width = `${(op.endTime - op.startTime) * this.config.timeScale}px`;
+            opElement.style.display = 'none'; // Initially hidden
+            opElement.innerHTML = `
+                <div class="pipeline-operation-progress" id="warpSpec-progress-${op.id}" style="width: 0%"></div>
+                <div class="pipeline-operation-content">
+                    <div class="pipeline-operation-icon">${opType.icon}</div>
+                </div>
+            `;
+
+            lane.appendChild(opElement);
+        });
+    }
+
+    updateVisualization() {
+        const currentMarker = document.getElementById('warpSpecCurrentTimeMarker');
+
+        if (currentMarker) {
+            currentMarker.style.left = `${this.state.currentTime * this.config.timeScale}px`;
+        }
+
+        this.state.operations.forEach(op => {
+            const isActive = this.state.currentTime >= op.startTime && this.state.currentTime <= op.endTime;
+            const isVisible = this.state.currentTime > op.startTime || (this.state.currentTime === op.startTime && this.state.isPlaying);
+
+            const opElement = document.getElementById(`warpSpec-op-${op.id}`);
+            const progressBar = document.getElementById(`warpSpec-progress-${op.id}`);
+
+            if (opElement) {
+                // Show/hide bubble based on visibility
+                if (isVisible) {
+                    opElement.style.display = 'flex';
+                    opElement.style.opacity = isActive ? '1' : '0.6';
+                } else {
+                    opElement.style.display = 'none';
+                }
+
+                if (isVisible && isActive) {
+                    opElement.classList.add('active');
+                    if (!opElement.querySelector('.pipeline-operation-pulse')) {
+                        const pulse = document.createElement('div');
+                        pulse.className = 'pipeline-operation-pulse';
+                        opElement.appendChild(pulse);
+                    }
+                } else {
+                    opElement.classList.remove('active');
+                    const pulse = opElement.querySelector('.pipeline-operation-pulse');
+                    if (pulse) pulse.remove();
+                }
+
+                if (progressBar && isActive) {
+                    const progress = (this.state.currentTime - op.startTime) / (op.endTime - op.startTime);
+                    progressBar.style.width = `${progress * 100}%`;
+                } else if (progressBar && this.state.currentTime > op.endTime) {
+                    progressBar.style.width = '100%';
+                } else if (progressBar) {
+                    progressBar.style.width = '0%';
+                }
+            }
+        });
+    }
+
+    animate() {
+        if (this.state.isPlaying) {
+            this.state.currentTime++;
+
+            if (this.state.currentTime >= this.config.maxTime) {
+                this.state.currentTime = this.config.maxTime;
+                this.stopAnimation();
+            }
+
+            this.updateVisualization();
+        }
+    }
+
+    startAnimation() {
+        this.state.isPlaying = true;
+        this.state.animationTimer = setInterval(() => this.animate(), this.config.animationInterval);
+
+        document.getElementById('warpSpecPlayIcon').textContent = '⏸';
+        document.getElementById('warpSpecPlayText').textContent = 'Pause';
+    }
+
+    stopAnimation() {
+        this.state.isPlaying = false;
+        if (this.state.animationTimer) {
+            clearInterval(this.state.animationTimer);
+            this.state.animationTimer = null;
+        }
+
+        document.getElementById('warpSpecPlayIcon').textContent = '▶';
+        document.getElementById('warpSpecPlayText').textContent = 'Play';
+    }
+
+    resetAnimation() {
+        this.stopAnimation();
+        this.state.currentTime = 0;
+        this.updateVisualization();
+    }
+
+    togglePlay() {
+        if (!this.state.isPlaying && this.state.currentTime >= this.config.maxTime) {
+            this.resetAnimation();
+            setTimeout(() => this.startAnimation(), 100);
+        } else if (this.state.isPlaying) {
+            this.stopAnimation();
+        } else {
+            this.startAnimation();
+        }
+    }
+}
+
+// Auto-initialize warp specialization viz on page load
+document.addEventListener('DOMContentLoaded', () => {
+    const container = document.getElementById('warp-specialization-viz');
+    if (container) {
+        new WarpSpecializationViz('warp-specialization-viz');
     }
 });
