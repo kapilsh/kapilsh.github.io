@@ -1088,6 +1088,22 @@ const cutlassHierarchyStyles = `
             flex-shrink: 0;
         }
 
+        .cutlass-code-block {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-top: 1rem;
+            overflow-x: auto;
+            font-family: 'Courier New', Consolas, monospace;
+            font-size: 0.85rem;
+            line-height: 1.6;
+        }
+
+        .cutlass-code-block code {
+            color: #e2e8f0;
+        }
+
         @media (max-width: 768px) {
             .cutlass-hierarchy-container {
                 padding: 1.5rem;
@@ -1115,25 +1131,47 @@ class CutlassHierarchyViz {
         this.levels = [
             {
                 number: 1,
-                title: "Atom Layer",
-                icon: "⚛️",
-                description: "Architecture-specific instructions and associated meta-information. These are the foundational hardware primitives that directly map to GPU instructions.",
+                title: "Device Layer",
+                icon: "🌐",
+                description: "Host-side setup and interface providing a stateless wrapper around a kernel type",
                 components: [
-                    { name: "MMA Atom", type: "cute::Mma_Atom<>", desc: "Warp-level matrix multiply-accumulate primitives (e.g., mma.sync.m16n8k16.f16)" },
-                    { name: "Copy Atom", type: "cute::Copy_Atom<>", desc: "Thread-level memory operations (e.g., ldmatrix, TMA load/store)" }
+                    { name: "Device Adapter", type: "cutlass::gemm::device::GemmUniversalAdapter<>", desc: "Host-side interface for kernel configuration, workspace management, and launch" }
                 ],
-                tags: ["Hardware Instructions", "SM Architecture", "Register-Level Ops"]
+                codeExample: `using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
+
+Gemm gemm_op;
+cutlass::Status status = gemm_op.can_implement(arguments);
+status = gemm_op.initialize(arguments, workspace.get());
+status = gemm_op.run();`
             },
             {
                 number: 2,
-                title: "Tiled MMA/Copy",
-                icon: "🔲",
-                description: "Spatial micro-kernels that allow for arbitrary interleaving and tiling of architecture-specific atoms. Enables flexible data layouts and efficient computation patterns.",
+                title: "Kernel Layer",
+                icon: "🖥️",
+                description: "GEMM as a composition of a collective mainloop and a collective epilogue where each new kernel schedule is a specialization with some schedule tags",
                 components: [
-                    { name: "Tiled MMA", type: "cute::TiledMma<>", desc: "Thread block-level tiling of MMA atoms with configurable layouts" },
-                    { name: "Tiled Copy", type: "cute::TiledCopy<>", desc: "Thread block-level tiling of copy operations with swizzling support" }
+                    { name: "GEMM Universal", type: "cutlass::gemm::kernel::GemmUniversal<>", desc: "Universal GEMM kernel supporting multiple problem modes and scheduling" }
                 ],
-                tags: ["Thread Block Level", "Spatial Tiling", "Layout Composition", "CuTe Layouts"]
+                specializations: [
+                    { name: "KernelTmaWarpSpecialized", desc: "Standard TMA-based warp specialization" },
+                    { name: "KernelTmaWarpSpecializedPingpong", desc: "Persistent thread blocks with dual-buffering" },
+                    { name: "KernelTmaWarpSpecializedCooperative", desc: "Cooperative scheduling with Stream-K decomposition" }
+                ],
+                schedulers: [
+                    { name: "PersistentScheduler", desc: "Persistent kernel work distribution" },
+                    { name: "StreamKScheduler", desc: "Stream-K problem decomposition" }
+                ],
+                codeExample: `template<
+  int Stages_,
+  class ClusterShape_ = Shape<_1,_1,_1>,
+  class KernelSchedule = KernelTmaWarpSpecialized
+>
+struct MainloopSm90TmaGmmaWarpSpecialized {
+  constexpr static int Stages = Stages_;
+  using ClusterShape = ClusterShape_;
+  using ArchTag = arch::Sm90;
+  using Schedule = KernelSchedule;
+};`
             },
             {
                 number: 3,
@@ -1144,27 +1182,89 @@ class CutlassHierarchyViz {
                     { name: "Collective Mainloop", type: "cutlass::gemm::collective::CollectiveMma<>", desc: "Orchestrates data movement (TMA) and computation (WGMMA) with software pipelining" },
                     { name: "Collective Epilogue", type: "cutlass::epilogue::collective::CollectiveEpilogue<>", desc: "Post-processing operations (accumulator transformations, reductions, output writes)" }
                 ],
-                tags: ["Software Pipelining", "Async Barriers", "Producer-Consumer", "Hopper TMA", "WGMMA"]
+                autoOptions: [
+                    { name: "KernelScheduleAuto", desc: "Framework selects optimal kernel schedule" },
+                    { name: "StageCountAuto", desc: "Automatic pipeline stage determination" },
+                    { name: "EpilogueScheduleAuto", desc: "Automatic epilogue scheduling" }
+                ],
+                codeExample: `using CollectiveOp = typename cutlass::gemm::collective::CollectiveBuilder<
+  arch::Sm90, arch::OpClassTensorOp,
+  half_t, LayoutA, 8,
+  half_t, LayoutB, 8,
+  float,
+  Shape<_128,_128,_64>, Shape<_1,_2,_1>,
+  gemm::collective::StageCountAuto,
+  gemm::collective::KernelScheduleAuto
+>::CollectiveOp;
+
+// Epilogue with fusion
+using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
+  cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
+  Shape<_128,_128,_64>, Shape<_1,_1,_1>,
+  cutlass::epilogue::collective::EpilogueTileAuto,
+  ElementAccumulator, ElementCompute,
+  ElementC, LayoutC, AlignmentC,
+  ElementD, LayoutD, AlignmentD,
+  EpilogueScheduleAuto
+>::CollectiveOp;`
             },
             {
                 number: 4,
-                title: "Kernel Layer",
-                icon: "🖥️",
-                description: "Device code for executing a kernel over a grid of threadblocks/clusters. Composes mainloop and epilogue abstractions and manages tile scheduling strategies.",
+                title: "Tiled MMA/Copy",
+                icon: "🔲",
+                description: "Spatial micro-kernels that allow for arbitrary interleaving and tiling of architecture-specific atoms. Enables flexible data layouts and efficient computation patterns.",
                 components: [
-                    { name: "GEMM Universal", type: "cutlass::gemm::kernel::GemmUniversal<>", desc: "Universal GEMM kernel supporting multiple problem modes and scheduling" }
+                    { name: "Tiled MMA", type: "cute::TiledMma<>", desc: "Thread block-level tiling of MMA atoms with configurable layouts" },
+                    { name: "Tiled Copy", type: "cute::TiledCopy<>", desc: "Thread block-level tiling of copy operations with swizzling support" }
                 ],
-                tags: ["Device Kernel", "Grid Management", "Tile Scheduling", "Stream-K", "Persistent Kernels"]
+                codeExample: `// Tiled MMA with warp group shape
+using TiledMma = decltype(cute::make_tiled_mma(
+  cute::GMMA::ss_op_selector<
+    Element, Element, ElementAccumulator,
+    cute::Shape<_64, _128, _16>
+  >(),
+  cute::Layout<Shape<_2,_1,_1>>{}  // 2x1x1 warp group arrangement
+));
+
+// Tiled Copy with TMA
+using GmemTiledCopyA = decltype(cute::make_tiled_copy(
+  cute::Copy_Atom<cute::SM90_TMA_LOAD, Element>{},
+  cute::Layout<Shape<_1,_1,_1>>{},
+  cute::make_layout(cute::make_shape(Int<32>{}, Int<4>{}))
+));`
             },
             {
                 number: 5,
-                title: "Device Layer",
-                icon: "🌐",
-                description: "Host-side setup and interface providing reusable, stateful kernel management and launch capabilities. User-facing API for CUTLASS.",
+                title: "Atom Layer",
+                icon: "⚛️",
+                description: "Architecture-specific instructions and associated meta-information. These are the foundational hardware primitives that directly map to GPU instructions.",
                 components: [
-                    { name: "Device Adapter", type: "cutlass::gemm::device::GemmUniversalAdapter<>", desc: "Host-side interface for kernel configuration, workspace management, and launch" }
+                    { name: "MMA Atom", type: "cute::Mma_Atom<>", desc: "Warp-level matrix multiply-accumulate primitives (e.g., mma.sync.m16n8k16.f16)" },
+                    { name: "Copy Atom", type: "cute::Copy_Atom<>", desc: "Thread-level memory operations (e.g., ldmatrix, TMA load/store)" }
                 ],
-                tags: ["Host API", "Kernel Launch", "Workspace Management", "Parameter Configuration"]
+                examples: [
+                    { name: "WGMMA (Hopper)", code: "SM90_64x128x16_F16F16F16_SS" },
+                    { name: "MMA (Ampere)", code: "SM80_16x8x16_F16F16F16F16_TN" },
+                    { name: "TMA Load", code: "SM90_TMA_LOAD" },
+                    { name: "TMA Store", code: "SM90_TMA_STORE" },
+                    { name: "Shared Memory Load", code: "SM75_U32x4_LDSM_N" }
+                ],
+                codeExample: `// MMA Atom - WGMMA for Hopper
+using MmaAtom = cute::MMA_Atom<
+  cute::SM90_64x128x16_F16F16F16_SS  // 64x128x16 WGMMA operation
+>;
+
+// Copy Atom - TMA for async loading
+using CopyAtom = cute::Copy_Atom<
+  cute::SM90_TMA_LOAD,               // TMA load instruction
+  Element
+>;
+
+// Copy Atom - Shared memory to register
+using SmemCopyAtom = cute::Copy_Atom<
+  cute::SM75_U32x4_LDSM_N,           // ldmatrix instruction
+  Element
+>;`
             }
         ];
 
@@ -1175,19 +1275,20 @@ class CutlassHierarchyViz {
         this.container.innerHTML = cutlassHierarchyStyles + `
             <div class="cutlass-hierarchy-container">
                 <h1 class="cutlass-hierarchy-title">CUTLASS 3.x GEMM Hierarchy</h1>
-                <p class="cutlass-hierarchy-subtitle">
-                    Five orthogonal, composable abstraction layers from hardware instructions to host API.<br>
-                    Each layer builds upon the previous, enabling maximum code reuse and architectural portability.
-                </p>
 
                 <div class="cutlass-hierarchy-diagram">
                     <div class="cutlass-connector"></div>
                     ${this.renderLevels()}
                 </div>
-
-                ${this.renderKeyPoints()}
             </div>
+            
         `;
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     renderLevels() {
@@ -1222,47 +1323,92 @@ class CutlassHierarchyViz {
                         `).join('')}
                     </div>
 
-                    <div class="cutlass-card-components">
-                        ${level.tags.map(tag => `
-                            <div class="cutlass-component-tag">${tag}</div>
-                        `).join('')}
-                    </div>
+                    ${level.specializations ? `
+                        <div style="margin-top: 1rem;">
+                            <div style="font-weight: bold; color: #f1f5f9; margin-bottom: 0.5rem; font-size: 0.9rem;">
+                                Kernel Schedules:
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 0.75rem;">
+                                ${level.specializations.map(spec => `
+                                    <div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 0.375rem; padding: 0.75rem;">
+                                        <div style="font-family: 'Courier New', monospace; color: #60a5fa; font-size: 0.8rem; font-weight: bold;">
+                                            ${spec.name}
+                                        </div>
+                                        <div style="color: #94a3b8; font-size: 0.75rem; margin-top: 0.25rem;">
+                                            ${spec.desc}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+
+                    ${level.schedulers ? `
+                        <div style="margin-top: 1rem;">
+                            <div style="font-weight: bold; color: #f1f5f9; margin-bottom: 0.5rem; font-size: 0.9rem;">
+                                Tile Schedulers:
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem;">
+                                ${level.schedulers.map(sched => `
+                                    <div style="background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 0.375rem; padding: 0.75rem;">
+                                        <div style="font-family: 'Courier New', monospace; color: #a78bfa; font-size: 0.8rem; font-weight: bold;">
+                                            ${sched.name}
+                                        </div>
+                                        <div style="color: #94a3b8; font-size: 0.75rem; margin-top: 0.25rem;">
+                                            ${sched.desc}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+
+                    ${level.autoOptions ? `
+                        <div style="margin-top: 1rem;">
+                            <div style="font-weight: bold; color: #f1f5f9; margin-bottom: 0.5rem; font-size: 0.9rem;">
+                                Auto Configuration Options:
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem;">
+                                ${level.autoOptions.map(opt => `
+                                    <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 0.375rem; padding: 0.75rem;">
+                                        <div style="font-family: 'Courier New', monospace; color: #34d399; font-size: 0.8rem; font-weight: bold;">
+                                            ${opt.name}
+                                        </div>
+                                        <div style="color: #94a3b8; font-size: 0.75rem; margin-top: 0.25rem;">
+                                            ${opt.desc}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+
+                    ${level.examples ? `
+                        <div style="margin-top: 1rem;">
+                            <div style="font-weight: bold; color: #f1f5f9; margin-bottom: 0.5rem; font-size: 0.9rem;">
+                                Hardware Instruction Examples:
+                            </div>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem;">
+                                ${level.examples.map(ex => `
+                                    <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 0.375rem; padding: 0.75rem;">
+                                        <div style="color: #fbbf24; font-size: 0.75rem; font-weight: bold; margin-bottom: 0.25rem;">
+                                            ${ex.name}
+                                        </div>
+                                        <div style="font-family: 'Courier New', monospace; color: #fcd34d; font-size: 0.75rem;">
+                                            ${ex.code}
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+
+                    ${level.codeExample ? `
+                        <pre class="cutlass-code-block"><code>${this.escapeHtml(level.codeExample)}</code></pre>
+                    ` : ''}
                 </div>
             </div>
         `).join('');
-    }
-
-    renderKeyPoints() {
-        return `
-            <div class="cutlass-key-points">
-                <div class="cutlass-key-points-title">
-                    <span>💡</span>
-                    Design Philosophy
-                </div>
-                <div class="cutlass-key-points-list">
-                    <div class="cutlass-key-point">
-                        <span class="cutlass-key-point-icon">▸</span>
-                        <span><strong>Orthogonality:</strong> Different MMA operations can combine with different copy operations independently, maximizing code reuse across architectures.</span>
-                    </div>
-                    <div class="cutlass-key-point">
-                        <span class="cutlass-key-point-icon">▸</span>
-                        <span><strong>Composability:</strong> Each layer is a composition point—higher layers build upon lower layers through template parameters, not inheritance.</span>
-                    </div>
-                    <div class="cutlass-key-point">
-                        <span class="cutlass-key-point-icon">▸</span>
-                        <span><strong>Specialization:</strong> Dispatch policies (e.g., MainloopSm90TmaGmmaWarpSpecialized) specialize implementations for specific architectures while maintaining a common interface.</span>
-                    </div>
-                    <div class="cutlass-key-point">
-                        <span class="cutlass-key-point-icon">▸</span>
-                        <span><strong>Zero Overhead:</strong> Template metaprogramming and compile-time layout reasoning (via CuTe) ensure zero runtime overhead for abstraction layers.</span>
-                    </div>
-                    <div class="cutlass-key-point">
-                        <span class="cutlass-key-point-icon">▸</span>
-                        <span><strong>Future-Proof:</strong> New hardware features (e.g., Hopper's TMA, WGMMA) slot into existing layers without changing the overall hierarchy structure.</span>
-                    </div>
-                </div>
-            </div>
-        `;
     }
 }
 

@@ -119,20 +119,24 @@ Source: [PTX Handbook](https://docs.nvidia.com/cuda/parallel-thread-execution/in
 
 We will ignore the nvlink, nvswitch features since we will just work on a single GPU.
 
-## CUTLASS 3.x to support Hoppwr
+## CUTLASS 3.x and Support for Hopper
 
-Before we dive into implementing a Hopper-optimized kernel, it's crucial to understand how CUTLASS 3.x organizes GEMM kernels. Unlike CUTLASS 2.x (which we used in the previous post), CUTLASS 3.x introduces a clean five-layer hierarchy that's designed to be orthogonal, composable, and architecture-portable.
+Before we dive into implementing a Hopper-optimized kernel, let's quickly look at changes NVIDIA made in CUTLASS 3.x+ to introduce a a new five-layer hierarchy for GEMM Kernels to make them composable, and portable for future architectures. 
 
-The hierarchy moves from low-level hardware instructions at the bottom to high-level host APIs at the top, with each layer serving as a composition point for the layers below it. This design enables maximum code reuse across different GPU architectures while allowing for architecture-specific optimizations where needed.
+We have previously looked at the GEMM hierarchy as shown below:
+
+![Cutlass 2.x](/assets/explore_gemms_2_cutlass_2x_gemm.png)
+
+For Hopper and beyond, the API was changed to be centered around conceptual GEMM hierarchy instead of Hardware Hierarchy:
+
+![Cutlass 3.x](/assets/explore_gemms_2_cutlass_3x_gemm.png)
+
+The way this translates into GEMM API is shown below. For more detailed intro on GEMM API, [CUTLASS documentation on CUTLASS 3.x GEMM](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/gemm_api_3x.html#) is pretty useful, though I think the documentation was a bit better.
+
+The Collective layer is particularly important for Hopper+ kernels. It's where temporal micro-kernels orchestrate the producer-consumer pattern we discussed earlier—producer warps issuing TMA loads while consumer warps execute WGMMA operations, all coordinated through asynchronous transaction barriers.
 
 <div id="cutlass-3x-hierarchy-viz"></div>
 
-The key innovation in CUTLASS 3.x is **orthogonality**—different MMA operations can combine with different copy operations independently. For Hopper, this means we can leverage TMA (Tensor Memory Accelerator) at the Copy Atom level and WGMMA (Warp Group Matrix Multiply-Accumulate) at the MMA Atom level, and these automatically compose through the Collective layer to create efficient producer-consumer pipelines.
-
-The **Collective layer** is particularly important for Hopper kernels. It's where temporal micro-kernels orchestrate the producer-consumer pattern we discussed earlier—producer warps issuing TMA loads while consumer warps execute WGMMA operations, all coordinated through asynchronous transaction barriers.
-
-> Understanding this hierarchy is essential because when we write a Hopper GEMM in CUTLASS 3.x, we're primarily configuring template parameters that flow down through these layers. The framework handles the complex orchestration of TMA, WGMMA, async barriers, and software pipelining for us—we just need to specify the right atoms and policies.
-{: .prompt-info}
 
 ### Producer-Consumer Pipeline
 
