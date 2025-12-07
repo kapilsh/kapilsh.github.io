@@ -10,11 +10,15 @@ math: true
 author: ks
 ---
 
-This is a continuation to my nprevious post [Learn CUTLASS the Hard Way](../learn-cutlass-the-hard-way), where I will explore Hopper architecture. There were several new architectural changes that made it to H100 and had huge implications on the performance of GEMM kernels, specially for 16-bit and lower precision GEMMS. There is already a great post from Pranjal on his H100 Journey at [Outperforming cuBLAS on H100: a Worklog](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog). Expect this post to be a bit more higher level than that as we will primarily use CUTLASS to leverage the same optimizations. However, before we jump into it - let's start with baselining the kernel we wrote for Ada (RTX 4090) on H100. 
+This is a continuation to my nprevious post [Learn CUTLASS the Hard Way](../learn-cutlass-the-hard-way), where I will explore Hopper architecture. There were several new architectural changes that made it to H100 and had huge implications on the performance of GEMM kernels, specially for 16-bit and lower precision GEMMS. There is already a great post from Pranjal on his H100 Journey at [Outperforming cuBLAS on H100: a Worklog](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog). Expect this post to be a bit more higher level than that as we will primarily use CUTLASS to leverage the same optimizations. 
+
+## Setup
+
+Verda etc
 
 ## My Previous Baseline
 
-We already had a CUTLASS kernel that we wrote in the previous post. It leveraged CUTLASS 2.x API and was primarily meant for Ada and older generation of GPUS. But, we can still run it on H100 to get a baseline performance. 
+However, before we jump into Hopper kernels, let's start with baselining the kernel we wrote for Ada (RTX 4090) on H100. We already had a CUTLASS kernel that we wrote in the previous post. It leveraged CUTLASS 2.x API and was primarily meant for Ada and older generation of GPUS. But, we can still run it on H100 to get a baseline performance. 
 
 #### Baseline Performance of `kernel_cutlass`
 
@@ -28,7 +32,6 @@ Below we compare original *~first~ CUTLASS kernel* (and other handwritten CUDA i
 | **Medium (1536-3072)** | 317 TFLOPS at 3K | 686 TFLOPS at 3K |
 | **Large (4096-8192)** | 396 TFLOPS at 4K<br>375 TFLOPS at 8K | 754 TFLOPS at 4K<br>685 TFLOPS at 8K |
 
-> **Key Insights:**
 > - **Small matrices**: Both implementations are memory-bound at smaller sizes.
 > - **Medium matrices**: Performance diverges significantly and we can see our kernel isn't leveraging H100's architectural improvements.
 > - **Large matrices**: The gap widens further as CUTLASS plateaus while PyTorch continues scaling until we hit compute boundness
@@ -140,8 +143,6 @@ Example kernels are useful though. Most useful example in the CUTLASS repo I fou
 
 <div id="cutlass-3x-hierarchy-viz"></div>
 
-## Hopper GEMM Kernels
-
 ### Warp Specialization
 
 [Warp specialization (also called spatial partitioning)](https://docs.nvidia.com/cuda/cuda-c-programming-guide/#spatial-partitioning-also-known-as-warp-specialization) is a technique where different warps within a thread block are assigned distinct roles rather than executing identical work. Instead of all warps performing the same operations on different data, specialized warps focus on specific tasks i.e. some handle data movement while others perform computation. As GEMMs move to async producer/consumer paradigms, this becomes essential so that a single warp is not holding all the required registers and shared memory resources. It also allows for handling unpredictable cycle counts for memory loads / TMA more efficiently. We will see more paradigms in this later but overall it reduces "empty bubbles" such that some warps can continue executing while others wait on blocking operations. 
@@ -157,6 +158,153 @@ The visualization below shows a simple warp-specialized kernel with one producer
 In this arrangement, we overlap memory operations with computation to reduce idle time and improving throughput. Actual timelines can look different depending on memory/compute boundness but this just aims to demostrate the general idea.
 
 <div id="warp-specialization-viz"></div>
+
+## TMA Warp Specialized Kernel
+
+### Basic/Naive
+
+Let's start with baseline TMA Warp Specialized version of the Kernel. We will skip basic kernels such as TMA without Warp Specialization since we already know those would end up being slower and is already discussed in some of the other posts linked. Instead, we can start with Hopper specific kernels that provide some reasonable baseline performance. 
+
+Let's look at the most important pieces of the kernel. For the whole kernel, see [Full Hopper CUTLASS kernel](https://github.com/gpusgobrr/explore-gemm/blob/main/cuda/15_kernel_cutlass_hopper.cu).
+
+
+First, we define the Element types and Layouts. We pass RowMajor tensors as is to the kernel.
+
+```c
+using ElementA = cutlass::bfloat16_t;
+using ElementB = ElementType;
+using ElementC = float;
+using ElementD = float;
+using ElementAccumulator = float;
+
+// Layouts
+using LayoutA = cutlass::layout::RowMajor;
+using LayoutB = cutlass::layout::RowMajor;
+using LayoutC = cutlass::layout::RowMajor;
+using LayoutD = cutlass::layout::RowMajor;
+
+// Alignment (16-byte for TMA)
+static constexpr int AlignmentA = 128 / cutlass::sizeof_bits<ElementA>::value;
+static constexpr int AlignmentB = 128 / cutlass::sizeof_bits<ElementB>::value;
+static constexpr int AlignmentC = 128 / cutlass::sizeof_bits<ElementC>::value;
+static constexpr int AlignmentD = 128 / cutlass::sizeof_bits<ElementD>::value;
+```
+
+Next, we define the TileShape and Thread Block Cluster shapes. We use `Shape<_1, _1, _1>` meaning not using TBC.
+
+```c
+// Tile and cluster configuration for H100
+using TileShape = Shape<_128, _128, _64>; // CTA tile (M, N, K)
+using ClusterShape = Shape<_1, _1, _1>;   // Not using Thread block cluster
+```
+Next, we define the GEMM Op, which is mostly boilerplate. You can see that we use the `KernelSchedule` and `EpilogueSchedule` for TMA warp specialized kernel. For software pipelinining, we start with a 2 Stage Kernel. 
+
+```c
+// Warp specialization schedules
+using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecialized;
+using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized;
+
+// Build mainloop collective with automatic stage count calculation
+using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<
+    cutlass::arch::Sm90,
+    cutlass::arch::OpClassTensorOp,
+    ElementA, LayoutA, AlignmentA,
+    ElementB, LayoutB, AlignmentB,
+    ElementAccumulator,
+    TileShape,
+    ClusterShape,
+    cutlass::gemm::collective::StageCount<2>, // 2 stages hard coded
+    KernelSchedule>::CollectiveOp;
+
+// Build epilogue collective
+using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
+    cutlass::arch::Sm90,
+    cutlass::arch::OpClassTensorOp,
+    TileShape,
+    ClusterShape,
+    cutlass::epilogue::collective::EpilogueTileAuto,
+    ElementAccumulator,
+    ElementAccumulator,
+    ElementC, LayoutC, AlignmentC,
+    ElementD, LayoutD, AlignmentD,
+    EpilogueSchedule>::CollectiveOp;
+
+// Assemble the kernel (using non-batched shape)
+using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
+    Shape<int, int, int>,
+    CollectiveMainloop,
+    CollectiveEpilogue>;
+
+using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
+```
+
+To define the strides, we use the cute utililities provided by cutlass to set the corresponding shapes. Note that `{M, K, 1}` essentially means `M x K` matrix since we use number of batches as 1. 
+
+```c
+// Problem size (non-batched GEMM)
+auto problem_shape = make_shape(M, N, K);
+
+// Stride types for row-major layouts
+using StrideA = typename Config::GemmKernel::StrideA;
+using StrideB = typename Config::GemmKernel::StrideB;
+using StrideC = typename Config::GemmKernel::StrideC;
+using StrideD = typename Config::GemmKernel::StrideD;
+
+auto stride_A = cutlass::make_cute_packed_stride(StrideA{}, {M, K, 1});
+auto stride_B = cutlass::make_cute_packed_stride(StrideB{}, {N, K, 1});
+auto stride_C = cutlass::make_cute_packed_stride(StrideC{}, {M, N, 1});
+auto stride_D = cutlass::make_cute_packed_stride(StrideD{}, {M, N, 1});
+```
+
+Let's see the performance results compared to PyTorch.
+
+![2 Stage Kernel TMA WS](/assets/explore_gemm_2_basic_2_stage_tma_warp_specialized.png)
+
+> Overall, the performance for large matrices is only about 20-25% - which is actually worse than what we saw with the original CUTLASS 2.x based baseline we tested. 
+{: .prompt-warning}
+
+We can see from the Speed of Light analysis in NCU that SM and Memory throughput is pretty bad, as expected.
+
+![SOL Analysis 2 stage](/assets/explore_gemms_2_stage_2_ncu_sol.png)
+
+### Increasing/Auto Stage Count
+
+**We haven't tuned anything here, so let's start with just updating the number of stages from hard-coded value of 2 to Auto.** Only thing we need to change is stage argument:
+
+```diff
+     // Warp specialization schedules
+     using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecialized;
+@@ -57,6 +58,7 @@ struct CutlassHopperGemmConfig
+         ElementAccumulator,
+         TileShape,
+         ClusterShape,
+-        cutlass::gemm::collective::StageCount<2>, // 2 stages hard coded
++        cutlass::gemm::collective::StageCountAuto,
+         KernelSchedule>::CollectiveOp;
+```
+
+![Stage Auto Benchmark](/assets/explore_gemms_basic_stage_auto_benchmark.png)
+
+> We pretty much doubled our performance for medium to larger matrices and saw marginal improvements in smaller matrices.
+{: .prompt-info}
+
+Looking at the NCU Speed of Light profile for size 4096, we can see that increase in TFLOPS is directly proporsional to the SM and Memory throughput. 
+
+![Stage Auto NCU SOL](/assets/explore_gemms_2_ncu_sol_stage_auto.png)
+
+Now, looking at the Memory Chart, I saw the L2 cache hit rate improve to 73% from 63% but nothing much changed. If you noticed previosly, we set the cluster shape to `Shape<_1, _1, _1>` i.e. we do not share any date across the thread block cluster. This is validated by the 0 input/output from `DSMEM`.
+
+![Memory Chart Stage Auto](/assets/explore_gemms_2_stage_auto_tma_ws_memory_chart.png)
+
+**Hence, a natural place to tune next is use Thread Block Clusters.**
+
+## Ping Pong Schedule
+
+## Cooperative 
+
+## Increase Stage Count
+
+## Stream K
 
 ### Producer-Consumer Pipeline
 
