@@ -168,10 +168,12 @@ const commonPipelineStyles = `
 
         .pipeline-time-label {
             width: 11rem;
+            min-width: 11rem;
             font-size: 0.875rem;
             color: #9ca3af;
             font-weight: bold;
             padding-right: 1rem;
+            flex-shrink: 0;
         }
 
         .pipeline-time-track {
@@ -226,7 +228,9 @@ const commonPipelineStyles = `
 
         .pipeline-stream-label {
             width: 11rem;
+            min-width: 11rem;
             padding-right: 1rem;
+            flex-shrink: 0;
         }
 
         .pipeline-stream-name {
@@ -316,6 +320,7 @@ const commonPipelineStyles = `
         .pipeline-bg-blue-500 { background-color: #3b82f6; }
         .pipeline-bg-cyan-500 { background-color: #06b6d4; }
         .pipeline-bg-purple-500 { background-color: #a855f7; }
+        .pipeline-bg-purple-400 { background-color: #c084fc; }
         .pipeline-bg-orange-500 { background-color: #f97316; }
         .pipeline-bg-green-500 { background-color: #22c55e; }
 
@@ -1762,5 +1767,396 @@ document.addEventListener('DOMContentLoaded', () => {
     const container = document.getElementById('warp-specialization-viz');
     if (container) {
         new WarpSpecializationViz('warp-specialization-viz');
+    }
+});
+
+// ============================================================================
+// Persistent Cooperative Kernel Visualization
+// ============================================================================
+
+class PersistentCooperativeViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+
+        // Configuration
+        this.config = {
+            maxTime: 300,
+            timeScale: 1.5,
+            numTiles: 6,
+            numThreadBlocks: 2, // Simulating 2 persistent thread blocks
+            animationInterval: 40,
+        };
+
+        this.opTypes = {
+            TMA_LOAD: { name: 'TMA Load', color: 'pipeline-bg-cyan-500', duration: 26, icon: '📥' },
+            WGMMA_TOP: { name: 'WGMMA (Top Half)', color: 'pipeline-bg-purple-500', duration: 35, icon: '⚡' },
+            WGMMA_BOTTOM: { name: 'WGMMA (Bottom Half)', color: 'pipeline-bg-purple-400', duration: 35, icon: '⚡' },
+            EPILOGUE: { name: 'Epilogue', color: 'pipeline-bg-orange-500', duration: 18, icon: '🔧' },
+            TILE_FETCH: { name: 'Fetch Next Tile', color: 'pipeline-bg-green-500', duration: 14, icon: '📋' },
+        };
+
+        // State
+        this.state = {
+            isPlaying: false,
+            currentTime: 0,
+            operations: [],
+            animationTimer: null,
+        };
+
+        this.init();
+    }
+
+    init() {
+        this.container.innerHTML = commonPipelineStyles + `
+            <div class="pipeline-container">
+                <h1 class="pipeline-title">Persistent Cooperative Kernel Pattern</h1>
+                <br>
+                <!-- Controls -->
+                <div class="pipeline-controls">
+                    <button id="persistentCoopPlayBtn" class="pipeline-btn pipeline-btn-primary">
+                        <span id="persistentCoopPlayIcon">▶</span>
+                        <span id="persistentCoopPlayText">Play</span>
+                    </button>
+                    <button id="persistentCoopResetBtn" class="pipeline-btn pipeline-btn-secondary">
+                        <span>↻</span>
+                        <span>Reset</span>
+                    </button>
+                </div>
+
+                <!-- Legend -->
+                <div class="pipeline-card">
+                    <h3 class="pipeline-card-title">Operation Types</h3>
+                    <div class="pipeline-legend-grid" id="persistentCoopLegendGrid"></div>
+                </div>
+
+                <!-- Timeline -->
+                <div class="pipeline-timeline-container">
+                    <div class="pipeline-timeline-wrapper" id="persistentCoopTimelineWrapper">
+                        <div class="pipeline-time-axis">
+                            <div class="pipeline-time-label">Time →</div>
+                            <div class="pipeline-time-track" id="persistentCoopTimeTrack"></div>
+                        </div>
+                        <div id="persistentCoopStreamLanes"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        this.state.operations = this.initializeOperations();
+        this.initializeLegend();
+        this.initializeTimeTrack();
+        this.initializeStreamLanes();
+        // Don't call updateVisualization() here - operations should be hidden until play is pressed
+
+        // Event listeners
+        document.getElementById('persistentCoopPlayBtn').addEventListener('click', () => this.togglePlay());
+        document.getElementById('persistentCoopResetBtn').addEventListener('click', () => this.resetAnimation());
+    }
+
+    initializeOperations() {
+        const ops = [];
+        let opId = 0;
+
+        // Generate tiles assigned to each persistent thread block
+        const tilesPerTB = Math.ceil(this.config.numTiles / this.config.numThreadBlocks);
+
+        for (let tb = 0; tb < this.config.numThreadBlocks; tb++) {
+            let currentTime = 0;
+
+            for (let localTile = 0; localTile < tilesPerTB; localTile++) {
+                const globalTile = tb + (localTile * this.config.numThreadBlocks);
+                if (globalTile >= this.config.numTiles) break;
+
+                // Tile Fetch (atomically grab next tile from scheduler)
+                if (localTile > 0) {
+                    ops.push({
+                        id: opId++,
+                        threadBlock: tb,
+                        streamId: `tb${tb}_producer`,
+                        type: 'TILE_FETCH',
+                        startTime: currentTime,
+                        endTime: currentTime + this.opTypes.TILE_FETCH.duration,
+                        tile: globalTile,
+                        label: `Tile ${globalTile}`,
+                    });
+                    currentTime += this.opTypes.TILE_FETCH.duration;
+                }
+
+                // Producer: TMA Load
+                ops.push({
+                    id: opId++,
+                    threadBlock: tb,
+                    streamId: `tb${tb}_producer`,
+                    type: 'TMA_LOAD',
+                    startTime: currentTime,
+                    endTime: currentTime + this.opTypes.TMA_LOAD.duration,
+                    tile: globalTile,
+                    label: `Load ${globalTile}`,
+                });
+
+                const loadEnd = currentTime + this.opTypes.TMA_LOAD.duration;
+
+                // Consumer WG 0: WGMMA (Top half)
+                ops.push({
+                    id: opId++,
+                    threadBlock: tb,
+                    streamId: `tb${tb}_consumer0`,
+                    type: 'WGMMA_TOP',
+                    startTime: loadEnd,
+                    endTime: loadEnd + this.opTypes.WGMMA_TOP.duration,
+                    tile: globalTile,
+                    label: `Top ${globalTile}`,
+                });
+
+                // Consumer WG 1: WGMMA (Bottom half) - runs in parallel
+                ops.push({
+                    id: opId++,
+                    threadBlock: tb,
+                    streamId: `tb${tb}_consumer1`,
+                    type: 'WGMMA_BOTTOM',
+                    startTime: loadEnd,
+                    endTime: loadEnd + this.opTypes.WGMMA_BOTTOM.duration,
+                    tile: globalTile,
+                    label: `Bot ${globalTile}`,
+                });
+
+                const computeEnd = loadEnd + this.opTypes.WGMMA_TOP.duration;
+
+                // Epilogue (handled by one consumer)
+                ops.push({
+                    id: opId++,
+                    threadBlock: tb,
+                    streamId: `tb${tb}_consumer0`,
+                    type: 'EPILOGUE',
+                    startTime: computeEnd,
+                    endTime: computeEnd + this.opTypes.EPILOGUE.duration,
+                    tile: globalTile,
+                    label: `Epi ${globalTile}`,
+                });
+
+                currentTime = computeEnd + this.opTypes.EPILOGUE.duration + 2;
+            }
+        }
+
+        return ops;
+    }
+
+    initializeLegend() {
+        const legendGrid = document.getElementById('persistentCoopLegendGrid');
+        legendGrid.innerHTML = '';
+
+        Object.entries(this.opTypes).forEach(([, type]) => {
+            const item = document.createElement('div');
+            item.className = 'pipeline-legend-item';
+            item.innerHTML = `
+                <div class="pipeline-legend-icon ${type.color}">${type.icon}</div>
+                <div class="pipeline-legend-text">
+                    <div class="pipeline-legend-name">${type.name}</div>
+                </div>
+            `;
+            legendGrid.appendChild(item);
+        });
+    }
+
+    initializeTimeTrack() {
+        const timeTrack = document.getElementById('persistentCoopTimeTrack');
+        const numMarkers = Math.floor(this.config.maxTime / 50) + 1;
+
+        timeTrack.innerHTML = '';
+
+        // Time markers
+        for (let i = 0; i < numMarkers; i++) {
+            const marker = document.createElement('div');
+            marker.className = 'pipeline-time-marker';
+            marker.style.left = `${i * 50 * this.config.timeScale}px`;
+            marker.textContent = i * 50;
+            timeTrack.appendChild(marker);
+
+            const line = document.createElement('div');
+            line.className = 'pipeline-time-line';
+            line.style.left = `${i * 50 * this.config.timeScale}px`;
+            timeTrack.appendChild(line);
+        }
+
+        // Current time marker
+        const currentMarker = document.createElement('div');
+        currentMarker.id = 'persistentCoopCurrentTimeMarker';
+        currentMarker.className = 'pipeline-current-time-marker';
+        currentMarker.innerHTML = '<div class="pipeline-current-time-arrow">▼</div>';
+        timeTrack.appendChild(currentMarker);
+
+        // Set width
+        timeTrack.style.minWidth = `${this.config.maxTime * this.config.timeScale}px`;
+    }
+
+    initializeStreamLanes() {
+        const streamLanes = document.getElementById('persistentCoopStreamLanes');
+        streamLanes.innerHTML = '';
+
+        // Create lanes for each thread block
+        for (let tb = 0; tb < this.config.numThreadBlocks; tb++) {
+            // Thread block header
+            const tbHeader = document.createElement('div');
+            tbHeader.style.cssText = `
+                color: #fbbf24;
+                font-weight: bold;
+                font-size: 1rem;
+                margin-top: ${tb > 0 ? '1.5rem' : '0'};
+                margin-bottom: 0.5rem;
+                padding: 0.5rem;
+                background: rgba(251, 191, 36, 0.1);
+                border-left: 3px solid #fbbf24;
+            `;
+            tbHeader.textContent = `Thread Block ${tb} (Persistent)`;
+            streamLanes.appendChild(tbHeader);
+
+            const streams = [
+                { id: `tb${tb}_producer`, name: `Producer Warp`, type: 'producer' },
+                { id: `tb${tb}_consumer0`, name: `Consumer WG 0`, type: 'consumer' },
+                { id: `tb${tb}_consumer1`, name: `Consumer WG 1`, type: 'consumer' },
+            ];
+
+            streams.forEach(stream => {
+                const lane = document.createElement('div');
+                lane.className = 'pipeline-stream-lane';
+                lane.innerHTML = `
+                    <div class="pipeline-stream-label pipeline-${stream.type}">
+                        <div class="pipeline-stream-name">${stream.name}</div>
+                        <div class="pipeline-stream-type">${stream.type === 'producer' ? 'TMA Loads' : 'Compute (M/2)'}</div>
+                    </div>
+                    <div class="pipeline-lane-track" id="persistentCoop-lane-${stream.id}" style="min-width: ${this.config.maxTime * this.config.timeScale}px"></div>
+                `;
+                streamLanes.appendChild(lane);
+            });
+        }
+
+        // Create operation elements
+        this.state.operations.forEach(op => {
+            const opType = this.opTypes[op.type];
+            const lane = document.getElementById(`persistentCoop-lane-${op.streamId}`);
+
+            const opElement = document.createElement('div');
+            opElement.id = `persistentCoop-op-${op.id}`;
+            opElement.className = `pipeline-operation ${opType.color}`;
+            opElement.style.left = `${op.startTime * this.config.timeScale}px`;
+            opElement.style.width = `${(op.endTime - op.startTime) * this.config.timeScale}px`;
+            opElement.style.display = 'none';
+            opElement.innerHTML = `
+                <div class="pipeline-operation-progress" id="persistentCoop-progress-${op.id}" style="width: 0%"></div>
+                <div class="pipeline-operation-content">
+                    <div class="pipeline-operation-icon">${opType.icon}</div>
+                </div>
+            `;
+
+            lane.appendChild(opElement);
+        });
+    }
+
+    updateVisualization() {
+        const currentMarker = document.getElementById('persistentCoopCurrentTimeMarker');
+
+        if (currentMarker) {
+            currentMarker.style.left = `${this.state.currentTime * this.config.timeScale}px`;
+        }
+
+        this.state.operations.forEach(op => {
+            const isActive = this.state.currentTime >= op.startTime && this.state.currentTime <= op.endTime;
+            const isVisible = this.state.currentTime >= op.startTime;
+
+            const opElement = document.getElementById(`persistentCoop-op-${op.id}`);
+            const progressBar = document.getElementById(`persistentCoop-progress-${op.id}`);
+
+            if (opElement) {
+                if (isVisible) {
+                    opElement.style.display = 'flex';
+                    opElement.style.opacity = isActive ? '1' : '0.6';
+                } else {
+                    opElement.style.display = 'none';
+                }
+
+                if (isVisible && isActive) {
+                    opElement.classList.add('active');
+                    if (!opElement.querySelector('.pipeline-operation-pulse')) {
+                        const pulse = document.createElement('div');
+                        pulse.className = 'pipeline-operation-pulse';
+                        opElement.appendChild(pulse);
+                    }
+                } else {
+                    opElement.classList.remove('active');
+                    const pulse = opElement.querySelector('.pipeline-operation-pulse');
+                    if (pulse) pulse.remove();
+                }
+
+                if (progressBar && isActive) {
+                    const progress = (this.state.currentTime - op.startTime) / (op.endTime - op.startTime);
+                    progressBar.style.width = `${progress * 100}%`;
+                } else if (progressBar && this.state.currentTime > op.endTime) {
+                    progressBar.style.width = '100%';
+                } else if (progressBar) {
+                    progressBar.style.width = '0%';
+                }
+            }
+        });
+    }
+
+    animate() {
+        if (this.state.isPlaying) {
+            this.state.currentTime++;
+
+            if (this.state.currentTime >= this.config.maxTime) {
+                this.state.currentTime = this.config.maxTime;
+                this.stopAnimation();
+            }
+
+            this.updateVisualization();
+        }
+    }
+
+    startAnimation() {
+        this.state.isPlaying = true;
+        this.state.animationTimer = setInterval(() => this.animate(), this.config.animationInterval);
+
+        document.getElementById('persistentCoopPlayIcon').textContent = '⏸';
+        document.getElementById('persistentCoopPlayText').textContent = 'Pause';
+    }
+
+    stopAnimation() {
+        this.state.isPlaying = false;
+        if (this.state.animationTimer) {
+            clearInterval(this.state.animationTimer);
+            this.state.animationTimer = null;
+        }
+
+        document.getElementById('persistentCoopPlayIcon').textContent = '▶';
+        document.getElementById('persistentCoopPlayText').textContent = 'Play';
+    }
+
+    resetAnimation() {
+        this.stopAnimation();
+        this.state.currentTime = 0;
+        this.updateVisualization();
+    }
+
+    togglePlay() {
+        if (!this.state.isPlaying && this.state.currentTime >= this.config.maxTime) {
+            this.resetAnimation();
+            setTimeout(() => this.startAnimation(), 100);
+        } else if (this.state.isPlaying) {
+            this.stopAnimation();
+        } else {
+            this.startAnimation();
+        }
+    }
+}
+
+// Auto-initialize persistent cooperative viz on page load
+document.addEventListener('DOMContentLoaded', () => {
+    const container = document.getElementById('persistent-cooperative-viz');
+    if (container) {
+        new PersistentCooperativeViz('persistent-cooperative-viz');
     }
 });

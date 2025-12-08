@@ -298,11 +298,57 @@ Now, looking at the Memory Chart, I saw the L2 cache hit rate improve to 73% fro
 
 **Hence, a natural place to tune next is use Thread Block Clusters.**
 
+### Thread Block Cluster
+
+Next, we will test a `1 x 2 x 1` Thread Block Cluster Tile to cooperate across 2 SMs along the reduction dimension. This should allows threads from 2 SMs at a time to be able to share memory across 2 thread blocks.
+
+```diff
+--- a/cuda/15_kernel_cutlass_hopper.cu
++++ b/cuda/15_kernel_cutlass_hopper.cu
+@@ -42,8 +42,7 @@ struct CutlassHopperGemmConfig
+ 
+     // Tile and cluster configuration for H100
+     using TileShape = Shape<_128, _128, _64>; // CTA tile (M, N, K)
+-    using ClusterShape = Shape<_1, _1, _1>;   // Not TBC
++    using ClusterShape = Shape<_1, _2, _1>;   // Thread block cluster
+
+```
+
+![TBC 2 Benchmark](/assets/explore_gemms_2_tbc_2_benchmark.png)
+
+> We see a modest 5% improvement in performance by enabling Thread Block Clusters, which is decent but not much. We are still hovering around 45-55% of Pytorch performance for any batch size > 1024. 
+{: .prompt-info}
+
+## Warp-specialized Persistent Cooperative Kernel
+
+The Persistent Cooperative kernel extends basic warp specialization with the following:
+
+- Persistent Thread Blocks, launching one thread block per output tile and occupy a fixed number of thread blocks specified in [`KernelHardwareInfo`](https://github.com/NVIDIA/cutlass/blob/main/include/cutlass/kernel_hardware_info.hpp). For example, 132 for H100 and each processing multiple tiles. This amortizes kernel launch overhead and improves SM utilization.
+
+- Two consumer warp groups acting as Cooperative Consumers, which split each output tile in half across the M dimension. This reduces register pressure per consumer, enabling larger tiles that improve arithmetic intensity and cache reuse.
+
+- [`TileScheduler`](https://github.com/NVIDIA/cutlass/blob/main/include/cutlass/gemm/kernel/sm90_tile_scheduler.hpp) will dynamically assigns tiles to persistent thread blocks, considering cluster geometry and SM availability. Thread blocks atomically grab next tiles until the work queue empties.
+
+Key changes in the code will look like:
+
+#### Schedulers
+
+```cpp
+using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
+using TileScheduler = cutlass::gemm::PersistentScheduler;
+```
+
+#### Hardware info
+
+```cpp
+cutlass::KernelHardwareInfo hw_info;
+hw_info.device_id = 0;
+hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
+```
+
+<div id="persistent-cooperative-viz"></div>
+
 ## Ping Pong Schedule
-
-## Cooperative 
-
-## Increase Stage Count
 
 ## Stream K
 
