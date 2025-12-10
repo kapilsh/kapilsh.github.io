@@ -331,12 +331,49 @@ The Persistent Cooperative kernel extends basic warp specialization with the fol
 
 Key changes in the code will look like:
 
-#### Schedulers
+> I initially tried to keep the number of stages as Auto but that led to a runtime error that had no useful. After debugging for a bit, I landed on constant stages = 5
+{: .prompt-warning}
 
-```cpp
-using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
-using TileScheduler = cutlass::gemm::PersistentScheduler;
+
+```diff
+diff --git a/cuda/15_kernel_cutlass_hopper.cu b/cuda/15_kernel_cutlass_hopper.cu
+index f02922c..07b1997 100644
+--- a/cuda/15_kernel_cutlass_hopper.cu
++++ b/cuda/15_kernel_cutlass_hopper.cu
+@@ -45,8 +45,12 @@ struct CutlassHopperGemmConfig
+     using ClusterShape = Shape<_1, _2, _1>;   // Thread block cluster
+ 
+     // Warp specialization schedules
+-    using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecialized;
+-    using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized;
++    using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
++    using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecializedCooperative;
++    using TileSchedulerType = cutlass::gemm::PersistentScheduler;
+ 
+     // Build mainloop collective with automatic stage count calculation
+     using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<
+@@ -57,7 +61,6 @@ struct CutlassHopperGemmConfig
+         ElementAccumulator,
+         TileShape,
+         ClusterShape,
+-         cutlass::gemm::collective::StageCountAuto,
++        // cutlass::gemm::collective::StageCount<5>,
+         KernelSchedule>::CollectiveOp;
+ 
+@@ -78,7 +81,8 @@ struct CutlassHopperGemmConfig
+     using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
+         Shape<int, int, int>,
+         CollectiveMainloop,
+-        CollectiveEpilogue>;
++        CollectiveEpilogue,
++        TileSchedulerType>;
+ 
+     using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
+ };
+
 ```
+
+Note that we already previously had `cutlass::KernelHardwareInfo hw_info`, which be useful now.
 
 #### Hardware info
 
@@ -347,6 +384,15 @@ hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_coun
 ```
 
 <div id="persistent-cooperative-viz"></div>
+
+![Persistent Cooperative](/assets/explore_gemms_2_persistent_cooperative_stage_5.png)
+
+> We got a nice boost in performance for larger matrices and now our kernel is ranging from 60-70% of PyTorch performance. We are able to achieve upto 480-490 TFLOPS for 4096-8192 batch sizes compared to Pytorch which is in the range of 700-750 TFLOPS.
+{: .prompt-info}
+
+> We observe a regression for smaller matrices that we'll address later during autotuning when we explore different tile sizes and stage counts optimized for memory-bound workloads.
+{: .prompt-warning}
+
 
 ## Ping Pong Schedule
 
