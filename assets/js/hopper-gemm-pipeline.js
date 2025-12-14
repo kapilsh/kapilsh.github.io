@@ -2160,3 +2160,1057 @@ document.addEventListener('DOMContentLoaded', () => {
         new PersistentCooperativeViz('persistent-cooperative-viz');
     }
 });
+
+// ============================================================================
+// Wave Quantization Visualization
+// ============================================================================
+
+class WaveQuantizationViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+
+        this.config = {
+            numSMs: 4,
+            numTiles: 9,
+            numWaves: 3,
+            tileTime: 40,
+            animationInterval: 50,
+        };
+
+        this.state = {
+            isPlaying: false,
+            currentTime: 0,
+            animationTimer: null,
+        };
+
+        this.init();
+    }
+
+    init() {
+        const totalTime = this.config.tileTime * this.config.numWaves;
+
+        this.container.innerHTML = commonPipelineStyles + `
+            <div class="pipeline-container">
+                <h1 class="pipeline-title">Wave Quantization Problem</h1>
+                <p class="pipeline-subtitle">Simple Example: 4 SMs computing 9 tiles (3 waves)</p>
+
+                <div class="pipeline-controls">
+                    <button id="waveQuantPlayBtn" class="pipeline-btn pipeline-btn-primary">
+                        <span id="waveQuantPlayIcon">▶</span>
+                        <span id="waveQuantPlayText">Play</span>
+                    </button>
+                    <button id="waveQuantResetBtn" class="pipeline-btn pipeline-btn-secondary">
+                        <span>↻</span>
+                        <span>Reset</span>
+                    </button>
+                </div>
+
+                <div class="pipeline-time-display">
+                    <div class="pipeline-time-value">
+                        Wave: <span class="current" id="waveQuantCurrentWave">1</span> / 3
+                    </div>
+                </div>
+
+                <div class="pipeline-card">
+                    <h3 class="pipeline-card-title">SM Utilization Timeline</h3>
+                    <div id="waveQuantSMGrid"></div>
+                </div>
+            </div>
+        `;
+
+        this.initializeSMGrid();
+
+        document.getElementById('waveQuantPlayBtn').addEventListener('click', () => this.togglePlay());
+        document.getElementById('waveQuantResetBtn').addEventListener('click', () => this.resetAnimation());
+    }
+
+    initializeSMGrid() {
+        const grid = document.getElementById('waveQuantSMGrid');
+        grid.innerHTML = '';
+
+        // Create a visual grid showing SMs across waves
+        const gridContainer = document.createElement('div');
+        gridContainer.style.cssText = 'display: flex; flex-direction: column; gap: 1.5rem; margin-top: 1rem;';
+
+        for (let wave = 0; wave < this.config.numWaves; wave++) {
+            const waveDiv = document.createElement('div');
+
+            // Main row container with SM boxes and info
+            const waveRow = document.createElement('div');
+            waveRow.style.cssText = 'display: flex; gap: 1.5rem; align-items: stretch;';
+
+            // Left side: SM boxes
+            const smContainer = document.createElement('div');
+            smContainer.style.cssText = 'flex: 2; display: flex; flex-direction: column; gap: 0.5rem;';
+
+            const waveLabel = document.createElement('div');
+            waveLabel.style.cssText = 'color: #9ca3af; font-size: 0.85rem; font-weight: bold;';
+            waveLabel.textContent = `Wave ${wave + 1}`;
+            smContainer.appendChild(waveLabel);
+
+            const smRow = document.createElement('div');
+            smRow.style.cssText = 'display: flex; gap: 1rem; align-items: center;';
+
+            for (let sm = 0; sm < this.config.numSMs; sm++) {
+                const tileNum = wave * this.config.numSMs + sm;
+                const smBox = document.createElement('div');
+                smBox.id = `waveQuant-w${wave}-sm${sm}`;
+                smBox.style.cssText = `
+                    flex: 1;
+                    height: 80px;
+                    background: #1f2937;
+                    border: 2px solid #374151;
+                    border-radius: 0.5rem;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    transition: all 0.3s;
+                    position: relative;
+                `;
+
+                const smLabel = document.createElement('div');
+                smLabel.style.cssText = 'font-size: 0.75rem; color: #6b7280; font-weight: bold;';
+                smLabel.textContent = `SM ${sm}`;
+
+                const tileLabel = document.createElement('div');
+                tileLabel.id = `waveQuant-w${wave}-sm${sm}-tile`;
+                tileLabel.style.cssText = 'font-size: 1.25rem; color: #9ca3af; font-weight: bold; margin-top: 0.25rem;';
+                tileLabel.textContent = tileNum < this.config.numTiles ? `Tile ${tileNum}` : '—';
+
+                smBox.appendChild(smLabel);
+                smBox.appendChild(tileLabel);
+                smRow.appendChild(smBox);
+            }
+
+            smContainer.appendChild(smRow);
+            waveRow.appendChild(smContainer);
+
+            // Right side: Wave info card
+            const infoCard = document.createElement('div');
+            infoCard.style.cssText = `
+                flex: 1;
+                background: #1f2937;
+                border: 2px solid ${wave === 2 ? '#ef4444' : '#22c55e'};
+                border-radius: 0.5rem;
+                padding: 1rem;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                gap: 0.5rem;
+            `;
+
+            const numActiveSMs = Math.min(this.config.numSMs, this.config.numTiles - wave * this.config.numSMs);
+            const utilization = (numActiveSMs / this.config.numSMs * 100).toFixed(0);
+            const isPartial = wave === 2;
+
+            const tilesInWave = [];
+            for (let sm = 0; sm < this.config.numSMs; sm++) {
+                const tileNum = wave * this.config.numSMs + sm;
+                if (tileNum < this.config.numTiles) {
+                    tilesInWave.push(tileNum);
+                }
+            }
+
+            infoCard.innerHTML = `
+                <div style="font-size: 0.9rem; font-weight: bold; color: ${isPartial ? '#ef4444' : '#22c55e'};">
+                    ${isPartial ? '⚠️ Partial Wave' : '✓ Full Wave'}
+                </div>
+                <div style="font-size: 0.8rem; color: #d1d5db;">
+                    <strong>SMs:</strong> ${numActiveSMs} / ${this.config.numSMs} (${utilization}%)
+                </div>
+                <div style="font-size: 0.8rem; color: #d1d5db;">
+                    <strong>Tiles:</strong> ${tilesInWave.join(', ')}
+                </div>
+                ${isPartial ? `<div style="font-size: 0.75rem; color: #fca5a5; margin-top: 0.25rem;"><strong>${this.config.numSMs - numActiveSMs} SMs idle!</strong></div>` : ''}
+            `;
+
+            waveRow.appendChild(infoCard);
+            waveDiv.appendChild(waveRow);
+            gridContainer.appendChild(waveDiv);
+        }
+
+        grid.appendChild(gridContainer);
+    }
+
+    updateVisualization() {
+        const currentWave = Math.floor(this.state.currentTime / this.config.tileTime);
+        const timeInWave = this.state.currentTime % this.config.tileTime;
+        const waveProgress = timeInWave / this.config.tileTime;
+
+        document.getElementById('waveQuantCurrentWave').textContent = Math.min(currentWave + 1, this.config.numWaves);
+
+        for (let wave = 0; wave < this.config.numWaves; wave++) {
+            for (let sm = 0; sm < this.config.numSMs; sm++) {
+                const tileNum = wave * this.config.numSMs + sm;
+                const smBox = document.getElementById(`waveQuant-w${wave}-sm${sm}`);
+                const tileLabel = document.getElementById(`waveQuant-w${wave}-sm${sm}-tile`);
+
+                if (!smBox || !tileLabel) continue;
+
+                let bgColor, borderColor, labelColor;
+
+                if (wave < currentWave || (wave === currentWave && waveProgress >= 0.99)) {
+                    // Completed
+                    if (tileNum < this.config.numTiles) {
+                        bgColor = '#22c55e';
+                        borderColor = '#16a34a';
+                        labelColor = '#ffffff';
+                    } else {
+                        bgColor = '#1f2937';
+                        borderColor = '#374151';
+                        labelColor = '#4b5563';
+                    }
+                } else if (wave === currentWave) {
+                    // Active wave
+                    if (tileNum < this.config.numTiles) {
+                        bgColor = '#8b5cf6';
+                        borderColor = '#7c3aed';
+                        labelColor = '#ffffff';
+                        smBox.style.transform = 'scale(1.05)';
+                        smBox.style.boxShadow = '0 0 20px rgba(139, 92, 246, 0.5)';
+                    } else {
+                        bgColor = '#374151';
+                        borderColor = '#ef4444';
+                        labelColor = '#9ca3af';
+                        smBox.style.boxShadow = 'none';
+                    }
+                } else {
+                    // Future wave
+                    bgColor = '#1f2937';
+                    borderColor = '#374151';
+                    labelColor = '#6b7280';
+                    smBox.style.transform = 'scale(1)';
+                    smBox.style.boxShadow = 'none';
+                }
+
+                smBox.style.background = bgColor;
+                smBox.style.borderColor = borderColor;
+                tileLabel.style.color = labelColor;
+
+                if (wave !== currentWave || tileNum >= this.config.numTiles) {
+                    smBox.style.transform = 'scale(1)';
+                    smBox.style.boxShadow = 'none';
+                }
+            }
+        }
+    }
+
+    animate() {
+        if (this.state.isPlaying) {
+            this.state.currentTime++;
+
+            const totalTime = this.config.tileTime * this.config.numWaves;
+            if (this.state.currentTime >= totalTime) {
+                this.state.currentTime = totalTime;
+                this.stopAnimation();
+            }
+
+            this.updateVisualization();
+        }
+    }
+
+    startAnimation() {
+        this.state.isPlaying = true;
+        this.state.animationTimer = setInterval(() => this.animate(), this.config.animationInterval);
+
+        document.getElementById('waveQuantPlayIcon').textContent = '⏸';
+        document.getElementById('waveQuantPlayText').textContent = 'Pause';
+    }
+
+    stopAnimation() {
+        this.state.isPlaying = false;
+        if (this.state.animationTimer) {
+            clearInterval(this.state.animationTimer);
+            this.state.animationTimer = null;
+        }
+
+        document.getElementById('waveQuantPlayIcon').textContent = '▶';
+        document.getElementById('waveQuantPlayText').textContent = 'Play';
+    }
+
+    resetAnimation() {
+        this.stopAnimation();
+        this.state.currentTime = 0;
+        this.updateVisualization();
+    }
+
+    togglePlay() {
+        const totalTime = this.config.tileTime * this.config.numWaves;
+        if (!this.state.isPlaying && this.state.currentTime >= totalTime) {
+            this.resetAnimation();
+            setTimeout(() => this.startAnimation(), 100);
+        } else if (this.state.isPlaying) {
+            this.stopAnimation();
+        } else {
+            this.startAnimation();
+        }
+    }
+}
+
+// Auto-initialize wave quantization viz on page load
+document.addEventListener('DOMContentLoaded', () => {
+    const container = document.getElementById('wave-quantization-viz');
+    if (container) {
+        new WaveQuantizationViz('wave-quantization-viz');
+    }
+});
+
+// ============================================================================
+// Split-K Visualization
+// ============================================================================
+
+class SplitKViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+
+        this.config = {
+            numSMs: 4,
+            baseTiles: 9,
+            splitFactor: 2, // Split each tile into 2 K-slices
+            tileTime: 25, // Time for compute per K-slice
+            barrierTime: 5, // Time for barrier wait
+            reduceTime: 8, // Time for reduction
+            animationInterval: 50,
+        };
+
+        // Total work units = baseTiles * splitFactor = 18
+        this.config.numTiles = this.config.baseTiles * this.config.splitFactor;
+        this.config.numWaves = Math.ceil(this.config.numTiles / this.config.numSMs);
+
+        this.state = {
+            isPlaying: false,
+            currentTime: 0,
+            animationTimer: null,
+        };
+
+        this.init();
+    }
+
+    init() {
+        const timePerWave = this.config.tileTime + this.config.barrierTime + this.config.reduceTime;
+        const totalTime = timePerWave * this.config.numWaves;
+
+        this.container.innerHTML = commonPipelineStyles + `
+            <div class="pipeline-container">
+                <h1 class="pipeline-title">Split-K Schedule</h1>
+                <p class="pipeline-subtitle">4 SMs, 9 tiles split into 2 K-slices each = 18 work units</p>
+
+                <div class="pipeline-controls">
+                    <button id="splitKPlayBtn" class="pipeline-btn pipeline-btn-primary">
+                        <span id="splitKPlayIcon">▶</span>
+                        <span id="splitKPlayText">Play</span>
+                    </button>
+                    <button id="splitKResetBtn" class="pipeline-btn pipeline-btn-secondary">
+                        <span>↻</span>
+                        <span>Reset</span>
+                    </button>
+                </div>
+
+                <div class="pipeline-time-display">
+                    <div class="pipeline-time-value">
+                        Wave: <span class="current" id="splitKCurrentWave">1</span> / ${this.config.numWaves}
+                    </div>
+                </div>
+
+                <div class="pipeline-card">
+                    <h3 class="pipeline-card-title">SM Timeline with Synchronization</h3>
+                    <div style="margin-bottom: 1rem; display: flex; gap: 1.5rem; justify-content: center; font-size: 0.85rem;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <div style="width: 20px; height: 20px; background: #8b5cf6; border-radius: 3px;"></div>
+                            <span>Compute</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <div style="width: 20px; height: 20px; background: #f59e0b; border-radius: 3px;"></div>
+                            <span>Arrive (K=0)</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <div style="width: 20px; height: 20px; background: #3b82f6; border-radius: 3px;"></div>
+                            <span>Reduce (K=1)</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <div style="width: 20px; height: 20px; background: #22c55e; border-radius: 3px;"></div>
+                            <span>Complete</span>
+                        </div>
+                    </div>
+                    <div id="splitKSMGrid"></div>
+                </div>
+            </div>
+        `;
+
+        this.initializeSMGrid();
+
+        document.getElementById('splitKPlayBtn').addEventListener('click', () => this.togglePlay());
+        document.getElementById('splitKResetBtn').addEventListener('click', () => this.resetAnimation());
+    }
+
+    initializeSMGrid() {
+        const grid = document.getElementById('splitKSMGrid');
+        grid.innerHTML = '';
+
+        const gridContainer = document.createElement('div');
+        gridContainer.style.cssText = 'display: flex; flex-direction: column; gap: 1.5rem; margin-top: 1rem;';
+
+        for (let wave = 0; wave < this.config.numWaves; wave++) {
+            const waveDiv = document.createElement('div');
+
+            const waveRow = document.createElement('div');
+            waveRow.style.cssText = 'display: flex; gap: 1.5rem; align-items: stretch;';
+
+            // Left side: SM boxes
+            const smContainer = document.createElement('div');
+            smContainer.style.cssText = 'flex: 2; display: flex; flex-direction: column; gap: 0.5rem;';
+
+            const waveLabel = document.createElement('div');
+            waveLabel.style.cssText = 'color: #9ca3af; font-size: 0.85rem; font-weight: bold;';
+            waveLabel.textContent = `Wave ${wave + 1}`;
+            smContainer.appendChild(waveLabel);
+
+            const smRow = document.createElement('div');
+            smRow.style.cssText = 'display: flex; gap: 1rem; align-items: stretch;';
+
+            for (let sm = 0; sm < this.config.numSMs; sm++) {
+                const tileNum = wave * this.config.numSMs + sm;
+                const smCol = document.createElement('div');
+                smCol.style.cssText = 'flex: 1; display: flex; flex-direction: column; gap: 0.3rem;';
+
+                // Compute block
+                const computeBox = document.createElement('div');
+                computeBox.id = `splitK-w${wave}-sm${sm}-compute`;
+                computeBox.style.cssText = `
+                    height: 45px;
+                    background: #1f2937;
+                    border: 2px solid #374151;
+                    border-radius: 0.4rem;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    transition: all 0.3s;
+                    font-size: 0.75rem;
+                    color: #6b7280;
+                `;
+                let kSlice, isEvenSlice;
+                if (tileNum < this.config.numTiles) {
+                    const baseTile = Math.floor(tileNum / this.config.splitFactor);
+                    kSlice = tileNum % this.config.splitFactor;
+                    isEvenSlice = (kSlice === 0);
+                    computeBox.innerHTML = `<div style="font-weight: bold;">T${baseTile}[${kSlice}]</div><div style="font-size: 0.65rem;">SM ${sm}</div>`;
+                } else {
+                    computeBox.innerHTML = `<div style="font-weight: bold;">—</div><div style="font-size: 0.65rem;">SM ${sm}</div>`;
+                    isEvenSlice = true; // Default for idle SMs
+                }
+
+                // Barrier block (only for even K-slices)
+                const barrierBox = document.createElement('div');
+                barrierBox.id = `splitK-w${wave}-sm${sm}-barrier`;
+                barrierBox.style.cssText = `
+                    height: 15px;
+                    background: #1f2937;
+                    border: 1px solid #374151;
+                    border-radius: 0.3rem;
+                    transition: all 0.3s;
+                    font-size: 0.6rem;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #6b7280;
+                `;
+                barrierBox.textContent = (tileNum < this.config.numTiles && isEvenSlice) ? 'Arrive' : '';
+
+                // Reduce block (only for odd K-slices)
+                const reduceBox = document.createElement('div');
+                reduceBox.id = `splitK-w${wave}-sm${sm}-reduce`;
+                reduceBox.style.cssText = `
+                    height: 20px;
+                    background: #1f2937;
+                    border: 1px solid #374151;
+                    border-radius: 0.3rem;
+                    transition: all 0.3s;
+                    font-size: 0.65rem;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: #6b7280;
+                `;
+                reduceBox.textContent = (tileNum < this.config.numTiles && !isEvenSlice) ? 'Reduce' : '';
+
+                smCol.appendChild(computeBox);
+                smCol.appendChild(barrierBox);
+                smCol.appendChild(reduceBox);
+                smRow.appendChild(smCol);
+            }
+
+            smContainer.appendChild(smRow);
+            waveRow.appendChild(smContainer);
+
+            // Right side: Wave info
+            const infoCard = document.createElement('div');
+            const numActiveSMs = Math.min(this.config.numSMs, this.config.numTiles - wave * this.config.numSMs);
+            const utilization = (numActiveSMs / this.config.numSMs * 100).toFixed(0);
+            const isPartial = numActiveSMs < this.config.numSMs;
+
+            infoCard.style.cssText = `
+                flex: 1;
+                background: #1f2937;
+                border: 2px solid ${isPartial ? '#ef4444' : '#22c55e'};
+                border-radius: 0.5rem;
+                padding: 1rem;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                gap: 0.5rem;
+            `;
+
+            const tilesInWave = [];
+            for (let sm = 0; sm < this.config.numSMs; sm++) {
+                const tileNum = wave * this.config.numSMs + sm;
+                if (tileNum < this.config.numTiles) {
+                    const baseTile = Math.floor(tileNum / this.config.splitFactor);
+                    const kSlice = tileNum % this.config.splitFactor;
+                    tilesInWave.push(`T${baseTile}[${kSlice}]`);
+                }
+            }
+
+            infoCard.innerHTML = `
+                <div style="font-size: 0.9rem; font-weight: bold; color: ${isPartial ? '#ef4444' : '#22c55e'};">
+                    ${isPartial ? '⚠️ Partial Wave' : '✓ Full Wave'}
+                </div>
+                <div style="font-size: 0.8rem; color: #d1d5db;">
+                    <strong>SMs:</strong> ${numActiveSMs} / ${this.config.numSMs} (${utilization}%)
+                </div>
+                <div style="font-size: 0.75rem; color: #d1d5db;">
+                    <strong>K-slices:</strong> ${tilesInWave.join(', ')}
+                </div>
+                ${isPartial ? `<div style="font-size: 0.75rem; color: #fca5a5; margin-top: 0.25rem;"><strong>${this.config.numSMs - numActiveSMs} SMs idle</strong></div>` : ''}
+            `;
+
+            waveRow.appendChild(infoCard);
+            waveDiv.appendChild(waveRow);
+            gridContainer.appendChild(waveDiv);
+        }
+
+        grid.appendChild(gridContainer);
+    }
+
+    updateVisualization() {
+        const timePerWave = this.config.tileTime + this.config.barrierTime + this.config.reduceTime;
+        const currentWave = Math.floor(this.state.currentTime / timePerWave);
+        const timeInWave = this.state.currentTime % timePerWave;
+
+        document.getElementById('splitKCurrentWave').textContent = Math.min(currentWave + 1, this.config.numWaves);
+
+        for (let wave = 0; wave < this.config.numWaves; wave++) {
+            for (let sm = 0; sm < this.config.numSMs; sm++) {
+                const tileNum = wave * this.config.numSMs + sm;
+                const computeBox = document.getElementById(`splitK-w${wave}-sm${sm}-compute`);
+                const barrierBox = document.getElementById(`splitK-w${wave}-sm${sm}-barrier`);
+                const reduceBox = document.getElementById(`splitK-w${wave}-sm${sm}-reduce`);
+
+                if (!computeBox || !barrierBox || !reduceBox) continue;
+
+                let computeColor, barrierColor, reduceColor;
+                let computeBorder, barrierBorder, reduceBorder;
+
+                const kSlice = tileNum % this.config.splitFactor;
+                const isEvenSlice = (kSlice === 0);
+
+                if (wave < currentWave) {
+                    // Completed wave
+                    if (tileNum < this.config.numTiles) {
+                        computeColor = barrierColor = reduceColor = '#22c55e';
+                        computeBorder = barrierBorder = reduceBorder = '#16a34a';
+                    } else {
+                        computeColor = barrierColor = reduceColor = '#1f2937';
+                        computeBorder = barrierBorder = reduceBorder = '#374151';
+                    }
+                } else if (wave === currentWave) {
+                    // Active wave
+                    if (tileNum < this.config.numTiles) {
+                        if (timeInWave < this.config.tileTime) {
+                            // Computing
+                            computeColor = '#8b5cf6';
+                            computeBorder = '#7c3aed';
+                            barrierColor = reduceColor = '#1f2937';
+                            barrierBorder = reduceBorder = '#374151';
+                            computeBox.style.boxShadow = '0 0 15px rgba(139, 92, 246, 0.5)';
+                        } else if (timeInWave < this.config.tileTime + this.config.barrierTime) {
+                            // Barrier/Reduce phase - even slices arrive, odd slices reduce
+                            computeColor = '#22c55e';
+                            computeBorder = '#16a34a';
+
+                            if (isEvenSlice) {
+                                // Even K-slice (K=0): arrive at barrier and wait
+                                barrierColor = '#f59e0b';
+                                barrierBorder = '#d97706';
+                                reduceColor = '#1f2937';
+                                reduceBorder = '#374151';
+                                barrierBox.style.boxShadow = '0 0 15px rgba(245, 158, 11, 0.5)';
+                            } else {
+                                // Odd K-slice (K=1): reduce previous results
+                                barrierColor = '#1f2937';
+                                barrierBorder = '#374151';
+                                reduceColor = '#3b82f6';
+                                reduceBorder = '#2563eb';
+                                reduceBox.style.boxShadow = '0 0 15px rgba(59, 130, 246, 0.5)';
+                            }
+                        } else {
+                            // Final phase - all complete
+                            computeColor = '#22c55e';
+                            computeBorder = '#16a34a';
+                            barrierColor = '#22c55e';
+                            barrierBorder = '#16a34a';
+                            reduceColor = '#22c55e';
+                            reduceBorder = '#16a34a';
+                        }
+                    } else {
+                        // Idle SM
+                        computeColor = barrierColor = reduceColor = '#374151';
+                        computeBorder = '#ef4444';
+                        barrierBorder = reduceBorder = '#374151';
+                    }
+                } else {
+                    // Future wave
+                    computeColor = barrierColor = reduceColor = '#1f2937';
+                    computeBorder = barrierBorder = reduceBorder = '#374151';
+                }
+
+                computeBox.style.background = computeColor;
+                computeBox.style.borderColor = computeBorder;
+                barrierBox.style.background = barrierColor;
+                barrierBox.style.borderColor = barrierBorder;
+                reduceBox.style.background = reduceColor;
+                reduceBox.style.borderColor = reduceBorder;
+
+                if (wave !== currentWave || tileNum >= this.config.numTiles) {
+                    computeBox.style.boxShadow = 'none';
+                    barrierBox.style.boxShadow = 'none';
+                    reduceBox.style.boxShadow = 'none';
+                }
+            }
+        }
+    }
+
+    animate() {
+        if (this.state.isPlaying) {
+            this.state.currentTime++;
+
+            const timePerWave = this.config.tileTime + this.config.barrierTime + this.config.reduceTime;
+            const totalTime = timePerWave * this.config.numWaves;
+
+            if (this.state.currentTime >= totalTime) {
+                this.state.currentTime = totalTime;
+                this.stopAnimation();
+            }
+
+            this.updateVisualization();
+        }
+    }
+
+    startAnimation() {
+        this.state.isPlaying = true;
+        this.state.animationTimer = setInterval(() => this.animate(), this.config.animationInterval);
+
+        document.getElementById('splitKPlayIcon').textContent = '⏸';
+        document.getElementById('splitKPlayText').textContent = 'Pause';
+    }
+
+    stopAnimation() {
+        this.state.isPlaying = false;
+        if (this.state.animationTimer) {
+            clearInterval(this.state.animationTimer);
+            this.state.animationTimer = null;
+        }
+
+        document.getElementById('splitKPlayIcon').textContent = '▶';
+        document.getElementById('splitKPlayText').textContent = 'Play';
+    }
+
+    resetAnimation() {
+        this.stopAnimation();
+        this.state.currentTime = 0;
+        this.updateVisualization();
+    }
+
+    togglePlay() {
+        const timePerWave = this.config.tileTime + this.config.barrierTime + this.config.reduceTime;
+        const totalTime = timePerWave * this.config.numWaves;
+
+        if (!this.state.isPlaying && this.state.currentTime >= totalTime) {
+            this.resetAnimation();
+            setTimeout(() => this.startAnimation(), 100);
+        } else if (this.state.isPlaying) {
+            this.stopAnimation();
+        } else {
+            this.startAnimation();
+        }
+    }
+}
+
+// Auto-initialize Split-K viz on page load
+document.addEventListener('DOMContentLoaded', () => {
+    const container = document.getElementById('split-k-viz');
+    if (container) {
+        new SplitKViz('split-k-viz');
+    }
+});
+
+// ============================================================================
+// Stream-K Visualization
+// ============================================================================
+
+class StreamKViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+
+        this.config = {
+            numSMs: 4,
+            totalTiles: 9,
+            tilesPerSM: 2.25,
+            tileTime: 30,
+            animationInterval: 50,
+        };
+
+        // Define fractional tile assignments for each SM
+        // SM0: T0, T1, T2 (25%), Reduce
+        // SM1: T2 (75%), Barrier, T3, T4 (50%), Reduce
+        // SM2: T4 (50%), Barrier, T5, T6 (75%), Reduce
+        // SM3: T6 (25%), Barrier, T7, T8
+        this.assignments = [
+            [
+                { type: 'tile', tile: 0, fraction: 1.0, color: '#8b5cf6' },
+                { type: 'tile', tile: 1, fraction: 1.0, color: '#a78bfa' },
+                { type: 'tile', tile: 2, fraction: 0.25, color: '#c4b5fd' },
+                { type: 'sync', syncOp: 'reduce', fraction: 0.15 }
+            ],
+            [
+                { type: 'tile', tile: 2, fraction: 0.75, color: '#c4b5fd' },
+                { type: 'sync', syncOp: 'barrier', fraction: 0.15 },
+                { type: 'tile', tile: 3, fraction: 1.0, color: '#06b6d4' },
+                { type: 'tile', tile: 4, fraction: 0.5, color: '#22d3ee' },
+                { type: 'sync', syncOp: 'reduce', fraction: 0.15 }
+            ],
+            [
+                { type: 'tile', tile: 4, fraction: 0.5, color: '#22d3ee' },
+                { type: 'sync', syncOp: 'barrier', fraction: 0.15 },
+                { type: 'tile', tile: 5, fraction: 1.0, color: '#10b981' },
+                { type: 'tile', tile: 6, fraction: 0.75, color: '#34d399' },
+                { type: 'sync', syncOp: 'reduce', fraction: 0.15 }
+            ],
+            [
+                { type: 'tile', tile: 6, fraction: 0.25, color: '#34d399' },
+                { type: 'sync', syncOp: 'barrier', fraction: 0.15 },
+                { type: 'tile', tile: 7, fraction: 1.0, color: '#f59e0b' },
+                { type: 'tile', tile: 8, fraction: 1.0, color: '#fbbf24' }
+            ]
+        ];
+
+        this.state = {
+            isPlaying: false,
+            currentTime: 0,
+            animationTimer: null,
+        };
+
+        this.init();
+    }
+
+    getTotalTime() {
+        // Calculate the actual total time based on the longest SM assignment
+        let maxTime = 0;
+        for (let sm = 0; sm < this.config.numSMs; sm++) {
+            let smTime = 0;
+            this.assignments[sm].forEach(item => {
+                smTime += item.fraction * this.config.tileTime;
+            });
+            maxTime = Math.max(maxTime, smTime);
+        }
+        return maxTime;
+    }
+
+    init() {
+        const totalTime = this.getTotalTime();
+
+        this.container.innerHTML = commonPipelineStyles + `
+            <div class="pipeline-container">
+                <h1 class="pipeline-title">Stream-K Schedule</h1>
+                <p class="pipeline-subtitle">4 SMs, 9 tiles → 2.25 tiles/SM (fractional assignment)</p>
+
+                <div class="pipeline-controls">
+                    <button id="streamKPlayBtn" class="pipeline-btn pipeline-btn-primary">
+                        <span id="streamKPlayIcon">▶</span>
+                        <span id="streamKPlayText">Play</span>
+                    </button>
+                    <button id="streamKResetBtn" class="pipeline-btn pipeline-btn-secondary">
+                        <span>↻</span>
+                        <span>Reset</span>
+                    </button>
+                </div>
+
+                <div class="pipeline-time-display">
+                    <div class="pipeline-time-value">
+                        Progress: <span class="current" id="streamKProgress">0</span>%
+                    </div>
+                </div>
+
+                <div class="pipeline-card">
+                    <h3 class="pipeline-card-title">Fractional Tile Assignment per SM</h3>
+                    <div style="display: flex; gap: 1.5rem; margin-top: 1rem; margin-bottom: 1rem; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <div style="width: 24px; height: 24px; background: #8b5cf6; border-radius: 0.25rem; display: flex; align-items: center; justify-content: center; font-size: 0.75rem;">T</div>
+                            <span style="color: #d1d5db; font-size: 0.875rem;">Compute Tile</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <div style="width: 24px; height: 24px; background: #f59e0b; border-radius: 0.25rem; display: flex; align-items: center; justify-content: center; font-size: 0.85rem;">🚧</div>
+                            <span style="color: #d1d5db; font-size: 0.875rem;">Barrier</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <div style="width: 24px; height: 24px; background: #3b82f6; border-radius: 0.25rem; display: flex; align-items: center; justify-content: center; font-size: 0.85rem;">🔄</div>
+                            <span style="color: #d1d5db; font-size: 0.875rem;">Reduce</span>
+                        </div>
+                    </div>
+                    <div id="streamKSMGrid" style="margin-top: 1rem;"></div>
+                </div>
+            </div>
+        `;
+
+        this.initializeSMGrid();
+
+        document.getElementById('streamKPlayBtn').addEventListener('click', () => this.togglePlay());
+        document.getElementById('streamKResetBtn').addEventListener('click', () => this.resetAnimation());
+    }
+
+    initializeSMGrid() {
+        const grid = document.getElementById('streamKSMGrid');
+        grid.innerHTML = '';
+
+        const gridContainer = document.createElement('div');
+        gridContainer.style.cssText = 'display: flex; flex-direction: column; gap: 1rem;';
+
+        for (let sm = 0; sm < this.config.numSMs; sm++) {
+            const smRow = document.createElement('div');
+            smRow.style.cssText = 'display: flex; gap: 0.75rem; align-items: center;';
+
+            // SM label
+            const smLabel = document.createElement('div');
+            smLabel.style.cssText = 'min-width: 50px; font-weight: bold; color: #9ca3af; font-size: 0.9rem;';
+            smLabel.textContent = `SM ${sm}`;
+            smRow.appendChild(smLabel);
+
+            // Tile bars container (single row with all tiles and sync ops)
+            const tilesContainer = document.createElement('div');
+            tilesContainer.style.cssText = 'flex: 1; display: flex; gap: 0.25rem; height: 50px;';
+
+            const assignment = this.assignments[sm];
+            let totalFraction = 0;
+            assignment.forEach(item => totalFraction += item.fraction);
+
+            assignment.forEach((item, idx) => {
+                const bar = document.createElement('div');
+                bar.id = `streamK-sm${sm}-item${idx}`;
+                const widthPercent = (item.fraction / totalFraction) * 100;
+
+                bar.style.cssText = `
+                    width: ${widthPercent}%;
+                    background: #1f2937;
+                    border: 2px solid #374151;
+                    border-radius: 0.4rem;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 0.75rem;
+                    font-weight: bold;
+                    color: #6b7280;
+                    transition: all 0.3s;
+                    position: relative;
+                `;
+
+                if (item.type === 'tile') {
+                    const label = item.fraction === 1.0
+                        ? `T${item.tile}`
+                        : `T${item.tile} (${(item.fraction * 100).toFixed(0)}%)`;
+                    bar.textContent = label;
+                    bar.dataset.type = 'tile';
+                    bar.dataset.color = item.color;
+                } else if (item.type === 'sync') {
+                    bar.textContent = item.syncOp === 'barrier' ? '🚧' : '🔄';
+                    bar.style.fontSize = '1.5rem';
+                    bar.dataset.type = 'sync';
+                    bar.dataset.syncOp = item.syncOp;
+                } else if (item.type === 'padding') {
+                    bar.style.opacity = '0.3';
+                    bar.dataset.type = 'padding';
+                }
+
+                tilesContainer.appendChild(bar);
+            });
+
+            smRow.appendChild(tilesContainer);
+            gridContainer.appendChild(smRow);
+        }
+
+        grid.appendChild(gridContainer);
+    }
+
+    updateVisualization() {
+        const totalTime = this.getTotalTime();
+        const progress = (this.state.currentTime / totalTime) * 100;
+
+        document.getElementById('streamKProgress').textContent = Math.min(100, Math.floor(progress));
+
+        for (let sm = 0; sm < this.config.numSMs; sm++) {
+            const assignment = this.assignments[sm];
+            let cumulativeTime = 0;
+
+            assignment.forEach((item, idx) => {
+                const bar = document.getElementById(`streamK-sm${sm}-item${idx}`);
+                if (!bar) return;
+
+                const itemStartTime = cumulativeTime;
+                const itemDuration = item.fraction * this.config.tileTime;
+                const itemEndTime = itemStartTime + itemDuration;
+
+                let bgColor, borderColor, textColor;
+
+                if (item.type === 'tile') {
+                    if (this.state.currentTime >= itemEndTime) {
+                        // Tile completed
+                        bgColor = '#22c55e';
+                        borderColor = '#16a34a';
+                        textColor = '#ffffff';
+                        bar.style.boxShadow = 'none';
+                    } else if (this.state.currentTime >= itemStartTime) {
+                        // Tile active
+                        bgColor = item.color;
+                        borderColor = item.color;
+                        textColor = '#ffffff';
+                        bar.style.boxShadow = `0 0 15px ${item.color}80`;
+                    } else {
+                        // Tile pending
+                        bgColor = '#1f2937';
+                        borderColor = '#374151';
+                        textColor = '#6b7280';
+                        bar.style.boxShadow = 'none';
+                    }
+                } else if (item.type === 'sync') {
+                    if (this.state.currentTime >= itemEndTime) {
+                        // Sync operation completed
+                        if (item.syncOp === 'barrier') {
+                            bgColor = '#f59e0b';
+                            borderColor = '#d97706';
+                            textColor = '#ffffff';
+                        } else {
+                            bgColor = '#3b82f6';
+                            borderColor = '#2563eb';
+                            textColor = '#ffffff';
+                        }
+                        bar.style.boxShadow = 'none';
+                    } else if (this.state.currentTime >= itemStartTime) {
+                        // Sync operation active
+                        if (item.syncOp === 'barrier') {
+                            bgColor = '#f59e0b';
+                            borderColor = '#d97706';
+                            textColor = '#ffffff';
+                            bar.style.boxShadow = '0 0 15px rgba(245, 158, 11, 0.5)';
+                        } else {
+                            bgColor = '#3b82f6';
+                            borderColor = '#2563eb';
+                            textColor = '#ffffff';
+                            bar.style.boxShadow = '0 0 15px rgba(59, 130, 246, 0.5)';
+                        }
+                    } else {
+                        // Sync pending
+                        bgColor = '#1f2937';
+                        borderColor = '#374151';
+                        textColor = '#6b7280';
+                        bar.style.boxShadow = 'none';
+                    }
+                } else if (item.type === 'padding') {
+                    bgColor = '#1f2937';
+                    borderColor = '#374151';
+                    textColor = '#6b7280';
+                    bar.style.boxShadow = 'none';
+                }
+
+                bar.style.background = bgColor;
+                bar.style.borderColor = borderColor;
+                bar.style.color = textColor;
+
+                cumulativeTime = itemEndTime;
+            });
+        }
+    }
+
+    animate() {
+        if (this.state.isPlaying) {
+            this.state.currentTime += 0.5;
+
+            const totalTime = this.getTotalTime();
+            if (this.state.currentTime >= totalTime) {
+                // Ensure we go slightly past totalTime to show final reduce ops as completed
+                this.state.currentTime = totalTime + 0.1;
+                this.updateVisualization();
+                this.stopAnimation();
+            } else {
+                this.updateVisualization();
+            }
+        }
+    }
+
+    startAnimation() {
+        this.state.isPlaying = true;
+        this.state.animationTimer = setInterval(() => this.animate(), this.config.animationInterval);
+
+        document.getElementById('streamKPlayIcon').textContent = '⏸';
+        document.getElementById('streamKPlayText').textContent = 'Pause';
+    }
+
+    stopAnimation() {
+        this.state.isPlaying = false;
+        if (this.state.animationTimer) {
+            clearInterval(this.state.animationTimer);
+            this.state.animationTimer = null;
+        }
+
+        document.getElementById('streamKPlayIcon').textContent = '▶';
+        document.getElementById('streamKPlayText').textContent = 'Play';
+    }
+
+    resetAnimation() {
+        this.stopAnimation();
+        this.state.currentTime = 0;
+        this.updateVisualization();
+    }
+
+    togglePlay() {
+        const totalTime = this.getTotalTime();
+
+        if (!this.state.isPlaying && this.state.currentTime >= totalTime) {
+            this.resetAnimation();
+            setTimeout(() => this.startAnimation(), 100);
+        } else if (this.state.isPlaying) {
+            this.stopAnimation();
+        } else {
+            this.startAnimation();
+        }
+    }
+}
+
+// Auto-initialize Stream-K viz on page load
+document.addEventListener('DOMContentLoaded', () => {
+    const container = document.getElementById('stream-k-viz');
+    if (container) {
+        new StreamKViz('stream-k-viz');
+    }
+});

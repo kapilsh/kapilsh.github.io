@@ -393,14 +393,66 @@ hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_coun
 > We observe a regression for smaller matrices that we'll address later during autotuning when we explore different tile sizes and stage counts optimized for memory-bound workloads.
 {: .prompt-warning}
 
-
 ## Ping Pong Schedule
 
-## Stream K
+The Ping-Pong schedule extends the Cooperative pattern to overlap epilogue with mainloop computation. In Cooperative Schedule, both consumer groups work on the same output tile, sharing A/B buffers. When both finish their MMA operations, tensor cores sit idle during the epilogue (storing results to global memory). This sequential execution leaves performance on the table.
 
-### Producer-Consumer Pipeline
+> In vanilla persistent cooperative scheduling both consumer Warp Groups have the dependency to the same resources i.e. the smem tile for matrix A/B/C/D since they deal with the same tiles
+{: .prompt-warning}
 
-The combination of TMA, async barriers, and warp specialization enables a powerful producer-consumer pattern in Hopper GEMMs. Producer warps handle data movement (TMA loads), while consumer warps focus purely on computation (WGMMA). This separation, combined with software pipelining, allows memory transfers and computation to overlap nearly perfectly.
+In Ping-Pong Schedule, the tile scheduler assigns each consumer a different output tile. The producer uses ordered sequence barriers to fill buffers alternately. While consumer 1 executes MMA operations, consumer 2 performs its epilogue. They then swap roles—maximizing tensor core utilization by overlapping computation with memory writes.
+
+![PyTorch Ping Pong Schedule](/assets/explore_gemms_2_pytorch_ping_pong_fp8_blog.png)
+
+
+# TODO: Visualization
+
+## CTA Rasterization and Swizzle
+
+We discussed swizzling in the previous blog post but we will cover it a bit more here. The way I understand it, [CTA rasterization](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html#threadblock-rasterization) defines the order in which thread blocks map to GEMM tiles and are executed on the GPU. A naive row-major launch often leads to poor L2 reuse, redundant global loads, and memory partition camping. As we previously covered, CTA swizzling remaps `(blockIdx.x, blockIdx.y)` to improve spatial and temporal locality across tiles. Proper swizzling increases reuse of A and B tiles in L2, reduces DRAM traffic, and improves SM load balance. We did not any swizzling techniques on the RTX 4090 we used in previous post but on modern GPUs (Hopper/Blackwell), swizzling is critical for cluster-level execution, enabling shared memory reuse and efficient async/TMA pipelines. [Bert Maher has a nice writeup](https://github.com/bertmaher/simplegemm/tree/main) where he describes his process of understanding swizzling while reproducing pingpong swizzleed kernel from scratch. 
+
+## Stream-K Scheduling
+
+### Wave Quantization Problem
+
+Standard GEMM kernels partition output tiles across SMs in discrete waves when the number of work units exceeds number of available SMs. Hence, when work tiles don't divide evenly by SM count, the final partial wave leaves SMs idle i.e. **wave quantization**.
+
+> On H100 SXM5 with 132 SMs, computing 133 tiles requires 2 full waves i.e. identical cost to computing 264 tiles. The 133rd tile effectively halves device utilization.
+{: .prompt-info}
+
+<div id="wave-quantization-viz"></div>
+
+For more details, see [prior work from Colfax Research](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/) on this:
+
+![WQ CR](/assets/wave_quantization_colfax.png)
+
+Source: [CUTLASS Tutorial: Persistent Kernels and Stream-K](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/)
+
+#### Data-Parallel Approach: Simple but Costly
+
+The most direct solution is to reduce tile size and creating more work units to fill partial waves. In our 4 SM example, this would create 18 tiles instead of 9, improving utilization from 75% to 90%. However, smaller tiles degrade efficiency due to loss of arithmetic intensity drops. (refer to tiling sections from prevous post). In essense, this will reduce latency-hiding opportunities for the warp scheduler. Hence, While data-parallel tiling improves wave balance, the per-tile performance loss often negates any gains—making it an incomplete solution.
+
+### Split-K: Partitioning Along Reduction Dimension
+
+Next natural extenstion here is Split-K, where we could divide tiles along the K-dimension into a constant number of pieces (e.g., splitting a 128×128×128 tile into two 128×128×64 pieces). Unlike splitting M or N, this increases work units without shrinking output tile dimensions. This can preserve arithmetic intensity better than data-parallel approach. Since each CTA accumulates only partial results for its output tile, CTAs collaborating on the same tile perform turnstile reduction in a global memory workspace such that each waits at a barrier for CTAs processing earlier K-slices, reduces its partial results into the workspace, then signals completion. The final CTA reduces from the workspace to accumulators and executes the epilogue.
+
+> More splits improve wave balance but degrade K-tile efficiency (lower arithmetic intensity, fewer latency-hiding opportunities) and increase synchronization overhead (barriers + GMEM traffic). Hence sweet spot depends on problem and hardware specific tuning.
+{: .prompt-tip}
+
+<div id="split-k-viz"></div>
+
+
+### Stream-K: Fractional Tile Assignment
+
+That brings us to Stream-K, which aims to eliminate wave quantization completely by assigning each persistent CTA a fractional number of work tiles. In our 9-tile, 4-SM example, each SM computes exactly 2.25 tiles instead of discrete waves. SM0 processes tiles 0, 1, and ¼ of tile 2; SM1 completes tile 2, processes tile 3, and starts half of tile 4. Split tiles partition along K-dimension using turnstile reduction (like Split-K), but with temporal scheduling—early K-pieces compute well before final pieces, minimizing barrier wait times.
+
+This eliminates quantization entirely. Total time approaches 2.25 work units (vs 3 waves in the naive approach) with only minimal synchronization overhead. Most original 128×128×128 tiles remain intact, maintaining high arithmetic intensity and full WGMMA instruction availability. Temporal scheduling ensures epilogue-computing CTAs rarely wait i.e. earlier collaborators finish K-slices far in advance. The trade-off is additional GMEM workspace for partial tile sharing between CTAs, similar to Split-K but with the better load balancing.
+
+<div id="stream-k-viz"></div>
+
+### Hybrid Stream-K
+
+Hybrid Stream-K combines both approaches: it uses Stream-K scheduling for one full wave plus the partial wave, then switches to conventional data-parallel scheduling for remaining complete tiles. This design recovers cache locality benefits while eliminating quantization effects. Since all CTAs process the same total amount of Stream-K work, they finish this phase simultaneously before proceeding to standard tiling—balancing load and cache efficiency.
 
 <div id="hopper-gemm-pipeline-viz"></div>
 
@@ -415,6 +467,12 @@ The combination of TMA, async barriers, and warp specialization enables a powerf
 - [Efficient GEMM in CUDA](https://docs.nvidia.com/cutlass/media/docs/cpp/efficient_gemm.html)
 - [CUDA C++ Programming Guide: Spatial Partitioning (Warp Specialization)](https://docs.nvidia.com/cuda/cuda-c-programming-guide/#spatial-partitioning-also-known-as-warp-specialization)
 - [Warp Specialization Blog Post](https://rohany.github.io/blog/warp-specialization/)
+- [Deep Dive on CUTLASS Ping-Pong GEMM Kernel](https://pytorch.org/blog/cutlass-ping-pong-gemm-kernel/)
+- [Why we have both Ping-pong and Cooperative schedule?](https://github.com/NVIDIA/cutlass/issues/2181)
+- [Stream-K Paper](https://arxiv.org/pdf/2301.03598)
+- [NVIDIA Deep Learning Performance Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html#wave-quant)
+- [bertmaher/simplegemm](https://github.com/bertmaher/simplegemm)
+- [ColfaxResearch/cfx-article-src](https://github.com/ColfaxResearch/cfx-article-src)
 
 
 <script src="/assets/js/hopper-gemm-pipeline.js"></script>
