@@ -450,9 +450,12 @@ This eliminates quantization entirely. Total time approaches 2.25 work units (vs
 
 <div id="stream-k-viz"></div>
 
-### Hybrid Stream-K
+### Hybrid Stream-K: Fixing the Cache Problem
 
-Hybrid Stream-K combines both approaches: it uses Stream-K scheduling for one full wave plus the partial wave, then switches to conventional data-parallel scheduling for remaining complete tiles. This design recovers cache locality benefits while eliminating quantization effects. Since all CTAs process the same total amount of Stream-K work, they finish this phase simultaneously before proceeding to standard tiling—balancing load and cache efficiency.
+While Stream-K eliminates wave quantization, it introduces temporal skew that hurts L2 cache performance. In data-parallel scheduling, CTAs working on adjacent output tiles simultaneously request the same K-blocks of shared operand tiles (e.g., tiles 0, 1, 2 all need B0), creating cache hits. Stream-K's fractional assignments break this synchronization i.e. CTAs request different K-offsets at different times. Hybrid Stream-K fixes this by partitioning work into two phases. First, the **Stream-K phase** processes exactly 1 full wave + the partial wave using fractional tiles. Each CTA receives at most 2 partial tiles totaling the same work, ensuring all CTAs finish this phase simultaneously. Second, the **data-parallel phase** executes remaining complete tiles (divisible by SM count) with standard scheduling. CTAs now process adjacent output tiles in sync, restoring cache locality for shared A/B tiles. This hybrid approach eliminates quantization via Stream-K phase while maximizing cache hits via data-parallel phase for the bulk of computation. For more details and in-depth discussion refer to [CUTLASS Tutorial: Persistent Kernels and Stream-K](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/).
+
+
+##
 
 <div id="hopper-gemm-pipeline-viz"></div>
 
