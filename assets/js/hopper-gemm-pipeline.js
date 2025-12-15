@@ -1734,20 +1734,30 @@ class PersistentCooperativeViz {
 
         // Configuration
         this.config = {
-            maxTime: 300,
-            timeScale: 1.5,
+            maxTime: 450,
+            timeScale: 2.2,
             numTiles: 6,
-            numThreadBlocks: 2, // Simulating 2 persistent thread blocks
+            numThreadBlocks: 2, // 2 persistent thread blocks processing multiple tiles
             animationInterval: 40,
         };
 
         this.opTypes = {
-            TMA_LOAD: { name: 'TMA Load', color: 'pipeline-bg-cyan-500', duration: 26, icon: '📥' },
-            WGMMA_TOP: { name: 'WGMMA (Top Half)', color: 'pipeline-bg-purple-500', duration: 35, icon: '⚡' },
-            WGMMA_BOTTOM: { name: 'WGMMA (Bottom Half)', color: 'pipeline-bg-purple-400', duration: 35, icon: '⚡' },
-            EPILOGUE: { name: 'Epilogue', color: 'pipeline-bg-orange-500', duration: 18, icon: '🔧' },
-            TILE_FETCH: { name: 'Fetch Next Tile', color: 'pipeline-bg-green-500', duration: 14, icon: '📋' },
+            TMA_A: { name: 'TMA Load A', color: 'pipeline-bg-blue-500', duration: 25, icon: '📥' },
+            TMA_B: { name: 'TMA Load B', color: 'pipeline-bg-cyan-500', duration: 25, icon: '📥' },
+            WGMMA: { name: 'WGMMA', color: 'pipeline-bg-purple-500', duration: 40, icon: '⚡' },
+            EPILOGUE: { name: 'Epilogue', color: 'pipeline-bg-orange-500', duration: 15, icon: '🔧' },
+            GMEM_WRITE: { name: 'Write GMEM', color: 'pipeline-bg-green-500', duration: 20, icon: '📤' },
         };
+
+        // 2 Producer warps (shared) + 4 Consumer warps (2 for top half, 2 for bottom half)
+        this.streams = [
+            { id: 'producer_0', name: 'Producer 0 (Load A)', type: 'producer' },
+            { id: 'producer_1', name: 'Producer 1 (Load B)', type: 'producer' },
+            { id: 'consumer_0', name: 'Consumer 0 (Top Half)', type: 'consumer' },
+            { id: 'consumer_1', name: 'Consumer 1 (Top Half)', type: 'consumer' },
+            { id: 'consumer_2', name: 'Consumer 2 (Bottom Half)', type: 'consumer' },
+            { id: 'consumer_3', name: 'Consumer 3 (Bottom Half)', type: 'consumer' }
+        ];
 
         // State
         this.state = {
@@ -1761,10 +1771,13 @@ class PersistentCooperativeViz {
     }
 
     init() {
+        const totalTime = this.getTotalTime();
+
         this.container.innerHTML = commonPipelineStyles + `
             <div class="pipeline-container">
-                <h1 class="pipeline-title">Persistent Cooperative Kernel Pattern</h1>
-                <br>
+                <h1 class="pipeline-title">Persistent Cooperative Kernel Timeline</h1>
+                <p class="pipeline-subtitle">2 Persistent Thread Blocks × Multiple Tiles → Cooperative Consumers Split Each Tile</p>
+
                 <!-- Controls -->
                 <div class="pipeline-controls">
                     <button id="persistentCoopPlayBtn" class="pipeline-btn pipeline-btn-primary">
@@ -1785,13 +1798,23 @@ class PersistentCooperativeViz {
 
                 <!-- Timeline -->
                 <div class="pipeline-timeline-container">
-                    <div class="pipeline-timeline-wrapper" id="persistentCoopTimelineWrapper">
+                    <div class="pipeline-timeline-wrapper">
                         <div class="pipeline-time-axis">
                             <div class="pipeline-time-label">Time →</div>
                             <div class="pipeline-time-track" id="persistentCoopTimeTrack"></div>
                         </div>
                         <div id="persistentCoopStreamLanes"></div>
                     </div>
+                </div>
+
+                <!-- Info Card -->
+                <div class="pipeline-card" style="margin-top: 1.5rem; border-color: #8b5cf6;">
+                    <h3 class="pipeline-card-title" style="color: #8b5cf6;">🔄 Cooperative Pattern</h3>
+                    <p style="color: #d1d5db; line-height: 1.6; font-size: 0.95rem;">
+                        Each persistent thread block processes multiple tiles sequentially. Within each tile, two consumer warp groups 
+                        <strong>cooperatively</strong> compute the same output tile by splitting it across the M dimension (top/bottom halves).
+                        This reduces register pressure per consumer, enabling larger tile sizes.
+                    </p>
                 </div>
             </div>
         `;
@@ -1807,89 +1830,95 @@ class PersistentCooperativeViz {
         document.getElementById('persistentCoopResetBtn').addEventListener('click', () => this.resetAnimation());
     }
 
+    getTotalTime() {
+        // Calculate based on all tiles completing
+        const lastTileStart = (this.config.numTiles - 1) * 50;
+        const lastTileEnd = lastTileStart + this.opTypes.TMA_A.duration + 3 +
+                           this.opTypes.WGMMA.duration + 1 +
+                           this.opTypes.EPILOGUE.duration + 1 +
+                           this.opTypes.GMEM_WRITE.duration + 20;
+        return lastTileEnd;
+    }
+
     initializeOperations() {
         const ops = [];
         let opId = 0;
 
-        // Generate tiles assigned to each persistent thread block
-        const tilesPerTB = Math.ceil(this.config.numTiles / this.config.numThreadBlocks);
+        for (let tile = 0; tile < this.config.numTiles; tile++) {
+            const baseTime = tile * 50; // Stagger tiles slightly
 
-        for (let tb = 0; tb < this.config.numThreadBlocks; tb++) {
-            let currentTime = 0;
+            // Producer 0: TMA Load A (parallel with Producer 1)
+            ops.push({
+                id: opId++,
+                streamId: 'producer_0',
+                type: 'TMA_A',
+                startTime: baseTime,
+                endTime: baseTime + this.opTypes.TMA_A.duration,
+                tile: tile,
+                label: `A${tile}`,
+            });
 
-            for (let localTile = 0; localTile < tilesPerTB; localTile++) {
-                const globalTile = tb + (localTile * this.config.numThreadBlocks);
-                if (globalTile >= this.config.numTiles) break;
+            // Producer 1: TMA Load B (parallel with Producer 0)
+            ops.push({
+                id: opId++,
+                streamId: 'producer_1',
+                type: 'TMA_B',
+                startTime: baseTime,
+                endTime: baseTime + this.opTypes.TMA_B.duration,
+                tile: tile,
+                label: `B${tile}`,
+            });
 
-                // Tile Fetch (atomically grab next tile from scheduler)
-                if (localTile > 0) {
-                    ops.push({
-                        id: opId++,
-                        threadBlock: tb,
-                        streamId: `tb${tb}_producer`,
-                        type: 'TILE_FETCH',
-                        startTime: currentTime,
-                        endTime: currentTime + this.opTypes.TILE_FETCH.duration,
-                        tile: globalTile,
-                        label: `Tile ${globalTile}`,
-                    });
-                    currentTime += this.opTypes.TILE_FETCH.duration;
-                }
+            // WGMMA starts after loads complete
+            const wgmmaStart = baseTime + this.opTypes.TMA_A.duration + 3;
 
-                // Producer: TMA Load
-                ops.push({
-                    id: opId++,
-                    threadBlock: tb,
-                    streamId: `tb${tb}_producer`,
-                    type: 'TMA_LOAD',
-                    startTime: currentTime,
-                    endTime: currentTime + this.opTypes.TMA_LOAD.duration,
-                    tile: globalTile,
-                    label: `Load ${globalTile}`,
-                });
+            // Consumer 0 & 1: WGMMA on Top Half (parallel)
+            const consumer01 = tile % 2; // Alternate between consumer 0 and 1
+            ops.push({
+                id: opId++,
+                streamId: `consumer_${consumer01}`,
+                type: 'WGMMA',
+                startTime: wgmmaStart,
+                endTime: wgmmaStart + this.opTypes.WGMMA.duration,
+                tile: tile,
+                label: `C${tile}`,
+            });
 
-                const loadEnd = currentTime + this.opTypes.TMA_LOAD.duration;
+            // Consumer 2 & 3: WGMMA on Bottom Half (parallel with top)
+            const consumer23 = 2 + (tile % 2); // Alternate between consumer 2 and 3
+            ops.push({
+                id: opId++,
+                streamId: `consumer_${consumer23}`,
+                type: 'WGMMA',
+                startTime: wgmmaStart,
+                endTime: wgmmaStart + this.opTypes.WGMMA.duration,
+                tile: tile,
+                label: `C${tile}`,
+            });
 
-                // Consumer WG 0: WGMMA (Top half)
-                ops.push({
-                    id: opId++,
-                    threadBlock: tb,
-                    streamId: `tb${tb}_consumer0`,
-                    type: 'WGMMA_TOP',
-                    startTime: loadEnd,
-                    endTime: loadEnd + this.opTypes.WGMMA_TOP.duration,
-                    tile: globalTile,
-                    label: `Top ${globalTile}`,
-                });
+            // Epilogue - runs on one consumer after WGMMA
+            const epilogueStart = wgmmaStart + this.opTypes.WGMMA.duration + 1;
+            ops.push({
+                id: opId++,
+                streamId: `consumer_${consumer01}`,
+                type: 'EPILOGUE',
+                startTime: epilogueStart,
+                endTime: epilogueStart + this.opTypes.EPILOGUE.duration,
+                tile: tile,
+                label: `E${tile}`,
+            });
 
-                // Consumer WG 1: WGMMA (Bottom half) - runs in parallel
-                ops.push({
-                    id: opId++,
-                    threadBlock: tb,
-                    streamId: `tb${tb}_consumer1`,
-                    type: 'WGMMA_BOTTOM',
-                    startTime: loadEnd,
-                    endTime: loadEnd + this.opTypes.WGMMA_BOTTOM.duration,
-                    tile: globalTile,
-                    label: `Bot ${globalTile}`,
-                });
-
-                const computeEnd = loadEnd + this.opTypes.WGMMA_TOP.duration;
-
-                // Epilogue (handled by one consumer)
-                ops.push({
-                    id: opId++,
-                    threadBlock: tb,
-                    streamId: `tb${tb}_consumer0`,
-                    type: 'EPILOGUE',
-                    startTime: computeEnd,
-                    endTime: computeEnd + this.opTypes.EPILOGUE.duration,
-                    tile: globalTile,
-                    label: `Epi ${globalTile}`,
-                });
-
-                currentTime = computeEnd + this.opTypes.EPILOGUE.duration + 2;
-            }
+            // GMEM Write
+            const writeStart = epilogueStart + this.opTypes.EPILOGUE.duration + 1;
+            ops.push({
+                id: opId++,
+                streamId: `consumer_${consumer01}`,
+                type: 'GMEM_WRITE',
+                startTime: writeStart,
+                endTime: writeStart + this.opTypes.GMEM_WRITE.duration,
+                tile: tile,
+                label: `W${tile}`,
+            });
         }
 
         return ops;
@@ -1906,6 +1935,7 @@ class PersistentCooperativeViz {
                 <div class="pipeline-legend-icon ${type.color}">${type.icon}</div>
                 <div class="pipeline-legend-text">
                     <div class="pipeline-legend-name">${type.name}</div>
+                    <div class="pipeline-legend-duration">${type.duration} units</div>
                 </div>
             `;
             legendGrid.appendChild(item);
@@ -1914,7 +1944,8 @@ class PersistentCooperativeViz {
 
     initializeTimeTrack() {
         const timeTrack = document.getElementById('persistentCoopTimeTrack');
-        const numMarkers = Math.floor(this.config.maxTime / 50) + 1;
+        const totalTime = this.getTotalTime();
+        const numMarkers = Math.floor(totalTime / 40) + 1;
 
         timeTrack.innerHTML = '';
 
@@ -1922,67 +1953,39 @@ class PersistentCooperativeViz {
         for (let i = 0; i < numMarkers; i++) {
             const marker = document.createElement('div');
             marker.className = 'pipeline-time-marker';
-            marker.style.left = `${i * 50 * this.config.timeScale}px`;
-            marker.textContent = i * 50;
+            marker.style.left = `${i * 40 * this.config.timeScale}px`;
+            marker.textContent = i * 40;
             timeTrack.appendChild(marker);
-
-            const line = document.createElement('div');
-            line.className = 'pipeline-time-line';
-            line.style.left = `${i * 50 * this.config.timeScale}px`;
-            timeTrack.appendChild(line);
         }
 
         // Current time marker
         const currentMarker = document.createElement('div');
         currentMarker.id = 'persistentCoopCurrentTimeMarker';
         currentMarker.className = 'pipeline-current-time-marker';
-        currentMarker.innerHTML = '<div class="pipeline-current-time-arrow">▼</div>';
+        currentMarker.style.left = '0px';
         timeTrack.appendChild(currentMarker);
 
         // Set width
-        timeTrack.style.minWidth = `${this.config.maxTime * this.config.timeScale}px`;
+        timeTrack.style.minWidth = `${totalTime * this.config.timeScale}px`;
     }
 
     initializeStreamLanes() {
         const streamLanes = document.getElementById('persistentCoopStreamLanes');
         streamLanes.innerHTML = '';
 
-        // Create lanes for each thread block
-        for (let tb = 0; tb < this.config.numThreadBlocks; tb++) {
-            // Thread block header
-            const tbHeader = document.createElement('div');
-            tbHeader.style.cssText = `
-                color: #fbbf24;
-                font-weight: bold;
-                font-size: 1rem;
-                margin-top: ${tb > 0 ? '1.5rem' : '0'};
-                margin-bottom: 0.5rem;
-                padding: 0.5rem;
-                background: rgba(251, 191, 36, 0.1);
-                border-left: 3px solid #fbbf24;
+        this.streams.forEach(stream => {
+            const lane = document.createElement('div');
+            lane.className = 'pipeline-stream-lane';
+            const totalTime = this.getTotalTime();
+            lane.innerHTML = `
+                <div class="pipeline-stream-label pipeline-${stream.type}">
+                    <div class="pipeline-stream-name">${stream.name}</div>
+                    <div class="pipeline-stream-type">${stream.type === 'producer' ? 'TMA Loads' : 'Compute'}</div>
+                </div>
+                <div class="pipeline-lane-track" id="persistentCoop-lane-${stream.id}" style="min-width: ${totalTime * this.config.timeScale}px"></div>
             `;
-            tbHeader.textContent = `Thread Block ${tb} (Persistent)`;
-            streamLanes.appendChild(tbHeader);
-
-            const streams = [
-                { id: `tb${tb}_producer`, name: `Producer Warp`, type: 'producer' },
-                { id: `tb${tb}_consumer0`, name: `Consumer WG 0`, type: 'consumer' },
-                { id: `tb${tb}_consumer1`, name: `Consumer WG 1`, type: 'consumer' },
-            ];
-
-            streams.forEach(stream => {
-                const lane = document.createElement('div');
-                lane.className = 'pipeline-stream-lane';
-                lane.innerHTML = `
-                    <div class="pipeline-stream-label pipeline-${stream.type}">
-                        <div class="pipeline-stream-name">${stream.name}</div>
-                        <div class="pipeline-stream-type">${stream.type === 'producer' ? 'TMA Loads' : 'Compute (M/2)'}</div>
-                    </div>
-                    <div class="pipeline-lane-track" id="persistentCoop-lane-${stream.id}" style="min-width: ${this.config.maxTime * this.config.timeScale}px"></div>
-                `;
-                streamLanes.appendChild(lane);
-            });
-        }
+            streamLanes.appendChild(lane);
+        });
 
         // Create operation elements
         this.state.operations.forEach(op => {
@@ -1994,7 +1997,7 @@ class PersistentCooperativeViz {
             opElement.className = `pipeline-operation ${opType.color}`;
             opElement.style.left = `${op.startTime * this.config.timeScale}px`;
             opElement.style.width = `${(op.endTime - op.startTime) * this.config.timeScale}px`;
-            opElement.style.display = 'none';
+            opElement.style.display = 'none'; // Initially hidden
             opElement.innerHTML = `
                 <div class="pipeline-operation-progress" id="persistentCoop-progress-${op.id}" style="width: 0%"></div>
                 <div class="pipeline-operation-content">
@@ -2017,37 +2020,56 @@ class PersistentCooperativeViz {
             const isActive = this.state.currentTime >= op.startTime && this.state.currentTime <= op.endTime;
             const isVisible = this.state.currentTime >= op.startTime;
 
-            const opElement = document.getElementById(`persistentCoop-op-${op.id}`);
-            const progressBar = document.getElementById(`persistentCoop-progress-${op.id}`);
+            // Cache DOM elements on first access
+            if (!op._cachedElements) {
+                op._cachedElements = {
+                    opElement: document.getElementById(`persistentCoop-op-${op.id}`),
+                    progressBar: document.getElementById(`persistentCoop-progress-${op.id}`)
+                };
+            }
+
+            const { opElement, progressBar } = op._cachedElements;
 
             if (opElement) {
-                if (isVisible) {
-                    opElement.style.display = 'flex';
-                    opElement.style.opacity = isActive ? '1' : '0.6';
-                } else {
-                    opElement.style.display = 'none';
+                // Track previous state to avoid unnecessary updates
+                const prevActive = op._prevActive;
+                const prevVisible = op._prevVisible;
+
+                // Only update if state changed
+                if (isVisible !== prevVisible) {
+                    opElement.style.display = isVisible ? 'flex' : 'none';
+                    op._prevVisible = isVisible;
                 }
 
-                if (isVisible && isActive) {
-                    opElement.classList.add('active');
-                    if (!opElement.querySelector('.pipeline-operation-pulse')) {
-                        const pulse = document.createElement('div');
-                        pulse.className = 'pipeline-operation-pulse';
-                        opElement.appendChild(pulse);
+                if (isVisible && isActive !== prevActive) {
+                    opElement.style.opacity = isActive ? '1' : '0.6';
+
+                    if (isActive) {
+                        opElement.classList.add('active');
+                        if (!op._pulseElement) {
+                            op._pulseElement = document.createElement('div');
+                            op._pulseElement.className = 'pipeline-operation-pulse';
+                            opElement.appendChild(op._pulseElement);
+                        }
+                    } else {
+                        opElement.classList.remove('active');
+                        if (op._pulseElement) {
+                            op._pulseElement.remove();
+                            op._pulseElement = null;
+                        }
                     }
-                } else {
-                    opElement.classList.remove('active');
-                    const pulse = opElement.querySelector('.pipeline-operation-pulse');
-                    if (pulse) pulse.remove();
+                    op._prevActive = isActive;
                 }
 
                 if (progressBar && isActive) {
                     const progress = (this.state.currentTime - op.startTime) / (op.endTime - op.startTime);
                     progressBar.style.width = `${progress * 100}%`;
-                } else if (progressBar && this.state.currentTime > op.endTime) {
+                } else if (progressBar && this.state.currentTime > op.endTime && op._prevProgressComplete !== true) {
                     progressBar.style.width = '100%';
-                } else if (progressBar) {
+                    op._prevProgressComplete = true;
+                } else if (progressBar && !isVisible && op._prevProgressComplete !== false) {
                     progressBar.style.width = '0%';
+                    op._prevProgressComplete = false;
                 }
             }
         });
@@ -2057,8 +2079,9 @@ class PersistentCooperativeViz {
         if (this.state.isPlaying) {
             this.state.currentTime++;
 
-            if (this.state.currentTime >= this.config.maxTime) {
-                this.state.currentTime = this.config.maxTime;
+            const totalTime = this.getTotalTime();
+            if (this.state.currentTime >= totalTime) {
+                this.state.currentTime = totalTime;
                 this.stopAnimation();
             }
 
@@ -2092,7 +2115,8 @@ class PersistentCooperativeViz {
     }
 
     togglePlay() {
-        if (!this.state.isPlaying && this.state.currentTime >= this.config.maxTime) {
+        const totalTime = this.getTotalTime();
+        if (!this.state.isPlaying && this.state.currentTime >= totalTime) {
             this.resetAnimation();
             setTimeout(() => this.startAnimation(), 100);
         } else if (this.state.isPlaying) {
