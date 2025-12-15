@@ -406,7 +406,7 @@ class HopperGEMMPipelineViz {
 
         // Configuration
         this.config = {
-            maxTime: 400,
+            maxTime: 450,
             timeScale: 2.2,
             numTiles: 8,
             animationInterval: 40,
@@ -425,8 +425,6 @@ class HopperGEMMPipelineViz {
             { id: 'producer_1', name: 'Producer Warp 1', type: 'producer' },
             { id: 'consumer_0', name: 'Consumer Warp 0', type: 'consumer' },
             { id: 'consumer_1', name: 'Consumer Warp 1', type: 'consumer' },
-            { id: 'consumer_2', name: 'Consumer Warp 2', type: 'consumer' },
-            { id: 'consumer_3', name: 'Consumer Warp 3', type: 'consumer' },
         ];
 
         // State
@@ -443,7 +441,7 @@ class HopperGEMMPipelineViz {
     init() {
         this.container.innerHTML = commonPipelineStyles + `
             <div class="pipeline-container">
-                <h1 class="pipeline-title">Hopper GEMM Pipeline Timeline</h1>
+                <h1 class="pipeline-title">Example Hopper Warp Specialized GEMM Pipeline</h1>
                 <p class="pipeline-subtitle">TMA Async Loads → WGMMA Compute → Epilogue → GMEM Write</p>
 
                 <!-- Controls -->
@@ -456,15 +454,6 @@ class HopperGEMMPipelineViz {
                         <span>↻</span>
                         <span>Reset</span>
                     </button>
-                </div>
-
-                <!-- Time Display -->
-                <div class="pipeline-time-display">
-                    <div class="pipeline-time-value">
-                        Time: <span class="current" id="pipelineCurrentTime">0</span> / <span id="pipelineMaxTime">${this.config.maxTime}</span>
-                    </div>
-                    <div class="pipeline-time-info">(1 unit ≈ 10 GPU cycles)</div>
-                    <div class="pipeline-active-ops">Active Operations: <span id="pipelineActiveOps">0</span></div>
                 </div>
 
                 <!-- Legend -->
@@ -483,54 +472,6 @@ class HopperGEMMPipelineViz {
                         <div id="pipelineStreamLanes"></div>
                     </div>
                 </div>
-
-                <!-- Info Cards -->
-                <div class="pipeline-info-grid">
-                    <div class="pipeline-info-card cyan">
-                        <h3 class="pipeline-info-title cyan">
-                            <span>💾</span>
-                            Producer Stage (TMA)
-                        </h3>
-                        <div class="pipeline-info-content">
-                            <p class="pipeline-info-item"><span class="pipeline-info-label">Warp Specialization:</span> Dedicated producer warps issue TMA instructions</p>
-                            <p class="pipeline-info-item"><span class="pipeline-info-label">Async Copy:</span> GMEM → SMEM without register usage</p>
-                            <p class="pipeline-info-item"><span class="pipeline-info-label">Overlap:</span> Multiple tiles can load simultaneously</p>
-                            <p class="pipeline-info-item"><span class="pipeline-info-label">Latency Hiding:</span> ~150-200 cycles hidden by pipelining</p>
-                        </div>
-                    </div>
-
-                    <div class="pipeline-info-card purple">
-                        <h3 class="pipeline-info-title purple">
-                            <span>🖥️</span>
-                            Consumer Stage (WGMMA)
-                        </h3>
-                        <div class="pipeline-info-content">
-                            <p class="pipeline-info-item"><span class="pipeline-info-label">Tensor Cores:</span> 4th gen tensor cores with warpgroup MMA</p>
-                            <p class="pipeline-info-item"><span class="pipeline-info-label">Dependencies:</span> Waits for TMA completion via async barriers</p>
-                            <p class="pipeline-info-item"><span class="pipeline-info-label">Throughput:</span> 989 TFLOPS FP16 on H100 (80GB)</p>
-                            <p class="pipeline-info-item"><span class="pipeline-info-label">Occupancy:</span> Multiple consumer warps maximize utilization</p>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Key Insights -->
-                <div class="pipeline-card" style="margin-top: 1.5rem;">
-                    <h3 class="pipeline-card-title">🎯 Key Pipeline Insights</h3>
-                    <div class="pipeline-insights-grid">
-                        <div class="pipeline-insight-item">
-                            <div class="pipeline-insight-title yellow">Pipelining</div>
-                            <p class="pipeline-insight-text">While consumer warps compute tile N, producer warps asynchronously load tiles N+1 and N+2, achieving near-perfect overlap.</p>
-                        </div>
-                        <div class="pipeline-insight-item">
-                            <div class="pipeline-insight-title green">Zero Overhead</div>
-                            <p class="pipeline-insight-text">TMA doesn't use registers, allowing 100% of register file for computation. Async barriers coordinate without wasting cycles.</p>
-                        </div>
-                        <div class="pipeline-insight-item">
-                            <div class="pipeline-insight-title pink">Software Pipelining</div>
-                            <p class="pipeline-insight-text">CUTLASS 3.x uses CollectiveBuilder to automatically generate optimal pipeline schedules with configurable stage counts.</p>
-                        </div>
-                    </div>
-                </div>
             </div>
         `;
 
@@ -538,7 +479,7 @@ class HopperGEMMPipelineViz {
         this.initializeLegend();
         this.initializeTimeTrack();
         this.initializeStreamLanes();
-        this.updateVisualization();
+        // Don't call updateVisualization() here - operations should be hidden until play is pressed
 
         // Event listeners
         document.getElementById('pipelinePlayBtn').addEventListener('click', () => this.togglePlay());
@@ -576,7 +517,7 @@ class HopperGEMMPipelineViz {
 
             // WGMMA
             const wgmmaStart = baseTime + this.opTypes.TMA_A.duration + 3;
-            const consumerWarp = tile % 4;
+            const consumerWarp = tile % 2;
             ops.push({
                 id: opId++,
                 streamId: `consumer_${consumerWarp}`,
@@ -696,7 +637,6 @@ class HopperGEMMPipelineViz {
                 <div class="pipeline-operation-progress" id="pipeline-progress-${op.id}" style="width: 0%"></div>
                 <div class="pipeline-operation-content">
                     <div class="pipeline-operation-icon">${opType.icon}</div>
-                    <div class="pipeline-operation-label">${op.label}</div>
                 </div>
             `;
 
@@ -705,59 +645,69 @@ class HopperGEMMPipelineViz {
     }
 
     updateVisualization() {
-        const currentTimeEl = document.getElementById('pipelineCurrentTime');
         const currentMarker = document.getElementById('pipelineCurrentTimeMarker');
 
-        currentTimeEl.textContent = this.state.currentTime;
         if (currentMarker) {
             currentMarker.style.left = `${this.state.currentTime * this.config.timeScale}px`;
         }
-
-        let activeCount = 0;
 
         this.state.operations.forEach(op => {
             const isActive = this.state.currentTime >= op.startTime && this.state.currentTime <= op.endTime;
             const isVisible = this.state.currentTime >= op.startTime;
 
-            if (isActive) activeCount++;
+            // Cache DOM elements on first access
+            if (!op._cachedElements) {
+                op._cachedElements = {
+                    opElement: document.getElementById(`pipeline-op-${op.id}`),
+                    progressBar: document.getElementById(`pipeline-progress-${op.id}`)
+                };
+            }
 
-            const opElement = document.getElementById(`pipeline-op-${op.id}`);
-            const progressBar = document.getElementById(`pipeline-progress-${op.id}`);
+            const { opElement, progressBar } = op._cachedElements;
 
             if (opElement) {
-                // Show/hide bubble based on visibility
-                if (isVisible) {
-                    opElement.style.display = 'flex';
-                    opElement.style.opacity = isActive ? '1' : '0.6';
-                } else {
-                    opElement.style.display = 'none';
+                // Track previous state to avoid unnecessary updates
+                const prevActive = op._prevActive;
+                const prevVisible = op._prevVisible;
+
+                // Only update if state changed
+                if (isVisible !== prevVisible) {
+                    opElement.style.display = isVisible ? 'flex' : 'none';
+                    op._prevVisible = isVisible;
                 }
 
-                if (isVisible && isActive) {
-                    opElement.classList.add('active');
-                    if (!opElement.querySelector('.pipeline-operation-pulse')) {
-                        const pulse = document.createElement('div');
-                        pulse.className = 'pipeline-operation-pulse';
-                        opElement.appendChild(pulse);
+                if (isVisible && isActive !== prevActive) {
+                    opElement.style.opacity = isActive ? '1' : '0.6';
+
+                    if (isActive) {
+                        opElement.classList.add('active');
+                        if (!op._pulseElement) {
+                            op._pulseElement = document.createElement('div');
+                            op._pulseElement.className = 'pipeline-operation-pulse';
+                            opElement.appendChild(op._pulseElement);
+                        }
+                    } else {
+                        opElement.classList.remove('active');
+                        if (op._pulseElement) {
+                            op._pulseElement.remove();
+                            op._pulseElement = null;
+                        }
                     }
-                } else {
-                    opElement.classList.remove('active');
-                    const pulse = opElement.querySelector('.pipeline-operation-pulse');
-                    if (pulse) pulse.remove();
+                    op._prevActive = isActive;
                 }
 
                 if (progressBar && isActive) {
                     const progress = (this.state.currentTime - op.startTime) / (op.endTime - op.startTime);
                     progressBar.style.width = `${progress * 100}%`;
-                } else if (progressBar && this.state.currentTime > op.endTime) {
+                } else if (progressBar && this.state.currentTime > op.endTime && op._prevProgressComplete !== true) {
                     progressBar.style.width = '100%';
-                } else if (progressBar) {
+                    op._prevProgressComplete = true;
+                } else if (progressBar && !isVisible && op._prevProgressComplete !== false) {
                     progressBar.style.width = '0%';
+                    op._prevProgressComplete = false;
                 }
             }
         });
-
-        document.getElementById('pipelineActiveOps').textContent = activeCount;
     }
 
     animate() {

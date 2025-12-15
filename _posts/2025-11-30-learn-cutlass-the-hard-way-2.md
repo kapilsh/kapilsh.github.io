@@ -319,6 +319,10 @@ Next, we will test a `1 x 2 x 1` Thread Block Cluster Tile to cooperate across 2
 > We see a modest 5% improvement in performance by enabling Thread Block Clusters, which is decent but not much. We are still hovering around 45-55% of Pytorch performance for any batch size > 1024. 
 {: .prompt-info}
 
+A typical warp specialized pipeline might look something like below - here we have 2 producer warps and 2 consumer warps.
+
+<div id="hopper-gemm-pipeline-viz"></div>
+
 ## Warp-specialized Persistent Cooperative Kernel
 
 The Persistent Cooperative kernel extends basic warp specialization with the following:
@@ -454,10 +458,6 @@ This eliminates quantization entirely. Total time approaches 2.25 work units (vs
 
 While Stream-K eliminates wave quantization, it introduces temporal skew that hurts L2 cache performance. In data-parallel scheduling, CTAs working on adjacent output tiles simultaneously request the same K-blocks of shared operand tiles (e.g., tiles 0, 1, 2 all need B0), creating cache hits. Stream-K's fractional assignments break this synchronization i.e. CTAs request different K-offsets at different times. Hybrid Stream-K fixes this by partitioning work into two phases. First, the **Stream-K phase** processes exactly 1 full wave + the partial wave using fractional tiles. Each CTA receives at most 2 partial tiles totaling the same work, ensuring all CTAs finish this phase simultaneously. Second, the **data-parallel phase** executes remaining complete tiles (divisible by SM count) with standard scheduling. CTAs now process adjacent output tiles in sync, restoring cache locality for shared A/B tiles. This hybrid approach eliminates quantization via Stream-K phase while maximizing cache hits via data-parallel phase for the bulk of computation. For more details and in-depth discussion refer to [CUTLASS Tutorial: Persistent Kernels and Stream-K](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/).
 
-
-##
-
-<div id="hopper-gemm-pipeline-viz"></div>
 
 ## Resources
 
