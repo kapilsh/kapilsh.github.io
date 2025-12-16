@@ -1832,9 +1832,10 @@ class PersistentCooperativeViz {
 
     getTotalTime() {
         // Calculate based on all tiles completing
-        const lastTileStart = (this.config.numTiles - 1) * 50;
+        const halfWGMMADuration = this.opTypes.WGMMA.duration * 0.6;
+        const lastTileStart = (this.config.numTiles - 1) * 35;
         const lastTileEnd = lastTileStart + this.opTypes.TMA_A.duration + 3 +
-                           this.opTypes.WGMMA.duration + 1 +
+                           halfWGMMADuration + 1 +
                            this.opTypes.EPILOGUE.duration + 1 +
                            this.opTypes.GMEM_WRITE.duration + 20;
         return lastTileEnd;
@@ -1845,7 +1846,7 @@ class PersistentCooperativeViz {
         let opId = 0;
 
         for (let tile = 0; tile < this.config.numTiles; tile++) {
-            const baseTime = tile * 50; // Stagger tiles slightly
+            const baseTime = tile * 35; // Reduced spacing for better overlap
 
             // Producer 0: TMA Load A (parallel with Producer 1)
             ops.push({
@@ -1871,6 +1872,7 @@ class PersistentCooperativeViz {
 
             // WGMMA starts after loads complete
             const wgmmaStart = baseTime + this.opTypes.TMA_A.duration + 3;
+            const halfWGMMADuration = this.opTypes.WGMMA.duration * 0.6; // Each does ~half the work
 
             // Consumer 0 & 1: WGMMA on Top Half (parallel)
             const consumer01 = tile % 2; // Alternate between consumer 0 and 1
@@ -1879,7 +1881,7 @@ class PersistentCooperativeViz {
                 streamId: `consumer_${consumer01}`,
                 type: 'WGMMA',
                 startTime: wgmmaStart,
-                endTime: wgmmaStart + this.opTypes.WGMMA.duration,
+                endTime: wgmmaStart + halfWGMMADuration,
                 tile: tile,
                 label: `C${tile}`,
             });
@@ -1891,13 +1893,13 @@ class PersistentCooperativeViz {
                 streamId: `consumer_${consumer23}`,
                 type: 'WGMMA',
                 startTime: wgmmaStart,
-                endTime: wgmmaStart + this.opTypes.WGMMA.duration,
+                endTime: wgmmaStart + halfWGMMADuration,
                 tile: tile,
                 label: `C${tile}`,
             });
 
             // Epilogue - runs on one consumer after WGMMA
-            const epilogueStart = wgmmaStart + this.opTypes.WGMMA.duration + 1;
+            const epilogueStart = wgmmaStart + halfWGMMADuration + 1;
             ops.push({
                 id: opId++,
                 streamId: `consumer_${consumer01}`,
