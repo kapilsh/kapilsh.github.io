@@ -379,7 +379,6 @@ index f02922c..07b1997 100644
 
 Note that we already previously had `cutlass::KernelHardwareInfo hw_info`, which be useful now.
 
-#### Hardware info
 
 ```cpp
 cutlass::KernelHardwareInfo hw_info;
@@ -408,12 +407,7 @@ In Ping-Pong Schedule, the tile scheduler assigns each consumer a different outp
 
 ![PyTorch Ping Pong Schedule](/assets/explore_gemms_2_pytorch_ping_pong_fp8_blog.png)
 
-
-# TODO: Visualization
-
-## CTA Rasterization and Swizzle
-
-We discussed swizzling in the previous blog post but we will cover it a bit more here. The way I understand it, [CTA rasterization](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html#threadblock-rasterization) defines the order in which thread blocks map to GEMM tiles and are executed on the GPU. A naive row-major launch often leads to poor L2 reuse, redundant global loads, and memory partition camping. As we previously covered, CTA swizzling remaps `(blockIdx.x, blockIdx.y)` to improve spatial and temporal locality across tiles. Proper swizzling increases reuse of A and B tiles in L2, reduces DRAM traffic, and improves SM load balance. We did not any swizzling techniques on the RTX 4090 we used in previous post but on modern GPUs (Hopper/Blackwell), swizzling is critical for cluster-level execution, enabling shared memory reuse and efficient async/TMA pipelines. [Bert Maher has a nice writeup](https://github.com/bertmaher/simplegemm/tree/main) where he describes his process of understanding swizzling while reproducing pingpong swizzleed kernel from scratch. 
+<div id="ping-pong-kernel-viz"></div>
 
 ## Stream-K Scheduling
 
@@ -458,6 +452,120 @@ This eliminates quantization entirely. Total time approaches 2.25 work units (vs
 
 While Stream-K eliminates wave quantization, it introduces temporal skew that hurts L2 cache performance. In data-parallel scheduling, CTAs working on adjacent output tiles simultaneously request the same K-blocks of shared operand tiles (e.g., tiles 0, 1, 2 all need B0), creating cache hits. Stream-K's fractional assignments break this synchronization i.e. CTAs request different K-offsets at different times. Hybrid Stream-K fixes this by partitioning work into two phases. First, the **Stream-K phase** processes exactly 1 full wave + the partial wave using fractional tiles. Each CTA receives at most 2 partial tiles totaling the same work, ensuring all CTAs finish this phase simultaneously. Second, the **data-parallel phase** executes remaining complete tiles (divisible by SM count) with standard scheduling. CTAs now process adjacent output tiles in sync, restoring cache locality for shared A/B tiles. This hybrid approach eliminates quantization via Stream-K phase while maximizing cache hits via data-parallel phase for the bulk of computation. For more details and in-depth discussion refer to [CUTLASS Tutorial: Persistent Kernels and Stream-K](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/).
 
+```
+2025-12-17 12:15:41.417 | INFO     | __main__:run_benchmarks:1307 - ----------------------------------------------------------------------------------------------------------------------------------
+2025-12-17 12:15:41.417 | INFO     | __main__:run_benchmarks:1331 - 8192       PyTorch                                             1.5795     696.10             254.92       1.00× 🎯 #1
+2025-12-17 12:15:41.417 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper TMA Stream-K Const                   2.1198     518.70             189.95       0.75× 🐢 #2
+2025-12-17 12:15:41.417 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper TMA Persistent Const                 2.2208     495.09             181.31       0.71× 🐢 #3
+2025-12-17 12:15:41.418 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper TMA Pingpong Const                   2.7581     398.65             145.99       0.57× 🐢 #4
+2025-12-17 12:15:41.418 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper (BF16) [Default]                     2.8581     384.70             140.88       0.55× 🐢 #5
+2025-12-17 12:15:41.418 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper TMA WarpSpec Const                   2.9196     376.60             137.92       0.54× 🐢 #6
+2025-12-17 12:15:41.418 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS (BF16)                                      2.9475     373.03             136.61       0.54× 🐢 #7
+2025-12-17 12:15:41.419 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper TMA WarpSpec Auto                    3.0279     363.12             132.98       0.52× 🐢 #8
+2025-12-17 12:15:41.419 | INFO     | __main__:run_benchmarks:1331 - 8192       CUDA Tensor Core Warptiled (BF16)                  16.8034      65.43              23.96       0.09× 🐢 #9
+2025-12-17 12:15:41.419 | INFO     | __main__:run_benchmarks:1331 - 8192       CUDA Tensor Core Double Buffered (BF16)            16.9996      64.68              23.69       0.09× 🐢 #10
+2025-12-17 12:15:41.419 | INFO     | __main__:run_benchmarks:1331 - 8192       CUDA Tensor Core Async (BF16)                      18.7892      58.52              21.43       0.08× 🐢 #11
+2025-12-17 12:15:41.420 | INFO     | __main__:run_benchmarks:1331 - 8192       CUDA Warptiling                                    36.3380      30.26              11.08       0.04× 🐢 #12
+2025-12-17 12:15:41.420 | INFO     | __main__:run_benchmarks:1331 - 8192       CUDA Tensor Core Naive (BF16)                      37.4757      29.34              10.74       0.04× 🐢 #13
+2025-12-17 12:15:41.420 | INFO     | __main__:run_benchmarks:1335 - ==================================================================================================================================
+```
+
+## CTA Rasterization and Swizzle
+
+We discussed rasterization and swizzling in the previous blog post but we will cover it a bit more here. [CTA rasterization](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html#threadblock-rasterization) defines the order in which thread blocks map to GEMM tiles and are executed on the GPU. We want logical work tiles to close to each other on the physical hardware. A naive row-major launch often leads to poor L2 reuse and redundant global loads since you end up needing to reload same data along one dimension over and over into cache. 
+
+On top of rasterization, swizzling allows us to further remap the scan order into an intentional remapping of shared memory locations to minimize bank conflict. As we previously covered, CTA swizzling remaps `(blockIdx.x, blockIdx.y)` to improve spatial and temporal locality across tiles. For more details, read [Bank Conflicts and Swizzling](https://www.kapilsharma.dev/posts/learn-cutlass-the-hard-way/#swizzling) section in the previous post.
+
+> [PTX Docs](https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-swizzling-modes) have a really visualization of swizzling patterns
+{: .prompt-tip}
+
+### 32-Byte Swizzle
+
+Let's take example of 32-byte swizzling on an 8x8 grid. Since we have 32 banks and each cell represents 4 bytes, banks will start conflicting after 32 elements. In case we were looking at fp16 values, the banks will repeat after 64 elements. Just simple math. So, in this case we will have 2-way bank conflict i.e. each column of 8 elements has access to 4 unique banks. To solve, we will remap the memory addresses such that we can shuffle values around to make sure each column has access to 8 unique banks. To get the swizzled address, we will get:
+
+```cpp
+// XOR the row index with column bits to scramble bank assignment:
+swizzled_address = (row * stride) + (col ^ ((row & 7) << 2))
+```
+
+<div id="swizzle-viz"></div>
+
+<br>
+
+> Same column now spreads across different banks → no conflicts!
+{: .prompt-tip}
+
+What really made swizzling tick for me was reading and staring at the swizzled grids in the [PTX docs](https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-swizzling-modes). I will leave a few more examples of swizzling below to showcase how this extends to 64-byte and 128-byte swizzling. 
+
+### 64-byte swizzling
+
+![64 byte 1](/assets/swizzling_64_1.png)
+
+**Source Layout**
+![64 byte 2](/assets/swizzling_64_2.png)
+
+**Destination Layout**
+![64 byte 3](/assets/swizzling_64_3.png)
+
+
+### 128-byte swizzling
+
+**Source Layout**
+![128 byte 1](/assets/swizzling_128_1.png)
+
+**Destination Layout**
+![128 byte 2](/assets/swizzling_128_2.png)
+
+> Few more resources on swizzling: [Simons Blog](https://veitner.bearblog.dev/swizzles-and-their-usage-in-cutedsl-kernels/), [Lei Mao's blog](https://leimao.github.io/blog/CuTe-Swizzle/), [bertmaher/simplegemm](https://github.com/bertmaher/simplegemm)
+{: .prompt-tip}
+
+
+## Kernel Configuration Explorer
+
+After incorporating all the different configuration options, I ran 500+ different combinations of kernels to get a sense of how the performance is affected by each and combination of them.
+
+First, let's look at using rasterization + swizzle strategy:
+
+![Raster and swizzle](/assets/explore_gemms_2_final_benchmark_swizzle_raster.png)
+
+Next, let's look at decomposition mode + spliting strategy:
+
+![Mode + splits](/assets/explore_gemms_2_final_benchmark_mode_.png)
+
+Combining all of these:
+
+![Final Final](/assets/explore_gemms_2_final_benchmark_final_best.png)
+
+
+> At this point, we are starting to hit upto 90% of PyTorch/cublas performance!
+{: .prompt-info}
+
+
+### Performance Summary
+
+| Size | Best TFLOPS | Best Config | Avg TFLOPS | Range |
+|------|-------------|-------------|------------|-------|
+| **128³** | 0.73 | Along N, Swizzle=1, SplitK | 0.59 | 0.41 - 0.73 |
+| **256³** | 5.2 | Along N, Swizzle=1, DataParallel | 4.1 | 2.3 - 5.2 |
+| **512³** | 34.8 | Along M, Swizzle=1, Heuristic | 28.2 | 17.5 - 34.8 |
+| **1024³** | 206.2 | Along M, Swizzle=1, SplitK | 159.8 | 114.6 - 206.2 |
+| **2048³** | 565.7 | Along N, Swizzle=2, Heuristic | 426.8 | 250.9 - 565.7 |
+| **4096³** | 674.5 | Along N, Swizzle=1, Heuristic | 568.0 | 382.8 - 674.5 |
+| **6144³** | 652.1 | Heuristic, Swizzle=2, StreamK | 594.4 | 481.6 - 652.1 |
+| **8192³** | 680.0 | Heuristic, Swizzle=2, SplitK | 606.1 | 505.4 - 680.0 |
+
+
+### All results
+
+The visualization below allows you to explore these configurations in detail. Select a matrix size to view the top 10 performing configurations and analyze how different parameters affect performance:
+
+- **Rasterization Strategy**: How thread blocks are mapped to GEMM tiles (Heuristic, Along M, Along N)
+- **Swizzle Factor**: CTA swizzling pattern (1, 2, 4) for improved cache locality
+- **Decomposition Type**: Scheduling strategy (Heuristic, StreamK, SplitK, DataParallel)
+- **Split-K Factor**: Number of K-dimension splits (1, 2, 3, 4)
+
+<div id="hopper-results-explorer"></div> 
+
 
 ## Resources
 
@@ -476,6 +584,12 @@ While Stream-K eliminates wave quantization, it introduces temporal skew that hu
 - [NVIDIA Deep Learning Performance Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html#wave-quant)
 - [bertmaher/simplegemm](https://github.com/bertmaher/simplegemm)
 - [ColfaxResearch/cfx-article-src](https://github.com/ColfaxResearch/cfx-article-src)
+- [Does sm120 support ...](https://github.com/NVIDIA/cutlass/issues/2766)
+- [DGX spark currently lacks ...](https://github.com/NVIDIA/dgx-spark-playbooks/issues/22)
+- [What is PermutationMNK in TiledMMA in CUTLASS 3.4 changes?](https://github.com/NVIDIA/cutlass/discussions/1345)
+[Swizzles and their usage in CuTeDSL Kernels](https://veitner.bearblog.dev/swizzles-and-their-usage-in-cutedsl-kernels/)
+[CuTe Swizzle](https://leimao.github.io/blog/CuTe-Swizzle/)
+- [PTX Docs](https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-32b-swizzle-dst)
 
 
 <script src="/assets/js/hopper-gemm-pipeline.js"></script>

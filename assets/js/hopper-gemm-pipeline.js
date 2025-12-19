@@ -1835,9 +1835,9 @@ class PersistentCooperativeViz {
         const halfWGMMADuration = this.opTypes.WGMMA.duration * 0.6;
         const lastTileStart = (this.config.numTiles - 1) * 35;
         const lastTileEnd = lastTileStart + this.opTypes.TMA_A.duration + 3 +
-                           halfWGMMADuration + 1 +
-                           this.opTypes.EPILOGUE.duration + 1 +
-                           this.opTypes.GMEM_WRITE.duration + 20;
+            halfWGMMADuration + 1 +
+            this.opTypes.EPILOGUE.duration + 1 +
+            this.opTypes.GMEM_WRITE.duration + 20;
         return lastTileEnd;
     }
 
@@ -3188,5 +3188,1326 @@ document.addEventListener('DOMContentLoaded', () => {
     const container = document.getElementById('stream-k-viz');
     if (container) {
         new StreamKViz('stream-k-viz');
+    }
+});
+
+// ============================================================================
+// Ping Pong Kernel Visualization (1 Producer + 2 Consumers)
+// ============================================================================
+
+class PingPongKernelViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+
+        // Configuration
+        this.config = {
+            maxTime: 400,
+            timeScale: 2.5,
+            numTiles: 6,
+            animationInterval: 40,
+        };
+
+        this.opTypes = {
+            TMA_LOAD: { name: 'TMA Load (A+B)', color: 'pipeline-bg-blue-500', duration: 30, icon: '📥' },
+            WGMMA: { name: 'WGMMA', color: 'pipeline-bg-purple-500', duration: 35, icon: '⚡' },
+            EPILOGUE: { name: 'Epilogue', color: 'pipeline-bg-orange-500', duration: 15, icon: '🔧' },
+        };
+
+        // 1 Producer + 2 Consumer warps
+        this.streams = [
+            { id: 'producer', name: 'Producer Warp', type: 'producer' },
+            { id: 'consumer_0', name: 'Consumer Warp 0', type: 'consumer' },
+            { id: 'consumer_1', name: 'Consumer Warp 1', type: 'consumer' }
+        ];
+
+        // State
+        this.state = {
+            isPlaying: false,
+            currentTime: 0,
+            operations: [],
+            animationTimer: null,
+        };
+
+        this.init();
+    }
+
+    init() {
+        const totalTime = this.getTotalTime();
+
+        this.container.innerHTML = commonPipelineStyles + `
+            <div class="pipeline-container">
+                <h1 class="pipeline-title">Ping Pong Kernel Timeline</h1>
+                <p class="pipeline-subtitle">1 Producer Warp + 2 Consumer Warps → Alternating MMA + Epilogue</p>
+
+                <!-- Controls -->
+                <div class="pipeline-controls">
+                    <button id="pingPongPlayBtn" class="pipeline-btn pipeline-btn-primary">
+                        <span id="pingPongPlayIcon">▶</span>
+                        <span id="pingPongPlayText">Play</span>
+                    </button>
+                    <button id="pingPongResetBtn" class="pipeline-btn pipeline-btn-secondary">
+                        <span>↻</span>
+                        <span>Reset</span>
+                    </button>
+                </div>
+
+                <!-- Legend -->
+                <div class="pipeline-card">
+                    <h3 class="pipeline-card-title">Operation Types</h3>
+                    <div class="pipeline-legend-grid" id="pingPongLegendGrid"></div>
+                </div>
+
+                <!-- Timeline -->
+                <div class="pipeline-timeline-container">
+                    <div class="pipeline-timeline-wrapper">
+                        <div class="pipeline-time-axis">
+                            <div class="pipeline-time-label">Time →</div>
+                            <div class="pipeline-time-track" id="pingPongTimeTrack"></div>
+                        </div>
+                        <div id="pingPongStreamLanes"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        this.state.operations = this.initializeOperations();
+        this.initializeLegend();
+        this.initializeTimeTrack();
+        this.initializeStreamLanes();
+
+        // Event listeners
+        document.getElementById('pingPongPlayBtn').addEventListener('click', () => this.togglePlay());
+        document.getElementById('pingPongResetBtn').addEventListener('click', () => this.resetAnimation());
+    }
+
+    getTotalTime() {
+        // Calculate based on all tiles completing
+        const lastTileStart = (this.config.numTiles - 1) * 40;
+        const lastTileEnd = lastTileStart + this.opTypes.TMA_LOAD.duration +
+            this.opTypes.WGMMA.duration +
+            this.opTypes.EPILOGUE.duration + 10;
+        return lastTileEnd;
+    }
+
+    initializeOperations() {
+        const ops = [];
+        let opId = 0;
+
+        for (let tile = 0; tile < this.config.numTiles; tile++) {
+            const baseTime = tile * 40; // Spacing between tile loads
+
+            // Producer: TMA Load for this tile
+            ops.push({
+                id: opId++,
+                streamId: 'producer',
+                type: 'TMA_LOAD',
+                startTime: baseTime,
+                endTime: baseTime + this.opTypes.TMA_LOAD.duration,
+                tile: tile,
+                label: `TMA${tile}`,
+            });
+
+            // Determine which consumer handles this tile (alternating)
+            const consumerIdx = tile % 2;
+            const consumerId = `consumer_${consumerIdx}`;
+
+            // WGMMA starts after TMA load completes
+            const wgmmaStart = baseTime + this.opTypes.TMA_LOAD.duration + 2;
+            ops.push({
+                id: opId++,
+                streamId: consumerId,
+                type: 'WGMMA',
+                startTime: wgmmaStart,
+                endTime: wgmmaStart + this.opTypes.WGMMA.duration,
+                tile: tile,
+                label: `MMA${tile}`,
+            });
+
+            // Epilogue runs on same consumer after WGMMA
+            const epilogueStart = wgmmaStart + this.opTypes.WGMMA.duration + 1;
+            ops.push({
+                id: opId++,
+                streamId: consumerId,
+                type: 'EPILOGUE',
+                startTime: epilogueStart,
+                endTime: epilogueStart + this.opTypes.EPILOGUE.duration,
+                tile: tile,
+                label: `Epi${tile}`,
+            });
+        }
+
+        return ops;
+    }
+
+    initializeLegend() {
+        const legendGrid = document.getElementById('pingPongLegendGrid');
+        legendGrid.innerHTML = '';
+
+        Object.entries(this.opTypes).forEach(([, type]) => {
+            const item = document.createElement('div');
+            item.className = 'pipeline-legend-item';
+            item.innerHTML = `
+                <div class="pipeline-legend-icon ${type.color}">${type.icon}</div>
+                <div class="pipeline-legend-text">
+                    <div class="pipeline-legend-name">${type.name}</div>
+                    <div class="pipeline-legend-duration">${type.duration} units</div>
+                </div>
+            `;
+            legendGrid.appendChild(item);
+        });
+    }
+
+    initializeTimeTrack() {
+        const timeTrack = document.getElementById('pingPongTimeTrack');
+        const totalTime = this.getTotalTime();
+        const numMarkers = Math.floor(totalTime / 40) + 1;
+
+        timeTrack.innerHTML = '';
+
+        // Time markers
+        for (let i = 0; i < numMarkers; i++) {
+            const marker = document.createElement('div');
+            marker.className = 'pipeline-time-marker';
+            marker.style.left = `${i * 40 * this.config.timeScale}px`;
+            marker.textContent = i * 40;
+            timeTrack.appendChild(marker);
+        }
+
+        // Current time marker
+        const currentMarker = document.createElement('div');
+        currentMarker.id = 'pingPongCurrentTimeMarker';
+        currentMarker.className = 'pipeline-current-time-marker';
+        currentMarker.style.left = '0px';
+        timeTrack.appendChild(currentMarker);
+
+        // Set width
+        timeTrack.style.minWidth = `${totalTime * this.config.timeScale}px`;
+    }
+
+    initializeStreamLanes() {
+        const streamLanes = document.getElementById('pingPongStreamLanes');
+        streamLanes.innerHTML = '';
+
+        this.streams.forEach(stream => {
+            const lane = document.createElement('div');
+            lane.className = 'pipeline-stream-lane';
+            const totalTime = this.getTotalTime();
+            lane.innerHTML = `
+                <div class="pipeline-stream-label pipeline-${stream.type}">
+                    <div class="pipeline-stream-name">${stream.name}</div>
+                    <div class="pipeline-stream-type">${stream.type === 'producer' ? 'TMA Loads' : 'Compute'}</div>
+                </div>
+                <div class="pipeline-lane-track" id="pingPong-lane-${stream.id}" style="min-width: ${totalTime * this.config.timeScale}px"></div>
+            `;
+            streamLanes.appendChild(lane);
+        });
+
+        // Create operation elements
+        this.state.operations.forEach(op => {
+            const opType = this.opTypes[op.type];
+            const lane = document.getElementById(`pingPong-lane-${op.streamId}`);
+
+            const opElement = document.createElement('div');
+            opElement.id = `pingPong-op-${op.id}`;
+            opElement.className = `pipeline-operation ${opType.color}`;
+            opElement.style.left = `${op.startTime * this.config.timeScale}px`;
+            opElement.style.width = `${(op.endTime - op.startTime) * this.config.timeScale}px`;
+            opElement.style.display = 'none'; // Initially hidden
+            opElement.innerHTML = `
+                <div class="pipeline-operation-progress" id="pingPong-progress-${op.id}" style="width: 0%"></div>
+                <div class="pipeline-operation-content">
+                    <div class="pipeline-operation-icon">${opType.icon}</div>
+                </div>
+            `;
+
+            lane.appendChild(opElement);
+        });
+    }
+
+    updateVisualization() {
+        const currentMarker = document.getElementById('pingPongCurrentTimeMarker');
+
+        if (currentMarker) {
+            currentMarker.style.left = `${this.state.currentTime * this.config.timeScale}px`;
+        }
+
+        this.state.operations.forEach(op => {
+            const isActive = this.state.currentTime >= op.startTime && this.state.currentTime <= op.endTime;
+            const isVisible = this.state.currentTime >= op.startTime;
+
+            // Cache DOM elements on first access
+            if (!op._cachedElements) {
+                op._cachedElements = {
+                    opElement: document.getElementById(`pingPong-op-${op.id}`),
+                    progressBar: document.getElementById(`pingPong-progress-${op.id}`)
+                };
+            }
+
+            const { opElement, progressBar } = op._cachedElements;
+
+            if (opElement) {
+                // Track previous state to avoid unnecessary updates
+                const prevActive = op._prevActive;
+                const prevVisible = op._prevVisible;
+
+                // Only update if state changed
+                if (isVisible !== prevVisible) {
+                    opElement.style.display = isVisible ? 'flex' : 'none';
+                    op._prevVisible = isVisible;
+                }
+
+                if (isVisible && isActive !== prevActive) {
+                    opElement.style.opacity = isActive ? '1' : '0.6';
+
+                    if (isActive) {
+                        opElement.classList.add('active');
+                        if (!op._pulseElement) {
+                            op._pulseElement = document.createElement('div');
+                            op._pulseElement.className = 'pipeline-operation-pulse';
+                            opElement.appendChild(op._pulseElement);
+                        }
+                    } else {
+                        opElement.classList.remove('active');
+                        if (op._pulseElement) {
+                            op._pulseElement.remove();
+                            op._pulseElement = null;
+                        }
+                    }
+                    op._prevActive = isActive;
+                }
+
+                if (progressBar && isActive) {
+                    const progress = (this.state.currentTime - op.startTime) / (op.endTime - op.startTime);
+                    progressBar.style.width = `${progress * 100}%`;
+                } else if (progressBar && this.state.currentTime > op.endTime && op._prevProgressComplete !== true) {
+                    progressBar.style.width = '100%';
+                    op._prevProgressComplete = true;
+                } else if (progressBar && !isVisible && op._prevProgressComplete !== false) {
+                    progressBar.style.width = '0%';
+                    op._prevProgressComplete = false;
+                }
+            }
+        });
+    }
+
+    animate() {
+        if (this.state.isPlaying) {
+            this.state.currentTime++;
+
+            const totalTime = this.getTotalTime();
+            if (this.state.currentTime >= totalTime) {
+                this.state.currentTime = totalTime;
+                this.stopAnimation();
+            }
+
+            this.updateVisualization();
+        }
+    }
+
+    startAnimation() {
+        this.state.isPlaying = true;
+        this.state.animationTimer = setInterval(() => this.animate(), this.config.animationInterval);
+
+        document.getElementById('pingPongPlayIcon').textContent = '⏸';
+        document.getElementById('pingPongPlayText').textContent = 'Pause';
+    }
+
+    stopAnimation() {
+        this.state.isPlaying = false;
+        if (this.state.animationTimer) {
+            clearInterval(this.state.animationTimer);
+            this.state.animationTimer = null;
+        }
+
+        document.getElementById('pingPongPlayIcon').textContent = '▶';
+        document.getElementById('pingPongPlayText').textContent = 'Play';
+    }
+
+    resetAnimation() {
+        this.stopAnimation();
+        this.state.currentTime = 0;
+        this.updateVisualization();
+    }
+
+    togglePlay() {
+        const totalTime = this.getTotalTime();
+
+        if (!this.state.isPlaying && this.state.currentTime >= totalTime) {
+            this.resetAnimation();
+            setTimeout(() => this.startAnimation(), 100);
+        } else if (this.state.isPlaying) {
+            this.stopAnimation();
+        } else {
+            this.startAnimation();
+        }
+    }
+}
+
+// Auto-initialize Ping Pong viz on page load
+document.addEventListener('DOMContentLoaded', () => {
+    const container = document.getElementById('ping-pong-kernel-viz');
+    if (container) {
+        new PingPongKernelViz('ping-pong-kernel-viz');
+    }
+});
+
+// ============================================================================
+// 32-Byte Swizzle Visualization
+// ============================================================================
+
+class SwizzleViz {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+
+        this.config = {
+            rows: 8,
+            cols: 8,
+            elementSize: 4,
+            numBanks: 32,
+            bankWidth: 4
+        };
+
+        this.colors = [
+            '#e57373', '#81c784', '#64b5f6', '#ffb74d',
+            '#ba68c8', '#4dd0e1', '#fff176', '#a1887f'
+        ];
+
+        this.selectedCells = new Set();
+
+        this.init();
+    }
+
+    getBankColor(bank) {
+        return this.colors[bank % 8];
+    }
+
+    getBank(byteAddress) {
+        return Math.floor(byteAddress / this.config.bankWidth) % this.config.numBanks;
+    }
+
+    getOriginalAddress(row, col) {
+        return (row * this.config.cols * this.config.elementSize) + (col * this.config.elementSize);
+    }
+
+    getSwizzledAddress(row, col) {
+        const baseAddr = row * this.config.cols * this.config.elementSize;
+        const colOffset = col * this.config.elementSize;
+        const swizzleBits = (row & 0x7) << 2;
+        const swizzledOffset = colOffset ^ swizzleBits;
+        return baseAddr + swizzledOffset;
+    }
+
+    init() {
+        this.container.innerHTML = commonPipelineStyles + `
+            <style>
+                .swizzle-container {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                    background-color: #111827;
+                    color: #ffffff;
+                    padding: 1rem 1.5rem 1.5rem;
+                    border-radius: 0.5rem;
+                    max-width: 100%;
+                    overflow-x: hidden;
+                }
+
+                @media (max-width: 768px) {
+                    .swizzle-container {
+                        padding: 1rem;
+                    }
+                }
+
+                .swizzle-title {
+                    font-size: 1.75rem;
+                    font-weight: bold;
+                    text-align: center;
+                    margin-top: 0;
+                    margin-bottom: 0.5rem;
+                    background: linear-gradient(to right, #c084fc, #ec4899);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                    background-clip: text;
+                }
+
+                @media (max-width: 768px) {
+                    .swizzle-title {
+                        font-size: 1.5rem;
+                    }
+                }
+
+                .swizzle-subtitle {
+                    text-align: center;
+                    color: #9ca3af;
+                    margin-bottom: 2rem;
+                    font-size: 0.9rem;
+                }
+
+                .swizzle-grids {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap:  1.5rem;
+                    margin-bottom: 2rem;
+                }
+
+                @media (max-width: 1024px) {
+                    .swizzle-grids {
+                        grid-template-columns: 1fr;
+                    }
+                }
+
+                .swizzle-grid-container {
+                    background-color: #1f2937;
+                    border: 1px solid #374151;
+                    border-radius: 0.5rem;
+                    padding: 1rem;
+                    max-width: 100%;
+                    overflow: hidden;
+                }
+
+                @media (max-width: 768px) {
+                    .swizzle-grid-container {
+                        padding: 0.75rem;
+                    }
+                }
+
+                .swizzle-grid-title {
+                    font-size: 1.1rem;
+                    font-weight: bold;
+                    margin-bottom: 0.75rem;
+                }
+
+                @media (max-width: 768px) {
+                    .swizzle-grid-title {
+                        font-size: 1rem;
+                    }
+                }
+
+                .swizzle-grid {
+                    display: grid;
+                    gap: 2px;
+                    margin-top: 15px;
+                    max-width: 100%;
+                    margin-left: auto;
+                    margin-right: auto;
+                }
+
+                @media (min-width: 768px) {
+                    .swizzle-grid {
+                        max-width: 400px;
+                    }
+                }
+
+                .swizzle-cell {
+                    aspect-ratio: 1;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    font-size: 0.65rem;
+                    font-weight: 600;
+                    position: relative;
+                    border: 2px solid transparent;
+                    color: #1e1e1e;
+                    text-shadow: 0 0 2px rgba(255,255,255,0.3);
+                    min-width: 0;
+                }
+
+                @media (max-width: 768px) {
+                    .swizzle-cell {
+                        font-size: 0.5rem;
+                    }
+                }
+
+                .swizzle-cell:hover {
+                    transform: scale(1.1);
+                    z-index: 10;
+                    border-color: white;
+                    box-shadow: 0 0 8px rgba(255,255,255,0.5);
+                }
+
+                .swizzle-cell.selected {
+                    border: 3px solid #fff;
+                    box-shadow: 0 0 15px rgba(255,255,255,0.8);
+                }
+
+                .swizzle-address {
+                    font-size: 0.6rem;
+                    opacity: 0.95;
+                }
+
+                .swizzle-bank {
+                    font-size: 0.55rem;
+                    opacity: 0.8;
+                }
+
+                .swizzle-stats {
+                    background-color: #1f2937;
+                    border: 1px solid #374151;
+                    border-radius: 0.5rem;
+                    padding: 1rem;
+                    margin-bottom: 1.5rem;
+                    overflow-x: auto;
+                }
+
+                @media (max-width: 768px) {
+                    .swizzle-stats {
+                        padding: 0.75rem;
+                    }
+                }
+
+                .swizzle-stats h3 {
+                    color: #ff9800;
+                    margin-top: 0;
+                    margin-bottom: 1rem;
+                }
+
+                .swizzle-tables {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 2rem;
+                }
+
+                @media (max-width: 1024px) {
+                    .swizzle-tables {
+                        grid-template-columns: 1fr;
+                    }
+                }
+
+                .swizzle-table-container h4 {
+                    margin-bottom: 1rem;
+                    font-size: 1rem;
+                }
+
+                .swizzle-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 0.75rem;
+                }
+
+                @media (max-width: 768px) {
+                    .swizzle-table {
+                        font-size: 0.65rem;
+                    }
+                }
+
+                .swizzle-table thead {
+                    background-color: #374151;
+                }
+
+                .swizzle-table th {
+                    padding: 0.4rem;
+                    text-align: left;
+                    font-weight: 600;
+                    color: #e5e7eb;
+                }
+
+                @media (max-width: 768px) {
+                    .swizzle-table th {
+                        padding: 0.3rem;
+                        font-size: 0.65rem;
+                    }
+                }
+
+                .swizzle-table td {
+                    padding: 0.4rem;
+                    border-bottom: 1px solid #374151;
+                    color: #d1d5db;
+                    word-break: break-word;
+                    max-width: 150px;
+                }
+
+                @media (max-width: 768px) {
+                    .swizzle-table td {
+                        padding: 0.3rem;
+                        font-size: 0.6rem;
+                        max-width: 100px;
+                    }
+                }
+
+                .swizzle-table tr:hover {
+                    background-color: #374151;
+                    cursor: pointer;
+                }
+
+                .swizzle-table tr.highlighted {
+                    background-color: #4a4a00;
+                }
+
+                .conflict-value {
+                    font-weight: bold;
+                    padding: 4px 8px;
+                    border-radius: 3px;
+                    display: inline-block;
+                }
+
+                .conflict-good {
+                    background: #2e7d32;
+                    color: #81c784;
+                }
+
+                .conflict-bad {
+                    background: #c62828;
+                    color: #e57373;
+                }
+            </style>
+
+            <div class="swizzle-container">
+                <h1 class="swizzle-title">32-Byte Swizzle Mode</h1>
+                <br>
+                <div class="swizzle-grids">
+                    <div class="swizzle-grid-container">
+                        <h2 class="swizzle-grid-title">Original Layout (No Swizzle)</h2>
+                        <div id="swizzle-original-grid" class="swizzle-grid"></div>
+                    </div>
+
+                    <div class="swizzle-grid-container">
+                        <h2 class="swizzle-grid-title">32-Byte Swizzled Layout</h2>
+                        <div id="swizzle-swizzled-grid" class="swizzle-grid"></div>
+                    </div>
+                </div>
+
+                <div class="swizzle-stats">
+                    <div style="overflow-x: auto;">
+                        <table class="swizzle-table swizzle-combined-table">
+                            <thead>
+                                <tr>
+                                    <th rowspan="2" style="vertical-align: middle;">Column</th>
+                                    <th colspan="2" style="text-align: center; border-bottom: 1px solid #555; color: #e57373;">❌ Original (No Swizzle)</th>
+                                    <th colspan="2" style="text-align: center; border-bottom: 1px solid #555; color: #81c784;">✅ Swizzled</th>
+                                </tr>
+                                <tr>
+                                    <th>Banks Hit</th>
+                                    <th style="text-align: center;">Conflict</th>
+                                    <th>Banks Hit</th>
+                                    <th style="text-align: center;">Conflict</th>
+                                </tr>
+                            </thead>
+                            <tbody id="swizzle-combined-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+                </div>
+            </div>
+        `;
+
+        this.createGrid('swizzle-original-grid', false);
+        this.createGrid('swizzle-swizzled-grid', true);
+        this.buildConflictTables();
+
+        // Auto-select column 0 on load
+        setTimeout(() => this.selectColumn(0), 500);
+    }
+
+    createGrid(gridId, isSwizzled) {
+        const grid = document.getElementById(gridId);
+        grid.style.gridTemplateColumns = `repeat(${this.config.cols}, 1fr)`;
+        grid.innerHTML = '';
+
+        for (let row = 0; row < this.config.rows; row++) {
+            for (let col = 0; col < this.config.cols; col++) {
+                const address = isSwizzled ?
+                    this.getSwizzledAddress(row, col) :
+                    this.getOriginalAddress(row, col);
+                const bank = this.getBank(address);
+                const color = this.getBankColor(bank);
+
+                const cell = document.createElement('div');
+                cell.className = 'swizzle-cell';
+                cell.style.backgroundColor = color;
+                cell.dataset.row = row;
+                cell.dataset.col = col;
+                cell.dataset.address = address;
+                cell.dataset.bank = bank;
+                cell.dataset.swizzled = isSwizzled;
+
+                cell.innerHTML = `
+                    <div class="swizzle-address">${address}</div>
+                    <div class="swizzle-bank">B${bank}</div>
+                `;
+
+                cell.onclick = () => this.selectColumn(col);
+
+                grid.appendChild(cell);
+            }
+        }
+    }
+
+    selectColumn(col) {
+        this.selectedCells.clear();
+        for (let row = 0; row < this.config.rows; row++) {
+            this.selectedCells.add(`${row},${col}`);
+        }
+        this.updateSelection();
+    }
+
+    updateSelection() {
+        document.querySelectorAll('.swizzle-cell').forEach(cell => {
+            const key = `${cell.dataset.row},${cell.dataset.col}`;
+            if (this.selectedCells.has(key)) {
+                cell.classList.add('selected');
+            } else {
+                cell.classList.remove('selected');
+            }
+        });
+
+        // Highlight table rows
+        document.querySelectorAll('.swizzle-table tr').forEach(row => {
+            row.classList.remove('highlighted');
+        });
+
+        if (this.selectedCells.size > 0) {
+            const firstKey = Array.from(this.selectedCells)[0];
+            const col = parseInt(firstKey.split(',')[1]);
+            if (Array.from(this.selectedCells).every(key => key.split(',')[1] === col.toString())) {
+                document.querySelectorAll(`[data-column="${col}"]`).forEach(row => {
+                    row.classList.add('highlighted');
+                });
+            }
+        }
+    }
+
+    buildConflictTables() {
+        const combinedData = [];
+
+        for (let col = 0; col < this.config.cols; col++) {
+            const originalBanks = new Set();
+            const swizzledBanks = new Set();
+
+            for (let row = 0; row < this.config.rows; row++) {
+                const origAddr = this.getOriginalAddress(row, col);
+                const origBank = this.getBank(origAddr);
+                originalBanks.add(origBank);
+
+                const swizAddr = this.getSwizzledAddress(row, col);
+                const swizBank = this.getBank(swizAddr);
+                swizzledBanks.add(swizBank);
+            }
+
+            const origConflict = this.config.rows / originalBanks.size;
+            const swizConflict = this.config.rows / swizzledBanks.size;
+
+            combinedData.push({
+                col,
+                originalBanks: Array.from(originalBanks).sort((a, b) => a - b),
+                origConflict: origConflict,
+                swizzledBanks: Array.from(swizzledBanks).sort((a, b) => a - b),
+                swizConflict: swizConflict
+            });
+        }
+
+        // Populate combined table
+        const combinedTbody = document.getElementById('swizzle-combined-tbody');
+        combinedTbody.innerHTML = '';
+        combinedData.forEach(data => {
+            const row = document.createElement('tr');
+            row.dataset.column = data.col;
+            row.onclick = () => this.selectColumn(data.col);
+
+            const origConflictClass = data.origConflict === 1 ? 'conflict-good' : 'conflict-bad';
+            const swizConflictClass = data.swizConflict === 1 ? 'conflict-good' : 'conflict-bad';
+
+            row.innerHTML = `
+                <td><strong>Col ${data.col}</strong></td>
+                <td style="font-size: 0.65rem;">${data.originalBanks.map(b => `B${b}`).join(', ')}</td>
+                <td style="text-align: center;"><span class="conflict-value ${origConflictClass}">${data.origConflict}x</span></td>
+                <td style="font-size: 0.65rem;">${data.swizzledBanks.map(b => `B${b}`).join(', ')}</td>
+                <td style="text-align: center;"><span class="conflict-value ${swizConflictClass}">${data.swizConflict}x</span></td>
+            `;
+            combinedTbody.appendChild(row);
+        });
+    }
+}
+
+// Auto-initialize Swizzle viz on page load
+document.addEventListener('DOMContentLoaded', () => {
+    const container = document.getElementById('swizzle-viz');
+    if (container) {
+        new SwizzleViz('swizzle-viz');
+    }
+});
+// Hopper Kernel Results Explorer
+// ============================================================================
+
+class HopperResultsExplorer {
+    constructor(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) {
+            console.error(`Container with id "${containerId}" not found`);
+            return;
+        }
+
+        this.data = [];
+        this.selectedSize = null;
+        this.topN = 10;
+
+        this.init();
+    }
+
+    async init() {
+        await this.loadData();
+        this.render();
+    }
+
+    async loadData() {
+        try {
+            const response = await fetch('/assets/data/hopper_results_h100.csv');
+            const csvText = await response.text();
+            this.data = this.parseCSV(csvText);
+        } catch (error) {
+            console.error('Error loading data:', error);
+            this.container.innerHTML = '<p style="color: red;">Error loading data</p>';
+        }
+    }
+
+    parseCSV(text) {
+        const lines = text.trim().split('\n');
+        const headers = lines[0].split(',');
+
+        return lines.slice(1).map(line => {
+            const values = line.split(',');
+            const obj = {};
+            headers.forEach((header, i) => {
+                const value = values[i];
+                // Convert numeric fields
+                if (['M', 'N', 'K', 'Swizzle', 'Splits', 'AvgRuntime_ms', 'GFLOPS', 'WorktileCount'].includes(header)) {
+                    obj[header] = parseFloat(value);
+                } else {
+                    obj[header] = value;
+                }
+            });
+            return obj;
+        });
+    }
+
+    getUniqueSizes() {
+        const sizes = [...new Set(this.data.map(d => d.M))].sort((a, b) => a - b);
+        return sizes;
+    }
+
+    getTopConfigs(size, n = 10) {
+        const sizeData = this.data.filter(d => d.M === size);
+        return sizeData.sort((a, b) => b.GFLOPS - a.GFLOPS).slice(0, n);
+    }
+
+    getParameterStats(size) {
+        const sizeData = this.data.filter(d => d.M === size);
+
+        const stats = {
+            Raster: {},
+            Swizzle: {},
+            Decomposition: {},
+            Splits: {}
+        };
+
+        sizeData.forEach(row => {
+            ['Raster', 'Decomposition'].forEach(param => {
+                const key = row[param];
+                if (!stats[param][key]) {
+                    stats[param][key] = { total: 0, count: 0, max: 0, configs: [] };
+                }
+                stats[param][key].total += row.GFLOPS;
+                stats[param][key].count += 1;
+                stats[param][key].max = Math.max(stats[param][key].max, row.GFLOPS);
+                stats[param][key].configs.push(row);
+            });
+
+            ['Swizzle', 'Splits'].forEach(param => {
+                const key = row[param];
+                if (!stats[param][key]) {
+                    stats[param][key] = { total: 0, count: 0, max: 0, configs: [] };
+                }
+                stats[param][key].total += row.GFLOPS;
+                stats[param][key].count += 1;
+                stats[param][key].max = Math.max(stats[param][key].max, row.GFLOPS);
+                stats[param][key].configs.push(row);
+            });
+        });
+
+        // Calculate averages
+        Object.keys(stats).forEach(param => {
+            Object.keys(stats[param]).forEach(key => {
+                stats[param][key].avg = stats[param][key].total / stats[param][key].count;
+            });
+        });
+
+        return stats;
+    }
+
+    render() {
+        const sizes = this.getUniqueSizes();
+        this.selectedSize = sizes[sizes.length - 1]; // Default to largest size
+
+        this.container.innerHTML = `
+            <style>
+                .results-explorer {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                    background-color: #111827;
+                    color: #ffffff;
+                    padding: 2rem;
+                    border-radius: 0.5rem;
+                }
+
+                .results-title {
+                    font-size: 2rem;
+                    font-weight: bold;
+                    text-align: center;
+                    margin-bottom: 0.5rem;
+                    background: linear-gradient(to right, #c084fc, #ec4899);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                    background-clip: text;
+                }
+
+                .results-subtitle {
+                    text-align: center;
+                    color: #9ca3af;
+                    margin-bottom: 2rem;
+                    font-size: 0.9rem;
+                }
+
+                .size-selector {
+                    display: flex;
+                    justify-content: center;
+                    gap: 0.5rem;
+                    margin-bottom: 2rem;
+                    flex-wrap: wrap;
+                }
+
+                .size-btn {
+                    padding: 0.5rem 1rem;
+                    border: 2px solid #374151;
+                    border-radius: 0.5rem;
+                    background-color: #1f2937;
+                    color: #9ca3af;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    font-size: 0.9rem;
+                }
+
+                .size-btn:hover {
+                    border-color: #9333ea;
+                    color: #ffffff;
+                }
+
+                .size-btn.active {
+                    border-color: #9333ea;
+                    background-color: #9333ea;
+                    color: #ffffff;
+                }
+
+                .results-grid {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 1.5rem;
+                    margin-bottom: 2rem;
+                }
+
+                @media (max-width: 1024px) {
+                    .results-grid {
+                        grid-template-columns: 1fr;
+                    }
+                }
+
+                .results-card {
+                    background-color: #1f2937;
+                    border: 1px solid #374151;
+                    border-radius: 0.5rem;
+                    padding: 1.5rem;
+                }
+
+                .card-title {
+                    font-size: 1.25rem;
+                    font-weight: bold;
+                    margin-bottom: 1rem;
+                    color: #a78bfa;
+                }
+
+                .config-table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 0.85rem;
+                }
+
+                .config-table th {
+                    background-color: #374151;
+                    padding: 0.5rem;
+                    text-align: left;
+                    font-weight: 600;
+                    color: #e5e7eb;
+                }
+
+                .config-table td {
+                    padding: 0.5rem;
+                    border-bottom: 1px solid #374151;
+                    color: #d1d5db;
+                }
+
+                .config-table tr:hover {
+                    background-color: #374151;
+                }
+
+                .rank-badge {
+                    display: inline-block;
+                    width: 1.5rem;
+                    height: 1.5rem;
+                    line-height: 1.5rem;
+                    text-align: center;
+                    border-radius: 50%;
+                    font-weight: bold;
+                    font-size: 0.75rem;
+                }
+
+                .rank-1 { background-color: #fbbf24; color: #000; }
+                .rank-2 { background-color: #d1d5db; color: #000; }
+                .rank-3 { background-color: #cd7f32; color: #fff; }
+                .rank-other { background-color: #4b5563; color: #fff; }
+
+                .param-bar-container {
+                    margin-bottom: 1rem;
+                }
+
+                .param-label {
+                    display: flex;
+                    justify-content: space-between;
+                    margin-bottom: 0.25rem;
+                    font-size: 0.85rem;
+                }
+
+                .param-name {
+                    color: #e5e7eb;
+                    font-weight: 500;
+                }
+
+                .param-value {
+                    color: #9ca3af;
+                    font-size: 0.8rem;
+                }
+
+                .param-bar {
+                    height: 1.5rem;
+                    background-color: #374151;
+                    border-radius: 0.25rem;
+                    overflow: hidden;
+                    position: relative;
+                }
+
+                .param-bar-fill {
+                    height: 100%;
+                    background: linear-gradient(to right, #9333ea, #ec4899);
+                    transition: width 0.3s;
+                    display: flex;
+                    align-items: center;
+                    padding-left: 0.5rem;
+                    font-size: 0.75rem;
+                    font-weight: bold;
+                }
+
+                .stats-grid {
+                    display: grid;
+                    grid-template-columns: repeat(2, 1fr);
+                    gap: 1rem;
+                }
+
+                .stat-box {
+                    background-color: #374151;
+                    padding: 1rem;
+                    border-radius: 0.5rem;
+                }
+
+                .stat-label {
+                    font-size: 0.75rem;
+                    color: #9ca3af;
+                    margin-bottom: 0.25rem;
+                }
+
+                .stat-value {
+                    font-size: 1.5rem;
+                    font-weight: bold;
+                    color: #a78bfa;
+                }
+
+                .full-width {
+                    grid-column: 1 / -1;
+                }
+            </style>
+
+            <div class="results-explorer">
+                <h1 class="results-title">Hopper Kernel Configuration Explorer</h1>
+                <p class="results-subtitle">Explore performance across different matrix sizes and configurations</p>
+
+                <div class="size-selector" id="sizeSelector"></div>
+
+                <div id="resultsContent"></div>
+            </div>
+        `;
+
+        this.renderSizeSelector();
+        this.renderResults();
+    }
+
+    renderSizeSelector() {
+        const sizes = this.getUniqueSizes();
+        const selector = document.getElementById('sizeSelector');
+
+        selector.innerHTML = sizes.map(size => `
+            <button class="size-btn ${size === this.selectedSize ? 'active' : ''}"
+                    data-size="${size}">
+                ${size}×${size}×${size}
+            </button>
+        `).join('');
+
+        selector.querySelectorAll('.size-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                this.selectedSize = parseInt(e.target.dataset.size);
+                this.renderSizeSelector();
+                this.renderResults();
+            });
+        });
+    }
+
+    renderResults() {
+        const topConfigs = this.getTopConfigs(this.selectedSize, this.topN);
+        const stats = this.getParameterStats(this.selectedSize);
+        const maxGFLOPS = Math.max(...topConfigs.map(c => c.GFLOPS));
+
+        const content = document.getElementById('resultsContent');
+        content.innerHTML = `
+            <div class="results-grid">
+                <!-- Top Configurations -->
+                <div class="results-card full-width">
+                    <h2 class="card-title">Top ${this.topN} Configurations</h2>
+                    <div style="overflow-x: auto;">
+                        <table class="config-table">
+                            <thead>
+                                <tr>
+                                    <th>Rank</th>
+                                    <th>GFLOPS</th>
+                                    <th>Runtime (ms)</th>
+                                    <th>Raster</th>
+                                    <th>Swizzle</th>
+                                    <th>Decomp</th>
+                                    <th>Splits</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${topConfigs.map((config, idx) => `
+                                    <tr>
+                                        <td>
+                                            <span class="rank-badge rank-${idx < 3 ? idx + 1 : 'other'}">
+                                                ${idx + 1}
+                                            </span>
+                                        </td>
+                                        <td><strong>${config.GFLOPS.toFixed(1)}</strong></td>
+                                        <td>${config.AvgRuntime_ms.toFixed(4)}</td>
+                                        <td>${config.Raster}</td>
+                                        <td>${config.Swizzle}</td>
+                                        <td>${config.Decomposition}</td>
+                                        <td>${config.Splits}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Rasterization Analysis -->
+                <div class="results-card">
+                    <h2 class="card-title">Rasterization Strategy</h2>
+                    ${this.renderParameterBars(stats.Raster, maxGFLOPS)}
+                </div>
+
+                <!-- Swizzle Analysis -->
+                <div class="results-card">
+                    <h2 class="card-title">Swizzle Factor</h2>
+                    ${this.renderParameterBars(stats.Swizzle, maxGFLOPS)}
+                </div>
+
+                <!-- Decomposition Analysis -->
+                <div class="results-card">
+                    <h2 class="card-title">Decomposition Type</h2>
+                    ${this.renderParameterBars(stats.Decomposition, maxGFLOPS)}
+                </div>
+
+                <!-- Split-K Analysis -->
+                <div class="results-card">
+                    <h2 class="card-title">Split-K Factor</h2>
+                    ${this.renderParameterBars(stats.Splits, maxGFLOPS)}
+                </div>
+            </div>
+
+            <div class="results-card" style="margin-top: 1.5rem; border-color: #8b5cf6;">
+                <h3 class="card-title" style="color: #8b5cf6;">📊 Key Insights</h3>
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="stat-label">Best Performance</div>
+                        <div class="stat-value">${maxGFLOPS.toFixed(1)} GFLOPS</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Total Configs Tested</div>
+                        <div class="stat-value">${this.data.filter(d => d.M === this.selectedSize).length}</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Best Rasterization</div>
+                        <div class="stat-value" style="font-size: 1rem;">
+                            ${this.getBestParameter(stats.Raster)}
+                        </div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">Best Decomposition</div>
+                        <div class="stat-value" style="font-size: 1rem;">
+                            ${this.getBestParameter(stats.Decomposition)}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    renderParameterBars(paramStats, maxGFLOPS) {
+        const sortedParams = Object.entries(paramStats)
+            .sort((a, b) => b[1].max - a[1].max);
+
+        return sortedParams.map(([key, value]) => {
+            const percentage = (value.max / maxGFLOPS) * 100;
+            return `
+                <div class="param-bar-container">
+                    <div class="param-label">
+                        <span class="param-name">${key}</span>
+                        <span class="param-value">
+                            max: ${value.max.toFixed(1)} | avg: ${value.avg.toFixed(1)} | count: ${value.count}
+                        </span>
+                    </div>
+                    <div class="param-bar">
+                        <div class="param-bar-fill" style="width: ${percentage}%;">
+                            ${value.max.toFixed(1)} GFLOPS
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    getBestParameter(paramStats) {
+        const best = Object.entries(paramStats)
+            .sort((a, b) => b[1].max - a[1].max)[0];
+        return best ? `${best[0]} (${best[1].max.toFixed(1)} GFLOPS)` : 'N/A';
+    }
+}
+
+// Auto-initialize on page load
+document.addEventListener('DOMContentLoaded', () => {
+    const container = document.getElementById('hopper-results-explorer');
+    if (container) {
+        new HopperResultsExplorer('hopper-results-explorer');
     }
 });
