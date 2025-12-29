@@ -10,21 +10,22 @@ math: true
 author: ks
 ---
 
-This is a continuation to my nprevious post [Learn CUTLASS the Hard Way](../learn-cutlass-the-hard-way), where I will explore Hopper architecture. There were several new architectural changes that made it to H100 and had huge implications on the performance of GEMM kernels, specially for 16-bit and lower precision GEMMS. There is already a great post from Pranjal on his H100 Journey at [Outperforming cuBLAS on H100: a Worklog](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog). Expect this post to be a bit more higher level than that as we will primarily use CUTLASS to leverage the same optimizations. 
+This is a continuation to my previous post [Learn CUTLASS the Hard Way](../learn-cutlass-the-hard-way) and here I will explore Hopper architecture. There were several new architectural changes that made it to H100 and had huge implications on the performance of GEMM kernels, specially for 16-bit and lower precision GEMMS. There is already a great post from Pranjal on his H100 Journey at [Outperforming cuBLAS on H100: a Worklog](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog). Expect this post to be a bit more higher level than that as I will primarily use CUTLASS to leverage the same optimizations. 
 
 ## Setup
 
-Verda etc
+For experimentation and testing the kernel performance, I used [Verda spot GPUs](https://verda.com/products) mostly. In total, I probably spent close to $40-50 in GPU credits as a mix of spot and pay-as-you-go instances. 
+
+Javascript visualizations below were created with the help of Claude Code.
 
 ## My Previous Baseline
 
-However, before we jump into Hopper kernels, let's start with baselining the kernel we wrote for Ada (RTX 4090) on H100. We already had a CUTLASS kernel that we wrote in the previous post. It leveraged CUTLASS 2.x API and was primarily meant for Ada and older generation of GPUS. But, we can still run it on H100 to get a baseline performance. 
+Before we jump into Hopper kernels, let's start with baselining the kernel we wrote for Ada (RTX 4090) on H100. We already had a CUTLASS kernel that we wrote in the previous post. It leveraged CUTLASS 2.x API and was primarily meant for Ada and older generation of GPUS. But, we can still run it on H100 to get a baseline performance. 
 
 #### Baseline Performance of `kernel_cutlass`
 
 ![Baseline Perf](/assets/explore_gemms_2_hopper_baseline_perf.png)
 
-Below we compare original *~first~ CUTLASS kernel* (and other handwritten CUDA implementations) against PyTorch on H100. Key observations:
 
 | Matrix Size | CUTLASS Performance | PyTorch Performance |
 |-------------|---------------------|---------------------|
@@ -33,8 +34,8 @@ Below we compare original *~first~ CUTLASS kernel* (and other handwritten CUDA i
 | **Large (4096-8192)** | 396 TFLOPS at 4K<br>375 TFLOPS at 8K | 754 TFLOPS at 4K<br>685 TFLOPS at 8K |
 
 > - **Small matrices**: Both implementations are memory-bound at smaller sizes.
-> - **Medium matrices**: Performance diverges significantly and we can see our kernel isn't leveraging H100's architectural improvements.
-> - **Large matrices**: The gap widens further as CUTLASS plateaus while PyTorch continues scaling until we hit compute boundness
+> - **Medium matrices**: Performance diverges significantly and we can see our kernel isn't leveraging H100's architectural improvements and peaks out at slighly over 300 TFLOPs
+> - **Large matrices**: The gap widens further as my previous kernels peak out at ~400 TFLOPs while PyTorch continues scaling until we hit compute boundness 
 > 
 > The performance cliff at medium-to-large matrix sizes reveals that our Ada-optimized kernel leaves significant H100 compute on the table. The hand-written implementations perform even worse.
 {: .prompt-info}
@@ -46,28 +47,20 @@ Let's run our original autotuned kernel now, which hopefully should perform slig
 
 ![Autotuned Results Baseline](/assets/explore_gemms_2_hopper_baseline_autotuned.png)
 
-Here is summary of the results after autotuning:
-
-Autotuning successfully extracts ~2x speedup for small matrices (64-512), reaching 30 TFLOPS with smaller tiles (64×32×32) while using more pipeline stages (S4-S5). 
-
-Performance peaks at 1024 (170 TFLOPS, 1.49x vs PyTorch) with optimal config 64×128×64 S4, but starts showing worse performance in compute bound regime for 2048+. 
-
-As matrix size increases, optimal configs shift from smaller tiles with more stages to larger tiles (128×256×64) with fewer stages (S3), reflecting the transition from register-bound to compute-bound regimes.
-
-> It seems surprizing to me but autotuning successfully extracts ~2x performance for small GEMMs but I am assuming it is just better register use for smaller sized kernels compared compared to PyTorch version, which I expect to be more generic. However, it is pretty visible that the fundamental kernel implementation can't exploit H100's full potential at larger sizes, as was also shown in [Pranjal's Post on H100](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog) post. 
+> It seems surprizing to me but autotuning successfully extracts ~2x performance for small GEMMs but I am assuming it is just better register use for smaller sized kernels compared to PyTorch version, which I expect to be more generic. However, it is pretty visible that the fundamental kernel implementation can't exploit H100's full potential at larger sizes, as was also shown in [Pranjal's Post on H100](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog) post. 
 {: .prompt-info}
 
-Looking at his results the perf for larger sizes falls somewhere in the region of "Larger Tiles"
+Looking at his results the perf for our performance here for larger sizes falls somewhere in the region of "Larger Tiles"
 
 ![Pranjal's Results](/assets/explore_gemms_2_pranjals_result.png)
 
 ## Key Changes in Hopper
 
-Without making it sound like an NVIDIA marketing presentation, I will try to cover some of Hopper's architectural features that matter most for GEMMs. 
+Without making it sound like an NVIDIA marketing presentation, I will try to cover some of Hopper's architectural features that matter most for GEMMs in the coming sections and then we will look at some kernels.
 
 ### Thread Block Clusters
 
-Hopper added a new hierarchy level above thread blocks called **Thread Block Clusters (TBC)**, groups of up to 8 thread blocks that can cooperate. This includes a distributed shared memory such that thread blocks in a cluster can directly access each other's shared memory. This allows for better data reuse across blocks without going through global memory. As a result, new programming pattern has emerged where we need to partition work across TBCs rather than just within block. Overall, TBCs boost performance by enabling cooperation across multiple SMs, giving kernels access to more threads and a larger effective shared-memory pool than a single thread block can provide.
+Hopper added a new hierarchy level above thread blocks called Thread Block Clusters (TBC), groups of up to 8 thread blocks that can cooperate. This includes a distributed shared memory such that thread blocks in a cluster can directly access each other's shared memory. This allows for better data reuse across blocks without going through global memory. As a result, new programming pattern has emerged where we need to partition work across TBCs rather than just within block. Overall, TBCs boost performance by enabling cooperation across multiple SMs, giving kernels access to more threads and a larger effective shared-memory pool than a single thread block can provide.
 
 ![TBC](https://developer-blogs.nvidia.com/wp-content/uploads/2022/03/Thread-Block-Clusters-and-Grids-with-Clusters.jpg)
 
@@ -77,11 +70,11 @@ Source: [NVIDIA Hopper Architecture in Depth](https://developer.nvidia.com/blog/
 
 ### Tensor Memory Accelerator
 
-Tensor Memory Accelerator (TMA) is arguably one of the biggest architectural innovation in Hopper. TMA is efficiently a new way to move tensors from/to global memory to / from shared memory, while avoiding extra roundtrips of going through register file and instead writes / reads shared memory directly. In addition, data can be multi-casted to threadblocks in a cluster (see above for TBC). There are other features such as automatic bounds-checking, zero-out, etc that also help reduce overhead. 
+Tensor Memory Accelerator (TMA) is arguably one of the biggest architectural change in Hopper. TMA is effectively a new way to move tensors from/to global memory to / from shared memory, while avoiding extra roundtrips of going through register file and instead writes / reads shared memory directly. In addition, data can be multi-casted to threadblocks in a cluster (see above for TBC). There are other features such as automatic bounds-checking, zero-out, etc that also help reduce overhead. 
 
-We discussed this briefly in my previous post, but we are more and more towards async producer-consumer paradigms when it comes to GEMM kernels. TMA operations are also asynchronous and use shared-memory–based barriers, where only one thread in a warp issues the `cuda::memcpy_async`, while others simply wait on the barrier. It frees up threads to perform useful work while data transfers proceed in parallel.
+We discussed this briefly in my previous post, but we are approaching more and more towards async producer-consumer paradigms when it comes to GEMM kernels. TMA operations are also asynchronous and use shared-memory–based barriers, where only one thread in a warp issues the `cuda::memcpy_async`, while others simply wait on the barrier. It frees up threads to perform useful work while data transfers proceed in parallel.
 
-#### Comparison to A100
+#### Comparison to A100 and older generation of GPUs
 
 ![TMA](https://developer-blogs.nvidia.com/wp-content/uploads/2022/03/Asynchronous-Memory-Copy-with-TMA-on-H100-vs-LDGSTS-Instruction-on-A100.jpg)
 
@@ -95,9 +88,9 @@ Source: [Developing Optimal CUDA Kernels on Hopper Tensor Cores](https://www.nvi
 
 ### Asynchronous Transaction Barriers
 
-Asynchronous barriers were introduced in Ampere and split synchronization into two non-blocking steps: Arrive, where threads signal they’ve finished producing data and can continue doing other work, and Wait, where threads block only when they actually need the results. This overlap boosts performance. We already used this in our previous kernels in our pipelined kernels in previous post. In Hopper, waiting threads can now sleep instead of spinning, reducing wasted cycles. 
+Asynchronous barriers were introduced in Ampere and split synchronization into two non-blocking steps: Arrive, where threads signal they’ve finished producing data and can continue doing other work, and Wait, where threads block only when they actually need the results. This overlap boosts performance and we already used this in our previous kernels in pipelined versions in the previous post. In Hopper, waiting threads can now sleep instead of spinning, reducing wasted cycles. 
 
-Hopper also has a more advanced primitive called the asynchronous transaction barrier. In addition to Arrive and Wait, it also tracks the amount of data produced. Threads perform Arrive operations that include a transaction (byte) count, and the Wait step blocks until both conditions are met: all threads arrived and the total data produced reaches a specified threshold. These transaction barriers are crucial for asynchronous memory operations and efficient data exchange that we discussed in previous sections. 
+Hopper also has a more advanced primitive called the asynchronous transaction barrier. In addition to Arrive and Wait, it also tracks the amount of data produced. Threads perform Arrive operations that include a transaction (byte) count, and the Wait step blocks until both conditions are met: all threads arrived and the total data produced reaches a specified threshold. These transaction barriers are useful for asynchronous memory operations and efficient data exchange. 
 
 ![Async Execution](/assets/explore_gemms_2_async_execution.jpg)
 
@@ -108,7 +101,7 @@ Source: [Developing Optimal CUDA Kernels on Hopper Tensor Cores](https://www.nvi
 
 ### Warp Group Instructions
 
-Hopper introduces the asynchronous warpgroup-level matrix multiply and accumulate operation (WGMMA). A warpgroup consists of four contiguous warps, i.e., 128 contiguous threads, where the warp-rank of the first warp is a multiple of four. The `wgmma.mma_async` instruction is executed collectively by all 128 threads in a warpgroup. 
+Hopper also introduced the asynchronous warpgroup-level matrix multiply and accumulate operation (WGMMA). A warpgroup consists of four contiguous warps, i.e., 128 contiguous threads, where the warp-rank of the first warp is a multiple of four. The `wgmma.mma_async` instruction is executed collectively by all 128 threads in a warpgroup. 
 
 The following matrix shapes are supported for bf16 dense computations for the wgmma.mma_async operation:
 
@@ -118,13 +111,13 @@ Source: [PTX Handbook](https://docs.nvidia.com/cuda/parallel-thread-execution/in
 
 ### Other Features
 - **Native FP8 Support**: H100 also introduced native FP8 (8-bit floating-point) with two formats (E4M3 and E5M2)
-- **Larger L2 Cache**: 25% L2 Cache increase to 50 MB compared to 40 MB 
+- **Larger L2 Cache**: L2 Cache increase to 50 MB compared to 40 MB 
 
 We will ignore the nvlink, nvswitch features since we will just work on a single GPU.
 
 ## CUTLASS 3.x and Support for Hopper
 
-Before we dive into implementing a Hopper-optimized kernel, let's quickly look at changes NVIDIA made in CUTLASS 3.x+ to introduce a a new five-layer hierarchy for GEMM Kernels to make them composable, and portable for future architectures. 
+Before we dive into implementing a Hopper-optimized kernel, let's quickly look at changes NVIDIA made in CUTLASS 3.x+ to introduce a a new five-layer hierarchy for GEMM Kernels for Hopper+ architectures. 
 
 We have previously looked at the GEMM hierarchy as shown below:
 
@@ -137,7 +130,7 @@ For Hopper and beyond, the API was changed to be centered around conceptual GEMM
 > The Collective layer is particularly important for Hopper+ kernels. It's where temporal micro-kernels orchestrate the producer-consumer pattern we discussed earlier, where producer warps issue TMA loads and consumer warps execute WGMMA operations, all coordinated through asynchronous transaction barriers. 
 {: .prompt-info}
 
-The way this translates into GEMM API is visualized below. For more detailed intro on GEMM API, [CUTLASS documentation on CUTLASS 3.x GEMM](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/gemm_api_3x.html#) is pretty useful, though I think the documentation was a bit better.
+The way this translates into GEMM API is visualized below. For more detailed intro on GEMM API, [CUTLASS documentation on CUTLASS 3.x GEMM](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/gemm_api_3x.html#) is pretty useful, though I wished the documentation was a bit better.
 
 Example kernels are useful though. Most useful example in the CUTLASS repo I found was [Hopper GEMM with Collective Builder](https://github.com/NVIDIA/cutlass/tree/main/examples/49_hopper_gemm_with_collective_builder) example. 
 
@@ -333,11 +326,11 @@ The Persistent Cooperative kernel extends basic warp specialization with the fol
 
 - [`TileScheduler`](https://github.com/NVIDIA/cutlass/blob/main/include/cutlass/gemm/kernel/sm90_tile_scheduler.hpp) will dynamically assigns tiles to persistent thread blocks, considering cluster geometry and SM availability. Thread blocks atomically grab next tiles until the work queue empties.
 
-Key changes in the code will look like:
-
 > I initially tried to keep the number of stages as Auto but that led to a runtime error that had no useful. After debugging for a bit, I landed on constant stages = 5
 {: .prompt-warning}
 
+
+Key changes in the code will look like:
 
 ```diff
 diff --git a/cuda/15_kernel_cutlass_hopper.cu b/cuda/15_kernel_cutlass_hopper.cu
@@ -388,6 +381,8 @@ hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_coun
 
 <div id="persistent-cooperative-viz"></div>
 
+Let's look at the performance:
+
 ![Persistent Cooperative](/assets/explore_gemms_2_persistent_cooperative_stage_5.png)
 
 > We got a nice boost in performance for larger matrices and now our kernel is ranging from 60-70% of PyTorch performance. We are able to achieve upto 480-490 TFLOPS for 4096-8192 batch sizes compared to Pytorch which is in the range of 700-750 TFLOPS.
@@ -409,13 +404,19 @@ In Ping-Pong Schedule, the tile scheduler assigns each consumer a different outp
 
 <div id="ping-pong-kernel-viz"></div>
 
+> We can see that we are able to overlap WGMMA and Epilogue operations across the 2 consumer warps.
+{: .prompt-tip}
+
+
+## --- TODO: PING PONG RESULTS ---
+
 ## Stream-K Scheduling
 
 ### Wave Quantization Problem
 
 Standard GEMM kernels partition output tiles across SMs in discrete waves when the number of work units exceeds number of available SMs. Hence, when work tiles don't divide evenly by SM count, the final partial wave leaves SMs idle i.e. **wave quantization**.
 
-> On H100 SXM5 with 132 SMs, computing 133 tiles requires 2 full waves i.e. identical cost to computing 264 tiles. The 133rd tile effectively halves device utilization.
+> For example, on H100 SXM5 with 132 SMs, computing 133 tiles requires 2 full waves i.e. identical cost to computing 264 tiles. The 133rd tile effectively halves device utilization.
 {: .prompt-info}
 
 <div id="wave-quantization-viz"></div>
@@ -426,11 +427,11 @@ For more details, see [prior work from Colfax Research](https://research.colfax-
 
 Source: [CUTLASS Tutorial: Persistent Kernels and Stream-K](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/)
 
-#### Data-Parallel Approach: Simple but Costly
+#### Data-Parallel Approach
 
-The most direct solution is to reduce tile size and creating more work units to fill partial waves. In our 4 SM example, this would create 18 tiles instead of 9, improving utilization from 75% to 90%. However, smaller tiles degrade efficiency due to loss of arithmetic intensity drops. (refer to tiling sections from prevous post). In essense, this will reduce latency-hiding opportunities for the warp scheduler. Hence, While data-parallel tiling improves wave balance, the per-tile performance loss often negates any gains—making it an incomplete solution.
+The most direct solution is to reduce tile size and creating more work units to fill partial waves. In our 4 SM example above, this would create 18 tiles instead of 9, improving utilization from 75% to 90%. However, smaller tiles degrade efficiency due to loss of arithmetic intensity (refer to tiling sections from prevous post). In essense, this will reduce latency-hiding opportunities for the warp scheduler. Hence, While data-parallel tiling improves wave balance, the per-tile performance loss often negates any gains.
 
-### Split-K: Partitioning Along Reduction Dimension
+### Split-K Partitioning (Along Reduction Dimension)
 
 Next natural extenstion here is Split-K, where we could divide tiles along the K-dimension into a constant number of pieces (e.g., splitting a 128×128×128 tile into two 128×128×64 pieces). Unlike splitting M or N, this increases work units without shrinking output tile dimensions. This can preserve arithmetic intensity better than data-parallel approach. Since each CTA accumulates only partial results for its output tile, CTAs collaborating on the same tile perform turnstile reduction in a global memory workspace such that each waits at a barrier for CTAs processing earlier K-slices, reduces its partial results into the workspace, then signals completion. The final CTA reduces from the workspace to accumulators and executes the epilogue.
 
@@ -450,7 +451,14 @@ This eliminates quantization entirely. Total time approaches 2.25 work units (vs
 
 ### Hybrid Stream-K: Fixing the Cache Problem
 
-While Stream-K eliminates wave quantization, it introduces temporal skew that hurts L2 cache performance. In data-parallel scheduling, CTAs working on adjacent output tiles simultaneously request the same K-blocks of shared operand tiles (e.g., tiles 0, 1, 2 all need B0), creating cache hits. Stream-K's fractional assignments break this synchronization i.e. CTAs request different K-offsets at different times. Hybrid Stream-K fixes this by partitioning work into two phases. First, the **Stream-K phase** processes exactly 1 full wave + the partial wave using fractional tiles. Each CTA receives at most 2 partial tiles totaling the same work, ensuring all CTAs finish this phase simultaneously. Second, the **data-parallel phase** executes remaining complete tiles (divisible by SM count) with standard scheduling. CTAs now process adjacent output tiles in sync, restoring cache locality for shared A/B tiles. This hybrid approach eliminates quantization via Stream-K phase while maximizing cache hits via data-parallel phase for the bulk of computation. For more details and in-depth discussion refer to [CUTLASS Tutorial: Persistent Kernels and Stream-K](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/).
+While Stream-K eliminates wave quantization, it introduces temporal skew that hurts L2 cache performance. In data-parallel scheduling, CTAs working on adjacent output tiles simultaneously request the same K-blocks of shared operand tiles (e.g., tiles 0, 1, 2 all need B0), creating cache hits. Stream-K's fractional assignments break this synchronization i.e. CTAs request different K-offsets at different times. Hybrid Stream-K fixes this by partitioning work into two phases. First, the Stream-K phase processes exactly 1 full wave + the partial wave using fractional tiles. Each CTA receives at most 2 partial tiles totaling the same work, ensuring all CTAs finish this phase simultaneously. 
+
+Second, the data-parallel phase executes remaining complete tiles (divisible by SM count) with standard scheduling. CTAs now process adjacent output tiles in sync, restoring cache locality for shared A/B tiles. This hybrid approach eliminates quantization via Stream-K phase while maximizing cache hits via data-parallel phase for the bulk of computation. 
+
+For more details and in-depth discussion refer to [CUTLASS Tutorial: Persistent Kernels and Stream-K](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/).
+
+
+## --- TODO: STREAM K RESULTS ---
 
 ```
 2025-12-17 12:15:41.417 | INFO     | __main__:run_benchmarks:1307 - ----------------------------------------------------------------------------------------------------------------------------------
@@ -472,16 +480,16 @@ While Stream-K eliminates wave quantization, it introduces temporal skew that hu
 
 ## CTA Rasterization and Swizzle
 
-We discussed rasterization and swizzling in the previous blog post but we will cover it a bit more here. [CTA rasterization](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html#threadblock-rasterization) defines the order in which thread blocks map to GEMM tiles and are executed on the GPU. We want logical work tiles to close to each other on the physical hardware. A naive row-major launch often leads to poor L2 reuse and redundant global loads since you end up needing to reload same data along one dimension over and over into cache. 
+We discussed rasterization and swizzling in the previous blog post but we will cover it a bit more here. [CTA rasterization](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html#threadblock-rasterization) defines the order in which thread blocks map to GEMM tiles and are executed on the GPU. We want logical work tiles to be close to each other on the physical hardware. A naive row-major launch often leads to poor L2 reuse and redundant global loads since you end up needing to reload same data along one dimension over and over into cache. 
 
 On top of rasterization, swizzling allows us to further remap the scan order into an intentional remapping of shared memory locations to minimize bank conflict. As we previously covered, CTA swizzling remaps `(blockIdx.x, blockIdx.y)` to improve spatial and temporal locality across tiles. For more details, read [Bank Conflicts and Swizzling](https://www.kapilsharma.dev/posts/learn-cutlass-the-hard-way/#swizzling) section in the previous post.
 
-> [PTX Docs](https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-swizzling-modes) have a really visualization of swizzling patterns
+> [PTX Docs](https://docs.nvidia.com/cuda/parallel-thread-execution/#tensor-swizzling-modes) have a really nice visualizations of swizzling patterns
 {: .prompt-tip}
 
-### 32-Byte Swizzle
+### Example: 32-Byte Swizzle
 
-Let's take example of 32-byte swizzling on an 8x8 grid. Since we have 32 banks and each cell represents 4 bytes, banks will start conflicting after 32 elements. In case we were looking at fp16 values, the banks will repeat after 64 elements. Just simple math. So, in this case we will have 2-way bank conflict i.e. each column of 8 elements has access to 4 unique banks. To solve, we will remap the memory addresses such that we can shuffle values around to make sure each column has access to 8 unique banks. To get the swizzled address, we will get:
+Let's take example of 32-byte swizzling on an 8x8 grid. Since we have 32 banks and each cell represents 4 bytes, banks will start conflicting after 32 elements. In case we were looking at bf16/fp16 values, the banks will repeat after 64 elements. Just simple math. So, in this case we will have 2-way bank conflict i.e. each column of 8 elements has access to 4 unique banks. To solve, we will remap the memory addresses such that we can shuffle values around to make sure each column has access to 8 unique banks. To get the swizzled address, we will get:
 
 ```cpp
 // XOR the row index with column bits to scramble bank assignment:
@@ -520,7 +528,7 @@ What really made swizzling tick for me was reading and staring at the swizzled g
 {: .prompt-tip}
 
 
-## Kernel Configuration Explorer
+## Final YOLO Autotuning Run
 
 After incorporating all the different configuration options, I ran 500+ different combinations of kernels to get a sense of how the performance is affected by each and combination of them.
 

@@ -1133,7 +1133,7 @@ struct MainloopSm90TmaGmmaWarpSpecialized {
                 number: 3,
                 title: "Collective Layer",
                 icon: "🔄",
-                description: "Temporal micro-kernels that use architecture-specific synchronization to orchestrate the execution of one or more spatial micro-kernels. The workhorse of CUTLASS 3.x.",
+                description: "Temporal micro-kernels that use architecture-specific synchronization to orchestrate the execution of one or more spatial micro-kernels. This is the main GEMM configuration API.",
                 components: [
                     { name: "Collective Mainloop", type: "cutlass::gemm::collective::CollectiveMma<>", desc: "Orchestrates data movement (TMA) and computation (WGMMA) with software pipelining" },
                     { name: "Collective Epilogue", type: "cutlass::epilogue::collective::CollectiveEpilogue<>", desc: "Post-processing operations (accumulator transformations, reductions, output writes)" }
@@ -1168,7 +1168,7 @@ using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBui
                 number: 4,
                 title: "Tiled MMA/Copy",
                 icon: "🔲",
-                description: "Spatial micro-kernels that allow for arbitrary interleaving and tiling of architecture-specific atoms. Enables flexible data layouts and efficient computation patterns.",
+                description: "Spatial micro-kernels that allow for arbitrary interleaving and tiling of architecture-specific atoms. Enables varied data layouts and computation patterns.",
                 components: [
                     { name: "Tiled MMA", type: "cute::TiledMma<>", desc: "Thread block-level tiling of MMA atoms with configurable layouts" },
                     { name: "Tiled Copy", type: "cute::TiledCopy<>", desc: "Thread block-level tiling of copy operations with swizzling support" }
@@ -1806,16 +1806,6 @@ class PersistentCooperativeViz {
                         <div id="persistentCoopStreamLanes"></div>
                     </div>
                 </div>
-
-                <!-- Info Card -->
-                <div class="pipeline-card" style="margin-top: 1.5rem; border-color: #8b5cf6;">
-                    <h3 class="pipeline-card-title" style="color: #8b5cf6;">🔄 Cooperative Pattern</h3>
-                    <p style="color: #d1d5db; line-height: 1.6; font-size: 0.95rem;">
-                        Each persistent thread block processes multiple tiles sequentially. Within each tile, two consumer warp groups 
-                        <strong>cooperatively</strong> compute the same output tile by splitting it across the M dimension (top/bottom halves).
-                        This reduces register pressure per consumer, enabling larger tile sizes.
-                    </p>
-                </div>
             </div>
         `;
 
@@ -2224,7 +2214,7 @@ class WaveQuantizationViz {
             smContainer.style.cssText = 'flex: 2; display: flex; flex-direction: column; gap: 0.5rem;';
 
             const waveLabel = document.createElement('div');
-            waveLabel.style.cssText = 'color: #9ca3af; font-size: 0.85rem; font-weight: bold;';
+            waveLabel.style.cssText = 'color: #ffffff; font-size: 0.85rem; font-weight: bold;';
             waveLabel.textContent = `Wave ${wave + 1}`;
             smContainer.appendChild(waveLabel);
 
@@ -2546,7 +2536,7 @@ class SplitKViz {
             smContainer.style.cssText = 'flex: 2; display: flex; flex-direction: column; gap: 0.5rem;';
 
             const waveLabel = document.createElement('div');
-            waveLabel.style.cssText = 'color: #9ca3af; font-size: 0.85rem; font-weight: bold;';
+            waveLabel.style.cssText = 'color: #ffffff; font-size: 0.85rem; font-weight: bold;';
             waveLabel.textContent = `Wave ${wave + 1}`;
             smContainer.appendChild(waveLabel);
 
@@ -2761,10 +2751,13 @@ class SplitKViz {
 
                 computeBox.style.background = computeColor;
                 computeBox.style.borderColor = computeBorder;
+                computeBox.style.color = (computeColor === '#1f2937') ? '#6b7280' : '#ffffff';
                 barrierBox.style.background = barrierColor;
                 barrierBox.style.borderColor = barrierBorder;
+                barrierBox.style.color = (barrierColor === '#1f2937') ? '#6b7280' : '#ffffff';
                 reduceBox.style.background = reduceColor;
                 reduceBox.style.borderColor = reduceBorder;
+                reduceBox.style.color = (reduceColor === '#1f2937') ? '#6b7280' : '#ffffff';
 
                 if (wave !== currentWave || tileNum >= this.config.numTiles) {
                     computeBox.style.boxShadow = 'none';
@@ -4153,7 +4146,7 @@ class HopperResultsExplorer {
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
                     background-color: #111827;
                     color: #ffffff;
-                    padding: 2rem;
+                    padding: 1rem 2rem 2rem 2rem;
                     border-radius: 0.5rem;
                 }
 
@@ -4391,11 +4384,10 @@ class HopperResultsExplorer {
                             <thead>
                                 <tr>
                                     <th>Rank</th>
-                                    <th>GFLOPS</th>
-                                    <th>Runtime (ms)</th>
+                                    <th>TFLOPS</th>
                                     <th>Raster</th>
                                     <th>Swizzle</th>
-                                    <th>Decomp</th>
+                                    <th>Decomposition</th>
                                     <th>Splits</th>
                                 </tr>
                             </thead>
@@ -4407,8 +4399,7 @@ class HopperResultsExplorer {
                                                 ${idx + 1}
                                             </span>
                                         </td>
-                                        <td><strong>${config.GFLOPS.toFixed(1)}</strong></td>
-                                        <td>${config.AvgRuntime_ms.toFixed(4)}</td>
+                                        <td><strong>${(config.GFLOPS / 1000).toFixed(2)}</strong></td>
                                         <td>${config.Raster}</td>
                                         <td>${config.Swizzle}</td>
                                         <td>${config.Decomposition}</td>
@@ -4417,56 +4408,6 @@ class HopperResultsExplorer {
                                 `).join('')}
                             </tbody>
                         </table>
-                    </div>
-                </div>
-
-                <!-- Rasterization Analysis -->
-                <div class="results-card">
-                    <h2 class="card-title">Rasterization Strategy</h2>
-                    ${this.renderParameterBars(stats.Raster, maxGFLOPS)}
-                </div>
-
-                <!-- Swizzle Analysis -->
-                <div class="results-card">
-                    <h2 class="card-title">Swizzle Factor</h2>
-                    ${this.renderParameterBars(stats.Swizzle, maxGFLOPS)}
-                </div>
-
-                <!-- Decomposition Analysis -->
-                <div class="results-card">
-                    <h2 class="card-title">Decomposition Type</h2>
-                    ${this.renderParameterBars(stats.Decomposition, maxGFLOPS)}
-                </div>
-
-                <!-- Split-K Analysis -->
-                <div class="results-card">
-                    <h2 class="card-title">Split-K Factor</h2>
-                    ${this.renderParameterBars(stats.Splits, maxGFLOPS)}
-                </div>
-            </div>
-
-            <div class="results-card" style="margin-top: 1.5rem; border-color: #8b5cf6;">
-                <h3 class="card-title" style="color: #8b5cf6;">📊 Key Insights</h3>
-                <div class="stats-grid">
-                    <div class="stat-box">
-                        <div class="stat-label">Best Performance</div>
-                        <div class="stat-value">${maxGFLOPS.toFixed(1)} GFLOPS</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-label">Total Configs Tested</div>
-                        <div class="stat-value">${this.data.filter(d => d.M === this.selectedSize).length}</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-label">Best Rasterization</div>
-                        <div class="stat-value" style="font-size: 1rem;">
-                            ${this.getBestParameter(stats.Raster)}
-                        </div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-label">Best Decomposition</div>
-                        <div class="stat-value" style="font-size: 1rem;">
-                            ${this.getBestParameter(stats.Decomposition)}
-                        </div>
                     </div>
                 </div>
             </div>
@@ -4484,12 +4425,12 @@ class HopperResultsExplorer {
                     <div class="param-label">
                         <span class="param-name">${key}</span>
                         <span class="param-value">
-                            max: ${value.max.toFixed(1)} | avg: ${value.avg.toFixed(1)} | count: ${value.count}
+                            max: ${(value.max / 1000).toFixed(2)} | avg: ${(value.avg / 1000).toFixed(2)} | count: ${value.count}
                         </span>
                     </div>
                     <div class="param-bar">
                         <div class="param-bar-fill" style="width: ${percentage}%;">
-                            ${value.max.toFixed(1)} GFLOPS
+                            ${(value.max / 1000).toFixed(2)} TFLOPS
                         </div>
                     </div>
                 </div>
@@ -4500,7 +4441,7 @@ class HopperResultsExplorer {
     getBestParameter(paramStats) {
         const best = Object.entries(paramStats)
             .sort((a, b) => b[1].max - a[1].max)[0];
-        return best ? `${best[0]} (${best[1].max.toFixed(1)} GFLOPS)` : 'N/A';
+        return best ? `${best[0]} (${(best[1].max / 1000).toFixed(2)} TFLOPS)` : 'N/A';
     }
 }
 
