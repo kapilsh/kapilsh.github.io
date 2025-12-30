@@ -407,8 +407,10 @@ In Ping-Pong Schedule, the tile scheduler assigns each consumer a different outp
 > We can see that we are able to overlap WGMMA and Epilogue operations across the 2 consumer warps.
 {: .prompt-tip}
 
+At this point, I expanded the kernel to support multiple kernel configuration and exposed all different kernels to python. Finally, after experimenting a bit, I landed on a ping-pong kernel with `stage_count = 5` as being the most performant. I actually saw a degradation in performance when I switched to pingpong scheduler and was not able to match the performance of Bert's results in simplegemm. But, I hadn't done any swizzling patterns and more detailed autotuning yet.
 
-## --- TODO: PING PONG RESULTS ---
+![Ping Pong Constant Results](/assets/explore_gemms_pingpong_persistent_constant_results.png)
+
 
 ## Stream-K Scheduling
 
@@ -440,7 +442,6 @@ Next natural extenstion here is Split-K, where we could divide tiles along the K
 
 <div id="split-k-viz"></div>
 
-
 ### Stream-K: Fractional Tile Assignment
 
 That brings us to Stream-K, which aims to eliminate wave quantization completely by assigning each persistent CTA a fractional number of work tiles. In our 9-tile, 4-SM example, each SM computes exactly 2.25 tiles instead of discrete waves. SM0 processes tiles 0, 1, and ¼ of tile 2; SM1 completes tile 2, processes tile 3, and starts half of tile 4. Split tiles partition along K-dimension using turnstile reduction (like Split-K), but with temporal scheduling—early K-pieces compute well before final pieces, minimizing barrier wait times.
@@ -457,6 +458,10 @@ Second, the data-parallel phase executes remaining complete tiles (divisible by 
 
 For more details and in-depth discussion refer to [CUTLASS Tutorial: Persistent Kernels and Stream-K](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/).
 
+> NOTE: I did not implement the Hybrid Stream-K. Results below are for Stream-K configuration.
+{: .prompt-warning}
+
+![Stream K Results](/assets/explore_gemms_2_streamk_constant_stages_3.png)
 
 ## --- TODO: STREAM K RESULTS ---
 
@@ -553,14 +558,14 @@ Combining all of these:
 
 | Size | Best TFLOPS | Best Config | Avg TFLOPS | Range |
 |------|-------------|-------------|------------|-------|
-| **128³** | 0.73 | Along N, Swizzle=1, SplitK | 0.59 | 0.41 - 0.73 |
-| **256³** | 5.2 | Along N, Swizzle=1, DataParallel | 4.1 | 2.3 - 5.2 |
-| **512³** | 34.8 | Along M, Swizzle=1, Heuristic | 28.2 | 17.5 - 34.8 |
-| **1024³** | 206.2 | Along M, Swizzle=1, SplitK | 159.8 | 114.6 - 206.2 |
-| **2048³** | 565.7 | Along N, Swizzle=2, Heuristic | 426.8 | 250.9 - 565.7 |
-| **4096³** | 674.5 | Along N, Swizzle=1, Heuristic | 568.0 | 382.8 - 674.5 |
-| **6144³** | 652.1 | Heuristic, Swizzle=2, StreamK | 594.4 | 481.6 - 652.1 |
-| **8192³** | 680.0 | Heuristic, Swizzle=2, SplitK | 606.1 | 505.4 - 680.0 |
+| **128³** | 0.72 | Along M, Swizzle=1, Heuristic | 0.61 | 0.43 - 0.72 |
+| **256³** | 5.24 | Heuristic, Swizzle=1, StreamK | 4.38 | 2.31 - 5.24 |
+| **512³** | 34.96 | Along N, Swizzle=1, SplitK | 30.84 | 17.14 - 34.96 |
+| **1024³** | 206.27 | Along M, Swizzle=2, DataParallel | 164.35 | 73.63 - 206.27 |
+| **2048³** | 570.82 | Along N, Swizzle=2, DataParallel | 448.29 | 250.53 - 570.82 |
+| **4096³** | 677.54 | Along N, Swizzle=1, DataParallel | 579.34 | 400.58 - 677.54 |
+| **6144³** | 653.41 | Along N, Swizzle=2, StreamK | 601.07 | 482.01 - 653.41 |
+| **8192³** | 687.68 | Along N, Swizzle=2, SplitK | 611.65 | 507.93 - 687.68 |
 
 
 ### All results

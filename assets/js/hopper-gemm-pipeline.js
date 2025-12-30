@@ -4072,7 +4072,7 @@ class HopperResultsExplorer {
             headers.forEach((header, i) => {
                 const value = values[i];
                 // Convert numeric fields
-                if (['M', 'N', 'K', 'Swizzle', 'Splits', 'AvgRuntime_ms', 'GFLOPS', 'WorktileCount'].includes(header)) {
+                if (['M', 'N', 'K', 'Swizzle', 'Splits', 'AvgRuntime_ms', 'TFLOPS', 'WorktileCount'].includes(header)) {
                     obj[header] = parseFloat(value);
                 } else {
                     obj[header] = value;
@@ -4089,7 +4089,7 @@ class HopperResultsExplorer {
 
     getTopConfigs(size, n = 10) {
         const sizeData = this.data.filter(d => d.M === size);
-        return sizeData.sort((a, b) => b.GFLOPS - a.GFLOPS).slice(0, n);
+        return sizeData.sort((a, b) => b.TFLOPS - a.TFLOPS).slice(0, n);
     }
 
     getParameterStats(size) {
@@ -4108,9 +4108,9 @@ class HopperResultsExplorer {
                 if (!stats[param][key]) {
                     stats[param][key] = { total: 0, count: 0, max: 0, configs: [] };
                 }
-                stats[param][key].total += row.GFLOPS;
+                stats[param][key].total += row.TFLOPS;
                 stats[param][key].count += 1;
-                stats[param][key].max = Math.max(stats[param][key].max, row.GFLOPS);
+                stats[param][key].max = Math.max(stats[param][key].max, row.TFLOPS);
                 stats[param][key].configs.push(row);
             });
 
@@ -4119,9 +4119,9 @@ class HopperResultsExplorer {
                 if (!stats[param][key]) {
                     stats[param][key] = { total: 0, count: 0, max: 0, configs: [] };
                 }
-                stats[param][key].total += row.GFLOPS;
+                stats[param][key].total += row.TFLOPS;
                 stats[param][key].count += 1;
-                stats[param][key].max = Math.max(stats[param][key].max, row.GFLOPS);
+                stats[param][key].max = Math.max(stats[param][key].max, row.TFLOPS);
                 stats[param][key].configs.push(row);
             });
         });
@@ -4371,7 +4371,7 @@ class HopperResultsExplorer {
     renderResults() {
         const topConfigs = this.getTopConfigs(this.selectedSize, this.topN);
         const stats = this.getParameterStats(this.selectedSize);
-        const maxGFLOPS = Math.max(...topConfigs.map(c => c.GFLOPS));
+        const maxTFLOPS = Math.max(...topConfigs.map(c => c.TFLOPS));
 
         const content = document.getElementById('resultsContent');
         content.innerHTML = `
@@ -4399,7 +4399,7 @@ class HopperResultsExplorer {
                                                 ${idx + 1}
                                             </span>
                                         </td>
-                                        <td><strong>${(config.GFLOPS / 1000).toFixed(2)}</strong></td>
+                                        <td><strong>${config.TFLOPS.toFixed(2)}</strong></td>
                                         <td>${config.Raster}</td>
                                         <td>${config.Swizzle}</td>
                                         <td>${config.Decomposition}</td>
@@ -4414,23 +4414,23 @@ class HopperResultsExplorer {
         `;
     }
 
-    renderParameterBars(paramStats, maxGFLOPS) {
+    renderParameterBars(paramStats, maxTFLOPS) {
         const sortedParams = Object.entries(paramStats)
             .sort((a, b) => b[1].max - a[1].max);
 
         return sortedParams.map(([key, value]) => {
-            const percentage = (value.max / maxGFLOPS) * 100;
+            const percentage = (value.max / maxTFLOPS) * 100;
             return `
                 <div class="param-bar-container">
                     <div class="param-label">
                         <span class="param-name">${key}</span>
                         <span class="param-value">
-                            max: ${(value.max / 1000).toFixed(2)} | avg: ${(value.avg / 1000).toFixed(2)} | count: ${value.count}
+                            max: ${value.max.toFixed(2)} | avg: ${value.avg.toFixed(2)} | count: ${value.count}
                         </span>
                     </div>
                     <div class="param-bar">
                         <div class="param-bar-fill" style="width: ${percentage}%;">
-                            ${(value.max / 1000).toFixed(2)} TFLOPS
+                            ${value.max.toFixed(2)} TFLOPS
                         </div>
                     </div>
                 </div>
@@ -4441,7 +4441,7 @@ class HopperResultsExplorer {
     getBestParameter(paramStats) {
         const best = Object.entries(paramStats)
             .sort((a, b) => b[1].max - a[1].max)[0];
-        return best ? `${best[0]} (${(best[1].max / 1000).toFixed(2)} TFLOPS)` : 'N/A';
+        return best ? `${best[0]} (${best[1].max.toFixed(2)} TFLOPS)` : 'N/A';
     }
 }
 
