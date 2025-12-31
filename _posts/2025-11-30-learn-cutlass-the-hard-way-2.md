@@ -1,8 +1,8 @@
 ---
 title: "Learn CUTLASS the hard way - 2"
 description: >-
-  Exploring Hopper
-date: 2025-11-29
+  Exploring Hopper Architecture and (almost) matching PyTorch/cuBLAS performance for GEMMs
+date: 2025-12-30
 categories: [Blog]
 tags: [Triton, CUDA, GPU, GEMM, Performance]
 pin: true
@@ -461,27 +461,11 @@ For more details and in-depth discussion refer to [CUTLASS Tutorial: Persistent 
 > NOTE: I did not implement the Hybrid Stream-K. Results below are for Stream-K configuration.
 {: .prompt-warning}
 
+### Performance Results
+
+We are able to break into the 500+ TFLOPs now. I had to reduce the stage count to 3 to get the best performance for 8192 batch sizes with stream-K enabled. We can see the performance degraded for some smaller batch sizes. In the next few section, we will do a full autotune to get those sorted out.
+
 ![Stream K Results](/assets/explore_gemms_2_streamk_constant_stages_3.png)
-
-## --- TODO: STREAM K RESULTS ---
-
-```
-2025-12-17 12:15:41.417 | INFO     | __main__:run_benchmarks:1307 - ----------------------------------------------------------------------------------------------------------------------------------
-2025-12-17 12:15:41.417 | INFO     | __main__:run_benchmarks:1331 - 8192       PyTorch                                             1.5795     696.10             254.92       1.00× 🎯 #1
-2025-12-17 12:15:41.417 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper TMA Stream-K Const                   2.1198     518.70             189.95       0.75× 🐢 #2
-2025-12-17 12:15:41.417 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper TMA Persistent Const                 2.2208     495.09             181.31       0.71× 🐢 #3
-2025-12-17 12:15:41.418 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper TMA Pingpong Const                   2.7581     398.65             145.99       0.57× 🐢 #4
-2025-12-17 12:15:41.418 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper (BF16) [Default]                     2.8581     384.70             140.88       0.55× 🐢 #5
-2025-12-17 12:15:41.418 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper TMA WarpSpec Const                   2.9196     376.60             137.92       0.54× 🐢 #6
-2025-12-17 12:15:41.418 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS (BF16)                                      2.9475     373.03             136.61       0.54× 🐢 #7
-2025-12-17 12:15:41.419 | INFO     | __main__:run_benchmarks:1331 - 8192       CUTLASS Hopper TMA WarpSpec Auto                    3.0279     363.12             132.98       0.52× 🐢 #8
-2025-12-17 12:15:41.419 | INFO     | __main__:run_benchmarks:1331 - 8192       CUDA Tensor Core Warptiled (BF16)                  16.8034      65.43              23.96       0.09× 🐢 #9
-2025-12-17 12:15:41.419 | INFO     | __main__:run_benchmarks:1331 - 8192       CUDA Tensor Core Double Buffered (BF16)            16.9996      64.68              23.69       0.09× 🐢 #10
-2025-12-17 12:15:41.419 | INFO     | __main__:run_benchmarks:1331 - 8192       CUDA Tensor Core Async (BF16)                      18.7892      58.52              21.43       0.08× 🐢 #11
-2025-12-17 12:15:41.420 | INFO     | __main__:run_benchmarks:1331 - 8192       CUDA Warptiling                                    36.3380      30.26              11.08       0.04× 🐢 #12
-2025-12-17 12:15:41.420 | INFO     | __main__:run_benchmarks:1331 - 8192       CUDA Tensor Core Naive (BF16)                      37.4757      29.34              10.74       0.04× 🐢 #13
-2025-12-17 12:15:41.420 | INFO     | __main__:run_benchmarks:1335 - ==================================================================================================================================
-```
 
 ## CTA Rasterization and Swizzle
 
@@ -535,26 +519,14 @@ What really made swizzling tick for me was reading and staring at the swizzled g
 
 ## Final YOLO Autotuning Run
 
-After incorporating all the different configuration options, I ran 500+ different combinations of kernels to get a sense of how the performance is affected by each and combination of them.
+After incorporating all the different configuration options, I ran 670+ different combinations of kernels to get a sense of how the performance is affected by each and combination of them. 
 
-First, let's look at using rasterization + swizzle strategy:
-
-<div id="swizzle-raster-chart"></div>
-
-Next, let's look at decomposition mode + spliting strategy:
-
-<div id="mode-chart"></div>
-
-Combining all of these:
-
-<div id="final-best-chart"></div>
-
-
-> At this point, we are starting to hit upto 90% of PyTorch/cublas performance!
+> Overall we are able to now hit 92-99% of PyTorch performance for the larger sizes: 4096 to 8192. We can way exceed PyTorch performance for smaller batch sizes where are we are still in memory-bound regimes. 
 {: .prompt-info}
 
 
-### Performance Summary
+> **NOTE: In all the kernels, we use TMA Persistent Cooperative kernels with no Ping Pong.**
+{: .prompt-info}
 
 | Size | Best TFLOPS | Speedup | Best Config | Avg TFLOPS | Range |
 |------|-------------|---------|-------------|------------|-------|
@@ -567,18 +539,29 @@ Combining all of these:
 | **6144³** | 653.41 | 92.2% | Along N, Swizzle=2, StreamK | 601.07 | 482.01 - 653.41 |
 | **8192³** | 687.68 | 98.9% | Along N, Swizzle=2, SplitK | 611.65 | 507.93 - 687.68 |
 
+Below we can see the breakdowns for different configurations splits:
 
-### All results
+#### Raster + Swizzle
 
-The visualization below allows you to explore these configurations in detail. Select a matrix size to view the top 10 performing configurations and analyze how different parameters affect performance:
+<div id="swizzle-raster-chart"></div>
 
-- **Rasterization Strategy**: How thread blocks are mapped to GEMM tiles (Heuristic, Along M, Along N)
-- **Swizzle Factor**: CTA swizzling pattern (1, 2, 4) for improved cache locality
-- **Decomposition Type**: Scheduling strategy (Heuristic, StreamK, SplitK, DataParallel)
-- **Split-K Factor**: Number of K-dimension splits (1, 2, 3, 4)
+#### Splitting Strategy
 
-<div id="hopper-results-explorer"></div> 
+<div id="mode-chart"></div>
 
+#### Across all configs
+
+<div id="final-best-chart"></div>
+
+## Results in detail
+
+The visualization below allows you to explore these configurations in detail. Select a matrix size to view the top 10 performing configurations for each size combinations. 
+
+<div id="hopper-results-explorer"></div>
+
+## Final Thoughts
+
+We covered a lot in this post but I tried to keep this a shorter than the previous post. We discussed variety so special architectural features that were introduced in Hopper that Blackwell built on. Overall, I was a bit time constraint so it took me a while to put this together. Hopefully, I will get to some fp8/fp4 kernels next on Hopper/Blackwell but for now this will do! I have compiled a bunch of resources below that I found useful
 
 ## Resources
 

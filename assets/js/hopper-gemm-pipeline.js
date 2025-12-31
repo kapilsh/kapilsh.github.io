@@ -3856,7 +3856,20 @@ class SwizzleViz {
 
             <div class="swizzle-container">
                 <h1 class="swizzle-title">32-Byte Swizzle Mode</h1>
-                <br>
+
+                <div style="background-color: #1f2937; border: 1px solid #4b5563; border-radius: 0.5rem; padding: 1rem; margin: 1rem 0; max-width: 600px; margin-left: auto; margin-right: auto;">
+                    <div style="display: flex; align-items: center; gap: 1rem; justify-content: center; flex-wrap: wrap;">
+                        <div style="background-color: #374151; border: 2px solid #60a5fa; border-radius: 0.375rem; padding: 0.75rem; min-width: 120px;">
+                            <div style="font-family: 'Courier New', monospace; color: #60a5fa; font-size: 0.9rem; font-weight: bold; text-align: center; margin-bottom: 0.25rem;">42</div>
+                            <div style="font-family: 'Courier New', monospace; color: #93c5fd; font-size: 0.85rem; text-align: center;">B10</div>
+                        </div>
+                        <div style="color: #d1d5db; font-size: 0.9rem; max-width: 400px;">
+                            <div style="margin-bottom: 0.25rem;"><span style="color: #60a5fa; font-weight: bold;">Top number:</span> Memory address (byte offset)</div>
+                            <div><span style="color: #93c5fd; font-weight: bold;">Bottom (B#):</span> Memory bank number (0-31)</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="swizzle-grids">
                     <div class="swizzle-grid-container">
                         <h2 class="swizzle-grid-title">Original Layout (No Swizzle)</h2>
@@ -4711,6 +4724,23 @@ class BenchmarkChartsManager {
             mode: 'lines+markers+text'
         });
 
+        // 100% reference line trace (for legend only - actual line drawn via shape)
+        traces.push({
+            x: [matrixSizes[0]],
+            y: [100],
+            mode: 'lines',
+            type: 'scatter',
+            name: '100% (PyTorch baseline)',
+            yaxis: 'y2',
+            line: {
+                color: '#6b7280',
+                width: 2,
+                dash: 'dash'
+            },
+            hoverinfo: 'skip',
+            showlegend: true
+        });
+
         // Percentage line on secondary axis
         traces.push({
             x: matrixSizes,
@@ -4774,9 +4804,9 @@ class BenchmarkChartsManager {
                 },
                 overlaying: 'y',
                 side: 'right',
-                range: [0, 200],
-                tickvals: [0, 25, 50, 75, 100, 125, 150, 175, 200],
-                ticktext: ['0%', '25%', '50%', '75%', '100%', '125%', '150%', '175%', '200%'],
+                range: [0, 500],
+                tickvals: [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500],
+                ticktext: ['0%', '50%', '100%', '150%', '200%', '250%', '300%', '350%', '400%', '450%', '500%'],
                 color: '#fbbf24',
                 showline: true,
                 linecolor: '#fbbf24',
@@ -4803,7 +4833,23 @@ class BenchmarkChartsManager {
                 font: { color: '#e5e7eb', size: 11 }
             },
             margin: { l: 80, r: 120, t: 80, b: 120 },
-            height: 600
+            height: 600,
+            shapes: [
+                {
+                    type: 'line',
+                    xref: 'paper',
+                    yref: 'y2',
+                    x0: 0,
+                    x1: 1,
+                    y0: 100,
+                    y1: 100,
+                    line: {
+                        color: '#6b7280',
+                        width: 2,
+                        dash: 'dash'
+                    }
+                }
+            ]
         };
 
         const config = {
@@ -4847,8 +4893,8 @@ async function initBenchmarkCharts() {
     document.head.appendChild(benchmarkStyles);
 
     const hasCharts = document.getElementById('swizzle-raster-chart') ||
-                     document.getElementById('mode-chart') ||
-                     document.getElementById('final-best-chart');
+        document.getElementById('mode-chart') ||
+        document.getElementById('final-best-chart');
 
     if (hasCharts) {
         const manager = new BenchmarkChartsManager();
