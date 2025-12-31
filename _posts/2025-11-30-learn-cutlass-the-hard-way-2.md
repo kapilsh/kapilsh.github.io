@@ -1,5 +1,5 @@
 ---
-title: "Learn CUTLASS the hard way - 2"
+title: "Learn CUTLASS the hard way - part 2!"
 description: >-
   Exploring Hopper Architecture and (almost) matching PyTorch/cuBLAS performance for GEMMs
 date: 2025-12-30
@@ -17,6 +17,8 @@ This is a continuation to my previous post [Learn CUTLASS the Hard Way](../learn
 For experimentation and testing the kernel performance, I used [Verda spot GPUs](https://verda.com/products) mostly. In total, I probably spent close to $40-50 in GPU credits as a mix of spot and pay-as-you-go instances. 
 
 Javascript visualizations below were created with the help of Claude Code.
+
+All the code is in the [same repo](https://github.com/gpusgobrr/explore-gemm/tree/main/cuda) as before in part 1.
 
 ## My Previous Baseline
 
@@ -47,12 +49,9 @@ Let's run our original autotuned kernel now, which hopefully should perform slig
 
 ![Autotuned Results Baseline](/assets/explore_gemms_2_hopper_baseline_autotuned.png)
 
-> It seems surprizing to me but autotuning successfully extracts ~2x performance for small GEMMs but I am assuming it is just better register use for smaller sized kernels compared to PyTorch version, which I expect to be more generic. However, it is pretty visible that the fundamental kernel implementation can't exploit H100's full potential at larger sizes, as was also shown in [Pranjal's Post on H100](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog) post. 
+> It seems surprizing to me but autotuning successfully extracts ~2x performance for small GEMMs but I am assuming it is just better register use for smaller sized kernels compared to PyTorch version, which I expect to be more generic. However, it is pretty visible that the fundamental kernel implementation can't exploit H100's full potential at larger sizes, as was also shown in [Pranjal's Post on H100](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog) post. Looking at his results the perf for our performance here for larger sizes falls somewhere in the region of "Larger Tiles"
+> ![Pranjal's Results](/assets/explore_gemms_2_pranjals_result.png)
 {: .prompt-info}
-
-Looking at his results the perf for our performance here for larger sizes falls somewhere in the region of "Larger Tiles"
-
-![Pranjal's Results](/assets/explore_gemms_2_pranjals_result.png)
 
 ## Key Changes in Hopper
 
@@ -407,7 +406,465 @@ In Ping-Pong Schedule, the tile scheduler assigns each consumer a different outp
 > We can see that we are able to overlap WGMMA and Epilogue operations across the 2 consumer warps.
 {: .prompt-tip}
 
-At this point, I expanded the kernel to support multiple kernel configuration and exposed all different kernels to python. Finally, after experimenting a bit, I landed on a ping-pong kernel with `stage_count = 5` as being the most performant. I actually saw a degradation in performance when I switched to pingpong scheduler and was not able to match the performance of Bert's results in simplegemm. But, I hadn't done any swizzling patterns and more detailed autotuning yet.
+At this point, I expanded the kernel to support multiple kernel configuration and exposed all different kernels to python. Finally, after experimenting a bit, I landed on a ping-pong kernel with `stage_count = 5` as being the most performant. 
+
+Updated code looks like below - to support multiple combination of configs, I exposed templates for different options
+
+
+```cpp
+#include <torch/torch.h>
+#include <cuda_runtime.h>
+#include "gemm_kernels.cuh"
+
+// CUTLASS 3.x includes for Hopper Collective Builder
+#include "cutlass/cutlass.h"
+#include "cutlass/numeric_types.h"
+#include "cutlass/gemm/device/gemm_universal_adapter.h"
+#include "cutlass/gemm/collective/collective_builder.hpp"
+#include "cutlass/epilogue/collective/collective_builder.hpp"
+#include "cutlass/gemm/kernel/gemm_universal.hpp"
+#include "cutlass/util/packed_stride.hpp"
+
+#include "cute/tensor.hpp"
+
+using namespace cute;
+
+// Hopper (SM90) Warp-Specialized GEMM using CUTLASS 3.x Collective Builder API
+// Demonstrates TMA (Tensor Memory Accelerator) with warp specialization
+
+// Enum to select different Hopper kernel schedules
+enum class HopperKernelType
+{
+    TmaWarpSpecialized,           // Basic TMA with warp specialization
+    TmaWarpSpecializedPersistent, // TMA with persistent scheduling
+    TmaWarpSpecializedPingpong,   // TMA with ping-pong cooperative scheduling
+    TmaWarpSpecializedStreamK     // TMA with Stream K scheduling
+};
+
+// Enum to select stage count strategy
+enum class StageCountType
+{
+    Auto,    // Automatic stage count calculation
+    Constant // Fixed stage count (5)
+};
+
+// Helper function to get kernel schedule type
+template <HopperKernelType KernelType, int TileM>
+constexpr auto get_kernel_schedule()
+{
+    // For small tiles (TileM < 128), always use basic TmaWarpSpecialized
+    if constexpr (TileM < 128)
+    {
+        return cutlass::gemm::KernelTmaWarpSpecialized{};
+    }
+    else if constexpr (KernelType == HopperKernelType::TmaWarpSpecialized)
+    {
+        return cutlass::gemm::KernelTmaWarpSpecialized{};
+    }
+    else if constexpr (KernelType == HopperKernelType::TmaWarpSpecializedPingpong)
+    {
+        return cutlass::gemm::KernelTmaWarpSpecializedPingpong{};
+    }
+    else // TmaWarpSpecializedPersistent or TmaWarpSpecializedStreamK
+    {
+        return cutlass::gemm::KernelTmaWarpSpecializedCooperative{};
+    }
+}
+
+// Helper function to get epilogue schedule type
+template <HopperKernelType KernelType>
+constexpr auto get_epilogue_schedule()
+{
+    // Persistent and StreamK variants use cooperative epilogue
+    if constexpr (KernelType == HopperKernelType::TmaWarpSpecializedPersistent ||
+                  KernelType == HopperKernelType::TmaWarpSpecializedStreamK)
+    {
+        return cutlass::epilogue::TmaWarpSpecializedCooperative{};
+    }
+    else
+    {
+        return cutlass::epilogue::TmaWarpSpecialized{};
+    }
+}
+
+// Helper function to get tile scheduler type
+template <HopperKernelType KernelType>
+constexpr auto get_tile_scheduler()
+{
+    if constexpr (KernelType == HopperKernelType::TmaWarpSpecialized)
+    {
+        return; // void - no tile scheduler
+    }
+    else if constexpr (KernelType == HopperKernelType::TmaWarpSpecializedStreamK)
+    {
+        return cutlass::gemm::StreamKScheduler{};
+    }
+    else
+    {
+        return cutlass::gemm::PersistentScheduler{};
+    }
+}
+
+// Helper function to get stage count type
+template <StageCountType StageType, typename ElementA, int Stages = 5>
+constexpr auto get_stage_count()
+{
+    // Validate: Auto requires Stages == -1, Constant requires Stages > 0
+    static_assert((StageType == StageCountType::Auto && Stages == -1) ||
+                  (StageType == StageCountType::Constant && Stages > 0),
+                  "When StageType is Auto, Stages must be -1; when Constant, Stages must be > 0");
+
+    if constexpr (StageType == StageCountType::Auto)
+    {
+        return cutlass::gemm::collective::StageCountAutoCarveout<sizeof(ElementA)>{};
+    }
+    else
+    {
+        return cutlass::gemm::collective::StageCount<Stages>{};
+    }
+}
+
+template <typename ElementType, HopperKernelType KernelType, StageCountType StageType, int NumStages = -1>
+struct CutlassHopperGemmConfig
+{
+    // Validate stage count configuration: Auto requires NumStages == -1, Constant requires NumStages > 0
+    static_assert((StageType == StageCountType::Auto && NumStages == -1) ||
+                  (StageType == StageCountType::Constant && NumStages > 0),
+                  "When StageType is Auto, NumStages must be -1; when Constant, NumStages must be > 0");
+
+    // Element types
+    using ElementA = ElementType;
+    using ElementB = ElementType;
+    using ElementC = ElementType;
+    using ElementD = ElementType;
+    using ElementAccumulator = float;
+
+    // Layouts
+    using LayoutA = cutlass::layout::RowMajor;
+    using LayoutB = cutlass::layout::RowMajor;
+    using LayoutC = cutlass::layout::RowMajor;
+    using LayoutD = cutlass::layout::RowMajor;
+
+    // Alignment (16-byte for TMA)
+    static constexpr int AlignmentA = 128 / cutlass::sizeof_bits<ElementA>::value;
+    static constexpr int AlignmentB = 128 / cutlass::sizeof_bits<ElementB>::value;
+    static constexpr int AlignmentC = 128 / cutlass::sizeof_bits<ElementC>::value;
+    static constexpr int AlignmentD = 128 / cutlass::sizeof_bits<ElementD>::value;
+
+    // Tile and cluster configuration for H100
+    static constexpr int TileM = 128;
+    // TileN depends on NumStages: use 256 if stages 1-3, otherwise 128
+    static constexpr int TileN = (StageType == StageCountType::Constant && NumStages >= 1 && NumStages <= 3) ? 256 : 128;
+    static constexpr int TileK = 64;
+
+    using TileShape = Shape<cute::Int<TileM>, cute::Int<TileN>, cute::Int<TileK>>; // CTA tile (M, N, K)
+    using ClusterShape = Shape<_2, _1, _1>;
+
+    // Select kernel schedule, epilogue schedule, tile scheduler, and stage count using constexpr if
+    using KernelSchedule = decltype(get_kernel_schedule<KernelType, TileM>());
+    using EpilogueSchedule = decltype(get_epilogue_schedule<KernelType>());
+    using TileSchedulerType = decltype(get_tile_scheduler<KernelType>());
+    using StageCount = decltype(get_stage_count<StageType, ElementA, NumStages>());
+
+    // Build mainloop collective
+    using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<
+        cutlass::arch::Sm90,
+        cutlass::arch::OpClassTensorOp,
+        ElementA, LayoutA, AlignmentA,
+        ElementB, LayoutB, AlignmentB,
+        ElementAccumulator,
+        TileShape,
+        ClusterShape,
+        StageCount,
+        KernelSchedule>::CollectiveOp;
+
+    // Build epilogue collective
+    using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
+        cutlass::arch::Sm90,
+        cutlass::arch::OpClassTensorOp,
+        TileShape,
+        ClusterShape,
+        cutlass::epilogue::collective::EpilogueTileAuto,
+        ElementAccumulator,
+        ElementAccumulator,
+        ElementC, LayoutC, AlignmentC,
+        ElementD, LayoutD, AlignmentD,
+        EpilogueSchedule>::CollectiveOp;
+
+    // Helper to create the appropriate GemmKernel type
+    template <typename Scheduler>
+    static auto make_gemm_kernel_type()
+    {
+        if constexpr (std::is_void_v<Scheduler>)
+        {
+            return cutlass::gemm::kernel::GemmUniversal<
+                Shape<int, int, int>,
+                CollectiveMainloop,
+                CollectiveEpilogue>{};
+        }
+        else
+        {
+            return cutlass::gemm::kernel::GemmUniversal<
+                Shape<int, int, int>,
+                CollectiveMainloop,
+                CollectiveEpilogue,
+                Scheduler>{};
+        }
+    }
+
+    // Assemble the kernel - different signature based on whether we have a tile scheduler
+    using GemmKernel = decltype(make_gemm_kernel_type<TileSchedulerType>());
+
+    using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
+};
+
+// Type aliases for different kernel configurations
+// TMA Warp Specialized variants
+template <typename ElementType, int NumStages = -1>
+using TmaWarpSpecializedAutoConfig = CutlassHopperGemmConfig<ElementType, HopperKernelType::TmaWarpSpecialized, StageCountType::Auto, NumStages>;
+
+template <typename ElementType, int NumStages = 5>
+using TmaWarpSpecializedConstantConfig = CutlassHopperGemmConfig<ElementType, HopperKernelType::TmaWarpSpecialized, StageCountType::Constant, NumStages>;
+
+// TMA Warp Specialized Persistent variants
+template <typename ElementType, int NumStages = -1>
+using TmaWarpSpecializedPersistentAutoConfig = CutlassHopperGemmConfig<ElementType, HopperKernelType::TmaWarpSpecializedPersistent, StageCountType::Auto, NumStages>;
+
+template <typename ElementType, int NumStages = 5>
+using TmaWarpSpecializedPersistentConstantConfig = CutlassHopperGemmConfig<ElementType, HopperKernelType::TmaWarpSpecializedPersistent, StageCountType::Constant, NumStages>;
+
+// TMA Warp Specialized Pingpong variants
+template <typename ElementType, int NumStages = -1>
+using TmaWarpSpecializedPingpongAutoConfig = CutlassHopperGemmConfig<ElementType, HopperKernelType::TmaWarpSpecializedPingpong, StageCountType::Auto, NumStages>;
+
+template <typename ElementType, int NumStages = 5>
+using TmaWarpSpecializedPingpongConstantConfig = CutlassHopperGemmConfig<ElementType, HopperKernelType::TmaWarpSpecializedPingpong, StageCountType::Constant, NumStages>;
+
+// TMA Warp Specialized Stream-K variants
+template <typename ElementType, int NumStages = -1>
+using TmaWarpSpecializedStreamKAutoConfig = CutlassHopperGemmConfig<ElementType, HopperKernelType::TmaWarpSpecializedStreamK, StageCountType::Auto, NumStages>;
+
+template <typename ElementType, int NumStages = 3>
+using TmaWarpSpecializedStreamKConstantConfig = CutlassHopperGemmConfig<ElementType, HopperKernelType::TmaWarpSpecializedStreamK, StageCountType::Constant, NumStages>;
+
+// BF16 type aliases for all 8 variants
+using BF16HopperTmaWarpSpecializedAuto = TmaWarpSpecializedAutoConfig<bfloat16_t>;
+using BF16HopperTmaWarpSpecializedConstant = TmaWarpSpecializedConstantConfig<bfloat16_t>;
+using BF16HopperTmaWarpSpecializedPersistentAuto = TmaWarpSpecializedPersistentAutoConfig<bfloat16_t>;
+using BF16HopperTmaWarpSpecializedPersistentConstant = TmaWarpSpecializedPersistentConstantConfig<bfloat16_t>;
+using BF16HopperTmaWarpSpecializedPingpongAuto = TmaWarpSpecializedPingpongAutoConfig<bfloat16_t>;
+using BF16HopperTmaWarpSpecializedPingpongConstant = TmaWarpSpecializedPingpongConstantConfig<bfloat16_t>;
+using BF16HopperTmaWarpSpecializedStreamKAuto = TmaWarpSpecializedStreamKAutoConfig<bfloat16_t>;
+using BF16HopperTmaWarpSpecializedStreamKConstant = TmaWarpSpecializedStreamKConstantConfig<bfloat16_t>;
+
+// Helper to check if scheduler is Stream-K
+template <typename Scheduler>
+struct is_streamk_scheduler : std::false_type {};
+
+template <>
+struct is_streamk_scheduler<cutlass::gemm::StreamKScheduler> : std::true_type {};
+
+template <typename Config>
+cudaError_t cutlass_hopper_gemm_launch(
+    int M, int N, int K,
+    const typename Config::ElementA *d_A, int lda,
+    const typename Config::ElementB *d_B, int ldb,
+    typename Config::ElementD *d_D, int ldd,
+    cudaStream_t stream = nullptr)
+{
+    if (M == 0 || N == 0 || K == 0)
+        return cudaSuccess;
+
+    typename Config::Gemm gemm_op;
+
+    // Problem size (non-batched GEMM)
+    auto problem_shape = make_shape(M, N, K);
+
+    // Stride types for row-major layouts
+    using StrideA = typename Config::GemmKernel::StrideA;
+    using StrideB = typename Config::GemmKernel::StrideB;
+    using StrideC = typename Config::GemmKernel::StrideC;
+    using StrideD = typename Config::GemmKernel::StrideD;
+
+    auto stride_A = cutlass::make_cute_packed_stride(StrideA{}, {M, K, 1});
+    auto stride_B = cutlass::make_cute_packed_stride(StrideB{}, {K, N, 1});
+    auto stride_C = cutlass::make_cute_packed_stride(StrideC{}, {M, N, 1});
+    auto stride_D = cutlass::make_cute_packed_stride(StrideD{}, {M, N, 1});
+
+    // Hardware info
+    cutlass::KernelHardwareInfo hw_info;
+    hw_info.device_id = 0;
+    hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(hw_info.device_id);
+
+    // Hard-coded alpha = 1.0, beta = 0.0
+    float alpha = 1.0f;
+    float beta = 0.0f;
+
+    // Create arguments - different for Stream-K vs other schedulers
+    typename Config::Gemm::Arguments args = [&]() {
+        if constexpr (is_streamk_scheduler<typename Config::TileSchedulerType>::value)
+        {
+            // Stream-K scheduler requires additional arguments
+            using DecompositionMode = typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90StreamKParams::DecompositionMode;
+
+            // Stream-K decomposition mode
+            DecompositionMode decomp = DecompositionMode::StreamK;
+
+            // Number of splits (1 for default Stream-K behavior)
+            int splits = 1;
+
+            // Scheduler arguments: splits, swizzle_mode, raster_order, decomposition_mode
+            typename Config::GemmKernel::TileScheduler::Arguments scheduler_args{
+                splits,
+                static_cast<int>(cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90::RasterOrder::AlongN),
+                cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90::RasterOrderOptions::Heuristic,
+                decomp
+            };
+
+            return typename Config::Gemm::Arguments{
+                cutlass::gemm::GemmUniversalMode::kGemm,
+                problem_shape,
+                {d_A, stride_A, d_B, stride_B},                // Mainloop args
+                { {alpha, beta}, d_D, stride_C, d_D, stride_D}, // Epilogue args
+                hw_info,
+                scheduler_args                                  // Stream-K scheduler args
+            };
+        }
+        else if constexpr (std::is_void_v<typename Config::TileSchedulerType>)
+        {
+            // No tile scheduler (basic TMA Warp Specialized)
+            return typename Config::Gemm::Arguments{
+                cutlass::gemm::GemmUniversalMode::kGemm,
+                problem_shape,
+                {d_A, stride_A, d_B, stride_B},                // Mainloop args
+                { {alpha, beta}, d_D, stride_C, d_D, stride_D}, // Epilogue args
+                hw_info
+            };
+        }
+        else
+        {
+            // Persistent scheduler (no additional args needed beyond hw_info)
+            return typename Config::Gemm::Arguments{
+                cutlass::gemm::GemmUniversalMode::kGemm,
+                problem_shape,
+                {d_A, stride_A, d_B, stride_B},                // Mainloop args
+                { {alpha, beta}, d_D, stride_C, d_D, stride_D}, // Epilogue args
+                hw_info
+            };
+        }
+    }();
+
+    // Check if the problem size is supported
+    cutlass::Status status = gemm_op.can_implement(args);
+    if (status != cutlass::Status::kSuccess)
+    {
+        return cudaErrorNotSupported;
+    }
+
+    // Initialize the kernel
+    size_t workspace_size = Config::Gemm::get_workspace_size(args);
+    void *workspace = nullptr;
+
+    if (workspace_size > 0)
+    {
+        cudaError_t result = cudaMalloc(&workspace, workspace_size);
+        if (result != cudaSuccess)
+            return result;
+    }
+
+    status = gemm_op.initialize(args, workspace, stream);
+    if (status != cutlass::Status::kSuccess)
+    {
+        if (workspace)
+            cudaFree(workspace);
+        return cudaErrorUnknown;
+    }
+
+    // Run the kernel
+    status = gemm_op.run(stream);
+
+    // Free workspace
+    if (workspace)
+        cudaFree(workspace);
+
+    if (status != cutlass::Status::kSuccess)
+        return cudaErrorUnknown;
+
+    return cudaSuccess;
+}
+
+template <typename Config, typename TorchType>
+void cutlass_hopper_gemm_pytorch_wrapper(
+    const torch::Tensor &matrix_a,
+    const torch::Tensor &matrix_b,
+    torch::Tensor &output_matrix,
+    const char *dtype_name,
+    const at::ScalarType expected_type)
+{
+    // Validate input tensors
+    TORCH_CHECK(matrix_a.device().is_cuda(), "Matrix A must be on CUDA device");
+    TORCH_CHECK(matrix_b.device().is_cuda(), "Matrix B must be on CUDA device");
+    TORCH_CHECK(output_matrix.device().is_cuda(), "Output matrix must be on CUDA device");
+
+    TORCH_CHECK(matrix_a.scalar_type() == expected_type, "Matrix A must be ", dtype_name);
+    TORCH_CHECK(matrix_b.scalar_type() == expected_type, "Matrix B must be ", dtype_name);
+    // TORCH_CHECK(output_matrix.scalar_type() == at::kFloat, "Output matrix must be float32");
+
+    TORCH_CHECK(matrix_a.dim() == 2 && matrix_b.dim() == 2, "A and B must be 2D tensors");
+    TORCH_CHECK(matrix_a.is_contiguous() && matrix_b.is_contiguous(),
+                "Input tensors must be contiguous for alignment requirements");
+    TORCH_CHECK(output_matrix.is_contiguous(), "Output tensor must be contiguous");
+
+    // Extract dimensions
+    const int M = static_cast<int>(matrix_a.size(0));
+    const int K = static_cast<int>(matrix_a.size(1));
+    const int N = static_cast<int>(matrix_b.size(1));
+
+    TORCH_CHECK(matrix_b.size(0) == K, "Matrix dimension mismatch");
+    TORCH_CHECK(output_matrix.size(0) == M && output_matrix.size(1) == N,
+                "Output matrix has wrong shape");
+
+    // Check alignment requirements (16-byte alignment for TMA)
+    TORCH_CHECK(reinterpret_cast<uintptr_t>(matrix_a.data_ptr()) % 16 == 0,
+                "Matrix A must be 16-byte aligned for Hopper TMA");
+    TORCH_CHECK(reinterpret_cast<uintptr_t>(matrix_b.data_ptr()) % 16 == 0,
+                "Matrix B must be 16-byte aligned for Hopper TMA");
+    TORCH_CHECK(reinterpret_cast<uintptr_t>(output_matrix.data_ptr()) % 16 == 0,
+                "Output matrix must be 16-byte aligned for Hopper TMA");
+
+    // Get device pointers
+    const auto *d_A =
+        reinterpret_cast<const typename Config::ElementA *>(matrix_a.data_ptr<TorchType>());
+    const auto *d_B =
+        reinterpret_cast<const typename Config::ElementB *>(matrix_b.data_ptr<TorchType>());
+    auto *d_D = reinterpret_cast<typename Config::ElementD *>(output_matrix.data_ptr<TorchType>());
+
+    int lda = K;
+    int ldb = N;
+    int ldd = N;
+
+    cudaStream_t stream = nullptr;
+
+    // Launch CUTLASS Hopper GEMM (alpha=1.0, beta=0.0 hard-coded)
+    const cudaError_t err = cutlass_hopper_gemm_launch<Config>(
+        M, N, K, d_A, lda, d_B, ldb, d_D, ldd, stream);
+
+    // Synchronize to catch any kernel launch errors
+    if (err == cudaSuccess) {
+        cudaError_t sync_err = cudaDeviceSynchronize();
+        TORCH_CHECK(sync_err == cudaSuccess,
+                    "CUTLASS Hopper GEMM (", dtype_name, ") kernel execution failed: ",
+                    cudaGetErrorString(sync_err));
+    }
+
+    TORCH_CHECK(err == cudaSuccess,
+                "CUTLASS Hopper GEMM (", dtype_name, ") launch failed: ", cudaGetErrorString(err));
+}
+
+// skipping the individual kernel wrappers since those looks pretty much the same 
+```
+
+On benchmarks, I actually saw a degradation in performance when I switched to pingpong scheduler and was not able to match the performance of Bert's results in simplegemm. But, I hadn't done any swizzling patterns and more detailed autotuning yet so I figured to push the performance further I needed add those in. But anyhow, here are the results where we can barely hit 400 TFLOPs for 8192 batch sizes.
 
 ![Ping Pong Constant Results](/assets/explore_gemms_pingpong_persistent_constant_results.png)
 
@@ -429,7 +886,9 @@ For more details, see [prior work from Colfax Research](https://research.colfax-
 
 Source: [CUTLASS Tutorial: Persistent Kernels and Stream-K](https://research.colfax-intl.com/cutlass-tutorial-persistent-kernels-and-stream-k/)
 
-#### Data-Parallel Approach
+So how do we solve this?
+
+### Data-Parallel Approach
 
 The most direct solution is to reduce tile size and creating more work units to fill partial waves. In our 4 SM example above, this would create 18 tiles instead of 9, improving utilization from 75% to 90%. However, smaller tiles degrade efficiency due to loss of arithmetic intensity (refer to tiling sections from prevous post). In essense, this will reduce latency-hiding opportunities for the warp scheduler. Hence, While data-parallel tiling improves wave balance, the per-tile performance loss often negates any gains.
 
@@ -463,7 +922,7 @@ For more details and in-depth discussion refer to [CUTLASS Tutorial: Persistent 
 
 ### Performance Results
 
-We are able to break into the 500+ TFLOPs now. I had to reduce the stage count to 3 to get the best performance for 8192 batch sizes with stream-K enabled. We can see the performance degraded for some smaller batch sizes. In the next few section, we will do a full autotune to get those sorted out.
+We are able to break into the 500+ TFLOPs now. I had to reduce the stage count to 3 to get the best performance for 8192 batch sizes with stream-K enabled. We can see the performance degraded for some smaller batch sizes. In the next few sections, we will do a full autotune to get those sorted out.
 
 ![Stream K Results](/assets/explore_gemms_2_streamk_constant_stages_3.png)
 
@@ -561,7 +1020,7 @@ The visualization below allows you to explore these configurations in detail. Se
 
 ## Final Thoughts
 
-We covered a lot in this post but I tried to keep this a shorter than the previous post. We discussed variety so special architectural features that were introduced in Hopper that Blackwell built on. Overall, I was a bit time constraint so it took me a while to put this together. Hopefully, I will get to some fp8/fp4 kernels next on Hopper/Blackwell but for now this will do! I have compiled a bunch of resources below that I found useful
+We covered a lot in this post but I tried to keep this a shorter than the previous post. We discussed variety of special architectural features that were introduced in Hopper. Blackwell generation GPUs built on these fundamental features. Overall, I was a bit time constraint so it took me a while to put this together. Hopefully, I will get to some fp8/fp4 kernels next on Hopper/Blackwell but for now this will do! I have compiled a bunch of resources below that I found useful. 
 
 ## Resources
 
