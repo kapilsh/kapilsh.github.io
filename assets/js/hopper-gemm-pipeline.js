@@ -4452,3 +4452,406 @@ document.addEventListener('DOMContentLoaded', () => {
         new HopperResultsExplorer('hopper-results-explorer');
     }
 });
+
+// ============================================================================
+// YOLO Benchmark Results Interactive Charts with Plotly
+// ============================================================================
+
+class BenchmarkChartsManager {
+    constructor() {
+        this.data = null;
+        this.pytorchData = {
+            64: 0.02069993676659908,
+            96: 0.07139573748566991,
+            128: 0.16771848717623417,
+            256: 1.3530012514633205,
+            512: 10.894296327637464,
+            768: 35.97401791627472,
+            1024: 84.30761729186132,
+            1536: 246.45529145304488,
+            2048: 413.29554556148776,
+            3072: 627.7288305990529,
+            4096: 722.5111130154563,
+            6144: 709.0085919418082, // Interpolated between 4096 and 8192
+            8192: 695.50607086816
+        };
+    }
+
+    async init() {
+        await this.loadPlotly();
+        await this.loadData();
+        this.createSwizzleRasterChart();
+        this.createModeChart();
+        this.createFinalBestChart();
+    }
+
+    async loadPlotly() {
+        if (typeof Plotly !== 'undefined') return;
+
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = 'https://cdn.plot.ly/plotly-2.27.0.min.js';
+            script.onload = resolve;
+            script.onerror = reject;
+            document.head.appendChild(script);
+        });
+    }
+
+    async loadData() {
+        try {
+            const response = await fetch('/assets/data/hopper_results_h100.csv');
+            const csvText = await response.text();
+            this.data = this.parseCSV(csvText);
+            console.log('Loaded', this.data.length, 'benchmark results');
+        } catch (error) {
+            console.error('Failed to load benchmark data:', error);
+        }
+    }
+
+    parseCSV(csv) {
+        const lines = csv.trim().split('\n');
+        const headers = lines[0].split(',');
+        return lines.slice(1).map(line => {
+            const values = line.split(',');
+            const obj = {};
+            headers.forEach((header, i) => {
+                const val = values[i];
+                obj[header] = isNaN(val) ? val : parseFloat(val);
+            });
+            return obj;
+        });
+    }
+
+    getUniqueMatrixSizes() {
+        return [...new Set(this.data.map(d => d.M))].sort((a, b) => a - b);
+    }
+
+    createSwizzleRasterChart() {
+        const container = document.getElementById('swizzle-raster-chart');
+        if (!container) return;
+
+        const matrixSizes = this.getUniqueMatrixSizes();
+
+        // Get best TFLOPS for each size
+        const bestBySize = {};
+        matrixSizes.forEach(size => {
+            const sizeData = this.data.filter(d => d.M === size);
+            bestBySize[size] = Math.max(...sizeData.map(d => d.TFLOPS));
+        });
+
+        const rasterColors = {
+            'Heuristic': '#8b5cf6',
+            'Along N': '#ec4899',
+            'Along M': '#06b6d4'
+        };
+
+        this.renderPlotlyChart(
+            'swizzle-raster-chart',
+            'Rasterization & Swizzle Strategy Performance',
+            matrixSizes,
+            bestBySize,
+            this.data,
+            (d) => d.Raster,
+            rasterColors,
+            (d) => `Size: ${d.M}³<br>TFLOPS: ${d.TFLOPS.toFixed(2)}<br>Raster: ${d.Raster}<br>Swizzle: ${d.Swizzle}<br>Decomp: ${d.Decomposition}<br>Splits: ${d.Splits}`
+        );
+    }
+
+    createModeChart() {
+        const container = document.getElementById('mode-chart');
+        if (!container) return;
+
+        const matrixSizes = this.getUniqueMatrixSizes();
+
+        const bestBySize = {};
+        matrixSizes.forEach(size => {
+            const sizeData = this.data.filter(d => d.M === size);
+            bestBySize[size] = Math.max(...sizeData.map(d => d.TFLOPS));
+        });
+
+        const decompColors = {
+            'Heuristic': '#f59e0b',
+            'StreamK': '#10b981',
+            'SplitK': '#3b82f6',
+            'DataParallel': '#ef4444'
+        };
+
+        this.renderPlotlyChart(
+            'mode-chart',
+            'Decomposition Mode & Split Strategy Performance',
+            matrixSizes,
+            bestBySize,
+            this.data,
+            (d) => d.Decomposition,
+            decompColors,
+            (d) => `Size: ${d.M}³<br>TFLOPS: ${d.TFLOPS.toFixed(2)}<br>Decomposition: ${d.Decomposition}<br>Splits: ${d.Splits}<br>Raster: ${d.Raster}<br>Swizzle: ${d.Swizzle}`
+        );
+    }
+
+    createFinalBestChart() {
+        const container = document.getElementById('final-best-chart');
+        if (!container) return;
+
+        const matrixSizes = this.getUniqueMatrixSizes();
+
+        const bestBySize = {};
+        matrixSizes.forEach(size => {
+            const sizeData = this.data.filter(d => d.M === size);
+            bestBySize[size] = Math.max(...sizeData.map(d => d.TFLOPS));
+        });
+
+        const grayColors = {
+            'All Configs': '#6b7280'
+        };
+
+        this.renderPlotlyChart(
+            'final-best-chart',
+            'Best Performance Across All Configurations',
+            matrixSizes,
+            bestBySize,
+            this.data,
+            () => 'All Configs',
+            grayColors,
+            (d) => `Size: ${d.M}³<br>TFLOPS: ${d.TFLOPS.toFixed(2)}<br>Raster: ${d.Raster}<br>Swizzle: ${d.Swizzle}<br>Decomposition: ${d.Decomposition}<br>Splits: ${d.Splits}`
+        );
+    }
+
+    renderPlotlyChart(containerId, chartTitle, matrixSizes, bestBySize, data, groupKeyFn, colors, hoverTextFn) {
+        const traces = [];
+
+        // Group data by color key
+        const groupedData = {};
+        data.forEach(d => {
+            const key = groupKeyFn(d);
+            if (!groupedData[key]) {
+                groupedData[key] = [];
+            }
+            groupedData[key].push(d);
+        });
+
+        // Create scatter traces for each group
+        Object.entries(groupedData).forEach(([key, points]) => {
+            const color = colors[key] || '#6b7280';
+            traces.push({
+                x: points.map(d => d.M),
+                y: points.map(d => d.TFLOPS),
+                mode: 'markers',
+                type: 'scatter',
+                name: key,
+                marker: {
+                    color: color,
+                    size: 6,
+                    opacity: 0.6,
+                    line: {
+                        color: color,
+                        width: 1
+                    }
+                },
+                hovertemplate: points.map(d => hoverTextFn(d) + '<extra></extra>'),
+                showlegend: true
+            });
+        });
+
+        // PyTorch line
+        traces.push({
+            x: matrixSizes,
+            y: matrixSizes.map(size => this.pytorchData[size]),
+            mode: 'lines+markers',
+            type: 'scatter',
+            name: 'PyTorch',
+            line: {
+                color: '#22c55e',
+                width: 3,
+                dash: 'dash'
+            },
+            marker: {
+                color: '#22c55e',
+                size: 8,
+                symbol: 'diamond'
+            },
+            hovertemplate: matrixSizes.map(size =>
+                `Size: ${size}³<br>PyTorch: ${this.pytorchData[size].toFixed(2)} TFLOPS<extra></extra>`
+            )
+        });
+
+        // Best CUTLASS line
+        traces.push({
+            x: matrixSizes,
+            y: matrixSizes.map(size => bestBySize[size]),
+            mode: 'lines+markers',
+            type: 'scatter',
+            name: 'Best CUTLASS',
+            line: {
+                color: '#ffffff',
+                width: 3
+            },
+            marker: {
+                color: '#ffffff',
+                size: 10,
+                symbol: 'circle',
+                line: {
+                    color: '#8b5cf6',
+                    width: 2
+                }
+            },
+            hovertemplate: matrixSizes.map(size => {
+                const percentage = ((bestBySize[size] / this.pytorchData[size]) * 100).toFixed(1);
+                return `Size: ${size}³<br>Best CUTLASS: ${bestBySize[size].toFixed(2)} TFLOPS<br>vs PyTorch: ${percentage}%<extra></extra>`;
+            }),
+            text: matrixSizes.map(size => {
+                const percentage = ((bestBySize[size] / this.pytorchData[size]) * 100).toFixed(0);
+                return `${bestBySize[size].toFixed(0)} (${percentage}%)`;
+            }),
+            textposition: 'top center',
+            textfont: {
+                color: '#ffffff',
+                size: 11,
+                family: 'monospace'
+            },
+            mode: 'lines+markers+text'
+        });
+
+        // Percentage line on secondary axis
+        traces.push({
+            x: matrixSizes,
+            y: matrixSizes.map(size => (bestBySize[size] / this.pytorchData[size]) * 100),
+            mode: 'lines',
+            type: 'scatter',
+            name: '% of PyTorch',
+            yaxis: 'y2',
+            line: {
+                color: '#fbbf24',
+                width: 2,
+                dash: 'dot'
+            },
+            hovertemplate: matrixSizes.map(size => {
+                const percentage = ((bestBySize[size] / this.pytorchData[size]) * 100).toFixed(1);
+                return `Size: ${size}³<br>Performance: ${percentage}% of PyTorch<extra></extra>`;
+            }),
+            showlegend: true
+        });
+
+        const layout = {
+            title: {
+                text: chartTitle,
+                font: {
+                    size: 18,
+                    color: '#fff',
+                    family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+                },
+                x: 0.5,
+                xanchor: 'center'
+            },
+            xaxis: {
+                title: {
+                    text: 'Matrix Size (M³)',
+                    font: { color: '#9ca3af', size: 14 }
+                },
+                type: 'log',
+                tickvals: matrixSizes,
+                ticktext: matrixSizes.map(s => `${s}³`),
+                gridcolor: '#374151',
+                color: '#e5e7eb',
+                showline: true,
+                linecolor: '#4b5563',
+                linewidth: 2
+            },
+            yaxis: {
+                title: {
+                    text: 'TFLOPS',
+                    font: { color: '#9ca3af', size: 14 }
+                },
+                gridcolor: '#374151',
+                color: '#9ca3af',
+                showline: true,
+                linecolor: '#4b5563',
+                linewidth: 2
+            },
+            yaxis2: {
+                title: {
+                    text: '% of PyTorch Performance',
+                    font: { color: '#fbbf24', size: 14 }
+                },
+                overlaying: 'y',
+                side: 'right',
+                range: [0, 200],
+                tickvals: [0, 25, 50, 75, 100, 125, 150, 175, 200],
+                ticktext: ['0%', '25%', '50%', '75%', '100%', '125%', '150%', '175%', '200%'],
+                color: '#fbbf24',
+                showline: true,
+                linecolor: '#fbbf24',
+                linewidth: 2,
+                showgrid: false
+            },
+            plot_bgcolor: '#111827',
+            paper_bgcolor: '#1f2937',
+            font: {
+                color: '#e5e7eb',
+                family: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+            },
+            hovermode: 'closest',
+            showlegend: true,
+            legend: {
+                x: 0.5,
+                y: -0.15,
+                xanchor: 'center',
+                yanchor: 'top',
+                orientation: 'h',
+                bgcolor: '#1f2937',
+                bordercolor: '#4b5563',
+                borderwidth: 1,
+                font: { color: '#e5e7eb', size: 11 }
+            },
+            margin: { l: 80, r: 120, t: 80, b: 120 },
+            height: 600
+        };
+
+        const config = {
+            responsive: true,
+            displayModeBar: true,
+            displaylogo: false,
+            modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+            toImageButtonOptions: {
+                format: 'png',
+                filename: containerId,
+                height: 800,
+                width: 1200,
+                scale: 2
+            }
+        };
+
+        Plotly.newPlot(containerId, traces, layout, config);
+    }
+}
+
+const benchmarkStyles = document.createElement('style');
+benchmarkStyles.textContent = `
+#swizzle-raster-chart,
+#mode-chart,
+#final-best-chart {
+    background-color: #1f2937;
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    margin: 2rem 0;
+    border: 1px solid #374151;
+}
+`;
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initBenchmarkCharts);
+} else {
+    initBenchmarkCharts();
+}
+
+async function initBenchmarkCharts() {
+    document.head.appendChild(benchmarkStyles);
+
+    const hasCharts = document.getElementById('swizzle-raster-chart') ||
+                     document.getElementById('mode-chart') ||
+                     document.getElementById('final-best-chart');
+
+    if (hasCharts) {
+        const manager = new BenchmarkChartsManager();
+        await manager.init();
+    }
+}

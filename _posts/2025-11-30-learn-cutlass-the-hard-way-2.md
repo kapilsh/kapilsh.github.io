@@ -539,15 +539,15 @@ After incorporating all the different configuration options, I ran 500+ differen
 
 First, let's look at using rasterization + swizzle strategy:
 
-![Raster and swizzle](/assets/explore_gemms_2_final_benchmark_swizzle_raster.png)
+<div id="swizzle-raster-chart"></div>
 
 Next, let's look at decomposition mode + spliting strategy:
 
-![Mode + splits](/assets/explore_gemms_2_final_benchmark_mode_.png)
+<div id="mode-chart"></div>
 
 Combining all of these:
 
-![Final Final](/assets/explore_gemms_2_final_benchmark_final_best.png)
+<div id="final-best-chart"></div>
 
 
 > At this point, we are starting to hit upto 90% of PyTorch/cublas performance!
@@ -556,16 +556,16 @@ Combining all of these:
 
 ### Performance Summary
 
-| Size | Best TFLOPS | Best Config | Avg TFLOPS | Range |
-|------|-------------|-------------|------------|-------|
-| **128³** | 0.72 | Along M, Swizzle=1, Heuristic | 0.61 | 0.43 - 0.72 |
-| **256³** | 5.24 | Heuristic, Swizzle=1, StreamK | 4.38 | 2.31 - 5.24 |
-| **512³** | 34.96 | Along N, Swizzle=1, SplitK | 30.84 | 17.14 - 34.96 |
-| **1024³** | 206.27 | Along M, Swizzle=2, DataParallel | 164.35 | 73.63 - 206.27 |
-| **2048³** | 570.82 | Along N, Swizzle=2, DataParallel | 448.29 | 250.53 - 570.82 |
-| **4096³** | 677.54 | Along N, Swizzle=1, DataParallel | 579.34 | 400.58 - 677.54 |
-| **6144³** | 653.41 | Along N, Swizzle=2, StreamK | 601.07 | 482.01 - 653.41 |
-| **8192³** | 687.68 | Along N, Swizzle=2, SplitK | 611.65 | 507.93 - 687.68 |
+| Size | Best TFLOPS | Speedup | Best Config | Avg TFLOPS | Range |
+|------|-------------|---------|-------------|------------|-------|
+| **128³** | 0.72 | 429.3% | Along M, Swizzle=1, Heuristic | 0.61 | 0.43 - 0.72 |
+| **256³** | 5.24 | 387.3% | Heuristic, Swizzle=1, StreamK | 4.38 | 2.31 - 5.24 |
+| **512³** | 34.96 | 320.9% | Along N, Swizzle=1, SplitK | 30.84 | 17.14 - 34.96 |
+| **1024³** | 206.27 | 244.7% | Along M, Swizzle=2, DataParallel | 164.35 | 73.63 - 206.27 |
+| **2048³** | 570.82 | 138.1% | Along N, Swizzle=2, DataParallel | 448.29 | 250.53 - 570.82 |
+| **4096³** | 677.54 | 93.8% | Along N, Swizzle=1, DataParallel | 579.34 | 400.58 - 677.54 |
+| **6144³** | 653.41 | 92.2% | Along N, Swizzle=2, StreamK | 601.07 | 482.01 - 653.41 |
+| **8192³** | 687.68 | 98.9% | Along N, Swizzle=2, SplitK | 611.65 | 507.93 - 687.68 |
 
 
 ### All results
