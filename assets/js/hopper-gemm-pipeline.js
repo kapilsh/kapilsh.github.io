@@ -4066,33 +4066,65 @@ class HopperResultsExplorer {
 
     async loadData() {
         try {
-            const response = await fetch('/assets/data/hopper_results_h100.csv');
-            const csvText = await response.text();
-            this.data = this.parseCSV(csvText);
+            const response = await fetch('/assets/data/autotune_hopper_cache_bfloat16.json');
+            const jsonData = await response.json();
+            this.data = this.parseJSON(jsonData);
         } catch (error) {
             console.error('Error loading data:', error);
             this.container.innerHTML = '<p style="color: red;">Error loading data</p>';
         }
     }
 
-    parseCSV(text) {
-        const lines = text.trim().split('\n');
-        const headers = lines[0].split(',');
+    parseJSON(jsonData) {
+        const results = [];
 
-        return lines.slice(1).map(line => {
-            const values = line.split(',');
-            const obj = {};
-            headers.forEach((header, i) => {
-                const value = values[i];
-                // Convert numeric fields
-                if (['M', 'N', 'K', 'Swizzle', 'Splits', 'AvgRuntime_ms', 'TFLOPS', 'WorktileCount'].includes(header)) {
-                    obj[header] = parseFloat(value);
-                } else {
-                    obj[header] = value;
+        for (const sizeResult of jsonData.results) {
+            const size = sizeResult.size;
+            const pytorchTflops = sizeResult.pytorch_tflops;
+
+            for (const config of sizeResult.all_results) {
+                if (config.status === 'success') {
+                    // Parse config name: "128x256x64_Heuristic_RasterH_Swz1_Spl1"
+                    const parts = config.config_name.split('_');
+                    const tileConfig = parts[0]; // e.g., "128x256x64"
+                    const decomposition = parts[1]; // e.g., "Heuristic", "DataParallel", "SplitK", "StreamK"
+                    const rasterPart = parts[2]; // e.g., "RasterH", "RasterN", "RasterM"
+                    const swizzlePart = parts[3]; // e.g., "Swz1", "Swz2", "Swz4", "Swz8"
+
+                    // Map raster to full names
+                    const rasterMap = {
+                        'RasterH': 'Heuristic',
+                        'RasterN': 'Along N',
+                        'RasterM': 'Along M'
+                    };
+                    const Rasterization = rasterMap[rasterPart] || rasterPart;
+                    const Swizzle = parseInt(swizzlePart.replace('Swz', ''));
+
+                    // Extract split factor if present
+                    let Splits = 1;
+                    if (parts.length > 4 && parts[4].startsWith('Spl')) {
+                        Splits = parseInt(parts[4].replace('Spl', ''));
+                    }
+
+                    results.push({
+                        M: size,
+                        N: size,
+                        K: size,
+                        TileConfig: tileConfig,
+                        Rasterization: Rasterization,
+                        Swizzle: Swizzle,
+                        Mode: decomposition,
+                        Splits: Splits,
+                        TFLOPS: config.tflops,
+                        PyTorchTFLOPS: pytorchTflops,
+                        AvgRuntime_ms: config.median_time_ms,
+                        ConfigName: config.config_name
+                    });
                 }
-            });
-            return obj;
-        });
+            }
+        }
+
+        return results;
     }
 
     getUniqueSizes() {
@@ -4398,6 +4430,7 @@ class HopperResultsExplorer {
                                 <tr>
                                     <th>Rank</th>
                                     <th>TFLOPS</th>
+                                    <th>Tile</th>
                                     <th>Raster</th>
                                     <th>Swizzle</th>
                                     <th>Decomposition</th>
@@ -4413,9 +4446,10 @@ class HopperResultsExplorer {
                                             </span>
                                         </td>
                                         <td><strong>${config.TFLOPS.toFixed(2)}</strong></td>
-                                        <td>${config.Raster}</td>
+                                        <td><code style="font-size: 0.75rem; color: #c084fc;">${config.TileConfig}</code></td>
+                                        <td>${config.Rasterization}</td>
                                         <td>${config.Swizzle}</td>
-                                        <td>${config.Decomposition}</td>
+                                        <td>${config.Mode}</td>
                                         <td>${config.Splits}</td>
                                     </tr>
                                 `).join('')}
@@ -4512,27 +4546,72 @@ class BenchmarkChartsManager {
 
     async loadData() {
         try {
-            const response = await fetch('/assets/data/hopper_results_h100.csv');
-            const csvText = await response.text();
-            this.data = this.parseCSV(csvText);
+            const response = await fetch('/assets/data/autotune_hopper_cache_bfloat16.json');
+            const jsonData = await response.json();
+            this.data = this.parseJSON(jsonData);
+            this.pytorchData = this.extractPytorchData(jsonData);
             console.log('Loaded', this.data.length, 'benchmark results');
         } catch (error) {
             console.error('Failed to load benchmark data:', error);
         }
     }
 
-    parseCSV(csv) {
-        const lines = csv.trim().split('\n');
-        const headers = lines[0].split(',');
-        return lines.slice(1).map(line => {
-            const values = line.split(',');
-            const obj = {};
-            headers.forEach((header, i) => {
-                const val = values[i];
-                obj[header] = isNaN(val) ? val : parseFloat(val);
-            });
-            return obj;
-        });
+    parseJSON(jsonData) {
+        const results = [];
+
+        for (const sizeResult of jsonData.results) {
+            const size = sizeResult.size;
+            const pytorchTflops = sizeResult.pytorch_tflops;
+
+            for (const config of sizeResult.all_results) {
+                if (config.status === 'success') {
+                    // Parse config name: "128x256x64_Heuristic_RasterH_Swz1_Spl1"
+                    const parts = config.config_name.split('_');
+                    const tileConfig = parts[0]; // e.g., "128x256x64"
+                    const decomposition = parts[1]; // e.g., "Heuristic", "DataParallel", "SplitK", "StreamK"
+                    const rasterPart = parts[2]; // e.g., "RasterH", "RasterN", "RasterM"
+                    const swizzlePart = parts[3]; // e.g., "Swz1", "Swz2", "Swz4", "Swz8"
+
+                    // Map raster to full names
+                    const rasterMap = {
+                        'RasterH': 'Heuristic',
+                        'RasterN': 'Along N',
+                        'RasterM': 'Along M'
+                    };
+                    const raster = rasterMap[rasterPart] || rasterPart;
+                    const swizzle = parseInt(swizzlePart.replace('Swz', ''));
+
+                    // Extract split factor if present
+                    let splitFactor = 1;
+                    if (parts.length > 4 && parts[4].startsWith('Spl')) {
+                        splitFactor = parseInt(parts[4].replace('Spl', ''));
+                    }
+
+                    results.push({
+                        M: size,  // Keep M for compatibility
+                        size: size,
+                        tile_config: tileConfig,
+                        rasterization: raster,
+                        swizzle: swizzle,
+                        mode: decomposition,
+                        split_k: splitFactor,
+                        TFLOPS: config.tflops,
+                        pytorch_tflops: pytorchTflops,
+                        config_name: config.config_name
+                    });
+                }
+            }
+        }
+
+        return results;
+    }
+
+    extractPytorchData(jsonData) {
+        const pytorchData = {};
+        for (const sizeResult of jsonData.results) {
+            pytorchData[sizeResult.size] = sizeResult.pytorch_tflops;
+        }
+        return pytorchData;
     }
 
     getUniqueMatrixSizes() {
@@ -4564,9 +4643,9 @@ class BenchmarkChartsManager {
             matrixSizes,
             bestBySize,
             this.data,
-            (d) => d.Raster,
+            (d) => d.rasterization,
             rasterColors,
-            (d) => `Size: ${d.M}³<br>TFLOPS: ${d.TFLOPS.toFixed(2)}<br>Raster: ${d.Raster}<br>Swizzle: ${d.Swizzle}<br>Decomp: ${d.Decomposition}<br>Splits: ${d.Splits}`
+            (d) => `Size: ${d.M}³<br>Tile: ${d.tile_config}<br>TFLOPS: ${d.TFLOPS.toFixed(2)}<br>Raster: ${d.rasterization}<br>Swizzle: ${d.swizzle}<br>Decomp: ${d.mode}<br>Splits: ${d.split_k}`
         );
     }
 
@@ -4595,9 +4674,9 @@ class BenchmarkChartsManager {
             matrixSizes,
             bestBySize,
             this.data,
-            (d) => d.Decomposition,
+            (d) => d.mode,
             decompColors,
-            (d) => `Size: ${d.M}³<br>TFLOPS: ${d.TFLOPS.toFixed(2)}<br>Decomposition: ${d.Decomposition}<br>Splits: ${d.Splits}<br>Raster: ${d.Raster}<br>Swizzle: ${d.Swizzle}`
+            (d) => `Size: ${d.M}³<br>Tile: ${d.tile_config}<br>TFLOPS: ${d.TFLOPS.toFixed(2)}<br>Decomposition: ${d.mode}<br>Splits: ${d.split_k}<br>Raster: ${d.rasterization}<br>Swizzle: ${d.swizzle}`
         );
     }
 
@@ -4625,7 +4704,7 @@ class BenchmarkChartsManager {
             this.data,
             () => 'All Configs',
             grayColors,
-            (d) => `Size: ${d.M}³<br>TFLOPS: ${d.TFLOPS.toFixed(2)}<br>Raster: ${d.Raster}<br>Swizzle: ${d.Swizzle}<br>Decomposition: ${d.Decomposition}<br>Splits: ${d.Splits}`
+            (d) => `Size: ${d.M}³<br>Tile: ${d.tile_config}<br>TFLOPS: ${d.TFLOPS.toFixed(2)}<br>Raster: ${d.rasterization}<br>Swizzle: ${d.swizzle}<br>Decomposition: ${d.mode}<br>Splits: ${d.split_k}`
         );
     }
 
@@ -4804,9 +4883,9 @@ class BenchmarkChartsManager {
                 },
                 overlaying: 'y',
                 side: 'right',
-                range: [0, 500],
-                tickvals: [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500],
-                ticktext: ['0%', '50%', '100%', '150%', '200%', '250%', '300%', '350%', '400%', '450%', '500%'],
+                range: [0, 200],
+                tickvals: [0, 25, 50, 75, 100, 125, 150, 175, 200],
+                ticktext: ['0%', '25%', '50%', '75%', '100%', '125%', '150%', '175%', '200%'],
                 color: '#fbbf24',
                 showline: true,
                 linecolor: '#fbbf24',
@@ -4834,6 +4913,7 @@ class BenchmarkChartsManager {
             },
             margin: { l: 80, r: 120, t: 80, b: 120 },
             height: 600,
+            autosize: true,
             shapes: [
                 {
                     type: 'line',
@@ -4875,11 +4955,8 @@ benchmarkStyles.textContent = `
 #swizzle-raster-chart,
 #mode-chart,
 #final-best-chart {
-    background-color: #1f2937;
-    border-radius: 0.5rem;
-    padding: 0.5rem;
     margin: 2rem 0;
-    border: 1px solid #374151;
+    width: 100%;
 }
 `;
 

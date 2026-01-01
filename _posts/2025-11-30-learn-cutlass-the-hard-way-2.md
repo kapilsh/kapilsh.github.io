@@ -975,7 +975,7 @@ What really made swizzling tick for me was reading and staring at the swizzled g
 > Few more resources on swizzling: [Simons Blog](https://veitner.bearblog.dev/swizzles-and-their-usage-in-cutedsl-kernels/), [Lei Mao's blog](https://leimao.github.io/blog/CuTe-Swizzle/), [bertmaher/simplegemm](https://github.com/bertmaher/simplegemm)
 {: .prompt-tip}
 
-Since rasterization and swizzling was the last configuration change I was going to make, I decided to just incorporate everything in an autotune script.
+Since rasterization and swizzling was the last configuration change I was going to make, I decided to just incorporate everything in an autotune script. I was also able to push the tile sizes to 128x256x64 for the larger shapes to get some speedups as well. Let's see all the results below!
 
 ## Final YOLO Autotuning Run
 
@@ -988,28 +988,37 @@ After incorporating all the different configuration options, I ran 1300+ differe
 > **NOTE: In all the kernels, we use TMA Persistent Cooperative kernels with no Ping Pong.**
 {: .prompt-info}
 
-| Size | Best TFLOPS | Speedup | Best Config | Avg TFLOPS | Range |
-|------|-------------|---------|-------------|------------|-------|
-| **128³** | 0.72 | 429.3% | Along M, Swizzle=1, Heuristic | 0.61 | 0.43 - 0.72 |
-| **256³** | 5.24 | 387.3% | Heuristic, Swizzle=1, StreamK | 4.38 | 2.31 - 5.24 |
-| **512³** | 34.96 | 320.9% | Along N, Swizzle=1, SplitK | 30.84 | 17.14 - 34.96 |
-| **1024³** | 206.27 | 244.7% | Along M, Swizzle=2, DataParallel | 164.35 | 73.63 - 206.27 |
-| **2048³** | 570.82 | 138.1% | Along N, Swizzle=2, DataParallel | 448.29 | 250.53 - 570.82 |
-| **4096³** | 677.54 | 93.8% | Along N, Swizzle=1, DataParallel | 579.34 | 400.58 - 677.54 |
-| **6144³** | 653.41 | 92.2% | Along N, Swizzle=2, StreamK | 601.07 | 482.01 - 653.41 |
-| **8192³** | 687.68 | 98.9% | Along N, Swizzle=2, SplitK | 611.65 | 507.93 - 687.68 |
+> **Cluster sizes for all kernels are 1x1x1. I did not see much speedups (if any) from 2x1x1 and keeping 1x1x1 kept the search space manageable**
+{: .prompt-warning}
+
+| Size | Best TFLOPS | Speedup | Best Config | Range |
+|------|-------------|---------|-------------|-------|
+| **128³** | 0.40 | 157.5% | 128x128x64, Heuristic, Swizzle=1, Heuristic | 0.14 - 0.40 |
+| **256³** | 2.98 | 147.9% | 128x128x64, Heuristic, Swizzle=1, Heuristic | 0.92 - 2.98 |
+| **512³** | 20.51 | 127.9% | 128x128x64, Along N, Swizzle=2, DataParallel | 7.12 - 20.51 |
+| **1024³** | 126.14 | 98.8% | 128x128x64, Heuristic, Swizzle=2, DataParallel | 11.76 - 126.14 |
+| **2048³** | 497.56 | 100.9% | 128x256x64, Along M, Swizzle=4, Heuristic | 71.32 - 497.56 |
+| **4096³** | 654.97 | 88.1% | 128x256x64, Along N, Swizzle=8, SplitK | 208.44 - 654.97 |
+| **6144³** | 672.66 | 96.5% | 128x256x64, Along N, Swizzle=1, SplitK | 280.22 - 672.66 |
+| **8192³** | 599.33 | 90.2% | 128x256x64, Heuristic, Swizzle=8, Heuristic | 312.44 - 599.33 |
 
 Below we can see the breakdowns for different configurations splits:
 
 #### Raster + Swizzle
 
+Swizzle patterns show size-dependent trade-offs where smaller shapes (128³-512³) don't benefit much from swizzling while larger matrices (4096³-8192³) benefit from aggressive swizzling paired with directional rasterization (Along M/N) to maximize L2 cache reuse and minimize bank conflicts. The transitions align with compute vs. memory-bound regimes.
+
 <div id="swizzle-raster-chart"></div>
 
 #### Splitting Strategy
 
+DataParallel dominates small-to-medium sizes (128³-1024³) where wave quantization is minimal, while SplitK/StreamK starts performing better for large matrices (4096³-6144³) to improve SM utilization. Seems like Heuristic mode offers competitive performance across all sizes by adaptively selecting between strategies so manual tuning seems to be not needed upto a fairly competitive performance.
+
 <div id="mode-chart"></div>
 
 #### Across all configs
+
+Here's all the results combined!
 
 <div id="final-best-chart"></div>
 
