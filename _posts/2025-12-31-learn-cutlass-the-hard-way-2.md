@@ -22,24 +22,17 @@ All the code is in the [same repo](https://github.com/gpusgobrr/explore-gemm/tre
 
 ## My Previous Baseline
 
-Before we jump into Hopper kernels, let's start with baselining the kernel we wrote for Ada (RTX 4090) on H100. We already had a CUTLASS kernel that we wrote in the previous post. It leveraged CUTLASS 2.x API and was primarily meant for Ada and older generation of GPUS. But, we can still run it on H100 to get a baseline performance. 
+Before we jump into Hopper kernels, let's start with baselining the kernel we wrote for Ada (RTX 4090) on H100. We already had a CUTLASS kernel that we wrote in the previous post. It leveraged CUTLASS 2.x API and was primarily meant for Ada and older generation of GPUs. But, we can still run it on H100 to get a baseline performance. 
 
 #### Baseline Performance of `kernel_cutlass`
 
 ![Baseline Perf](/assets/explore_gemms_2_hopper_baseline_perf.png)
 
-
-| Matrix Size | CUTLASS Performance | PyTorch Performance |
-|-------------|---------------------|---------------------|
-| **Small (64-1024)** | 95-320 TFLOPS (82-90% of PyTorch) | N/A |
-| **Medium (1536-3072)** | 317 TFLOPS at 3K | 686 TFLOPS at 3K |
-| **Large (4096-8192)** | 396 TFLOPS at 4K<br>375 TFLOPS at 8K | 754 TFLOPS at 4K<br>685 TFLOPS at 8K |
-
 > - **Small matrices**: Both implementations are memory-bound at smaller sizes.
 > - **Medium matrices**: Performance diverges significantly and we can see our kernel isn't leveraging H100's architectural improvements and peaks out at slighly over 300 TFLOPs
 > - **Large matrices**: The gap widens further as my previous kernels peak out at ~400 TFLOPs while PyTorch continues scaling until we hit compute boundness 
 > 
-> The performance cliff at medium-to-large matrix sizes reveals that our Ada-optimized kernel leaves significant H100 compute on the table. The hand-written implementations perform even worse.
+> The performance cliff at medium-to-large matrix sizes reveals that our Ada-optimized kernel leaves significant H100 compute on the table. The hand-written non-CUTLASS implementations perform even worse.
 {: .prompt-info}
 
 
@@ -49,7 +42,7 @@ Let's run our original autotuned kernel now, which hopefully should perform slig
 
 ![Autotuned Results Baseline](/assets/explore_gemms_2_hopper_baseline_autotuned.png)
 
-> It seems surprizing to me but autotuning successfully extracts ~2x performance for small GEMMs but I am assuming it is just better register use for smaller sized kernels compared to PyTorch version, which I expect to be more generic. However, it is pretty visible that the fundamental kernel implementation can't exploit H100's full potential at larger sizes, as was also shown in [Pranjal's Post on H100](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog) post. Looking at his results the perf for our performance here for larger sizes falls somewhere in the region of "Larger Tiles"
+> It seems surprizing to me but autotuning successfully extracts ~2x performance for small GEMMs but I am assuming it is just better register use for smaller sized kernels compared to PyTorch version, which I expect to be more generic. However, it is pretty visible that the Ada-optimized kernel implementation can't exploit H100's full potential at larger sizes, as was also shown in [Pranjal's Post on H100](https://cudaforfun.substack.com/p/outperforming-cublas-on-h100-a-worklog) post. Looking at his results the perf for our performance here for larger sizes falls somewhere in the region of "Larger Tiles"
 > ![Pranjal's Results](/assets/explore_gemms_2_pranjals_result.png)
 {: .prompt-info}
 
@@ -1030,7 +1023,7 @@ The visualization below allows you to explore these configurations in detail. Se
 
 ## Final Thoughts
 
-We covered a lot in this post but I tried to keep this a shorter than the previous post. We discussed variety of special architectural features that were introduced in Hopper. Blackwell generation GPUs built on these fundamental features. Overall, I was a bit time constraint so it took me a while to put this together. Hopefully, I will get to some fp8/fp4 kernels next on Hopper/Blackwell but for now this will do! I have compiled a bunch of resources below that I found useful. 
+We covered a lot in this post but I tried to keep this a shorter than the previous post. We discussed variety of special architectural features that were introduced in Hopper. Blackwell generation GPUs built on these fundamental features. Overall, I was a bit time constraint so it took me a while to put this together. Hopefully, I will get to some fp8/fp4 kernels next on Hopper/Blackwell but for now this will do! I have compiled a bunch of resources below that I found useful. You can almost consider this post to be a survey of a lot of techniques spread across various blogs and articles for Hopper GPUs.
 
 ## Resources
 
