@@ -14,7 +14,7 @@ This is a continuation to my previous post [Learn CUTLASS the Hard Way](../learn
 
 ## Setup
 
-For experimentation and testing the kernel performance, I used [Verda spot GPUs](https://verda.com/products) mostly. In total, I probably spent close to $40-50 in GPU credits as a mix of spot and pay-as-you-go instances. 
+For experimentation and testing the kernel performance on H100, I used [Verda GPUs](https://verda.com/products) mostly. I was able to get spot instances most of the time with $1/hr pricing.  
 
 Javascript visualizations below were created with the help of Claude Code.
 
