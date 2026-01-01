@@ -1049,8 +1049,6 @@ We covered a lot in this post but I tried to keep this a shorter than the previo
 - [NVIDIA Deep Learning Performance Guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html#wave-quant)
 - [bertmaher/simplegemm](https://github.com/bertmaher/simplegemm)
 - [ColfaxResearch/cfx-article-src](https://github.com/ColfaxResearch/cfx-article-src)
-- [Does sm120 support ...](https://github.com/NVIDIA/cutlass/issues/2766)
-- [DGX spark currently lacks ...](https://github.com/NVIDIA/dgx-spark-playbooks/issues/22)
 - [What is PermutationMNK in TiledMMA in CUTLASS 3.4 changes?](https://github.com/NVIDIA/cutlass/discussions/1345)
 [Swizzles and their usage in CuTeDSL Kernels](https://veitner.bearblog.dev/swizzles-and-their-usage-in-cutedsl-kernels/)
 [CuTe Swizzle](https://leimao.github.io/blog/CuTe-Swizzle/)
