@@ -975,12 +975,13 @@ What really made swizzling tick for me was reading and staring at the swizzled g
 > Few more resources on swizzling: [Simons Blog](https://veitner.bearblog.dev/swizzles-and-their-usage-in-cutedsl-kernels/), [Lei Mao's blog](https://leimao.github.io/blog/CuTe-Swizzle/), [bertmaher/simplegemm](https://github.com/bertmaher/simplegemm)
 {: .prompt-tip}
 
+Since rasterization and swizzling was the last configuration change I was going to make, I decided to just incorporate everything in an autotune script.
 
 ## Final YOLO Autotuning Run
 
-After incorporating all the different configuration options, I ran 670+ different combinations of kernels to get a sense of how the performance is affected by each and combination of them. 
+After incorporating all the different configuration options, I ran 1300+ different combinations of kernels to get a sense of how the performance is affected by each and combination of them. 
 
-> Overall we are able to now hit 92-99% of PyTorch performance for the larger sizes: 4096 to 8192. We can way exceed PyTorch performance for smaller batch sizes where are we are still in memory-bound regimes. 
+> Overall we are able to now hit 90% of PyTorch performance for the larger sizes: 4096 to 8192. We can way exceed PyTorch performance for smaller batch sizes where are we are still in memory-bound regimes. 
 {: .prompt-info}
 
 
