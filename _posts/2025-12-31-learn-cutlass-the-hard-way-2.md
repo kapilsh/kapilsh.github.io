@@ -1,7 +1,7 @@
 ---
 title: "Learn CUTLASS the hard way - part 2!"
 description: >-
-  Exploring Hopper Architecture and (almost) matching PyTorch/cuBLAS performance for GEMMs
+  Exploring Hopper Architecture on H100 and try to match PyTorch/cuBLAS performance for GEMMs using CUTLASS
 date: 2025-12-31
 categories: [Blog]
 tags: [Triton, CUDA, GPU, GEMM, Performance]
