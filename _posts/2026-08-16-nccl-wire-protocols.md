@@ -1,7 +1,7 @@
 ---
-title: "NCCL wire protocols: Simple, LL, and LL128"
+title: "NCCL Wire Protocols"
 description: >-
-  How NCCL's three wire protocols trade payload bytes against synchronization cost
+  How NCCL's wire protocols trade payload bytes against synchronization cost
 date: 2026-08-16
 categories: [Blog]
 tags: [NCCL, GPU, Distributed, Performance]
@@ -47,12 +47,15 @@ author: ks
 > NOTE: Mostly written by human in author's voice with some Claude assistence on research and diagrams
 {: .prompt-info}
 
-I was recently reading a [recent paper from NVidia](https://arxiv.org/pdf/2607.16100) on speed of light latency on GPU collectives. The main premise of the paper is focussed on using different wire protocols to establish low-latency NCCL collective performance baselines. I went down a rabbithole of looking at NCCL kernel selection for collectives. NCCL collective picks two things independently: an *algorithm* (Ring, Tree, CollNet, NVLS) and a *protocol* (Simple, LL, LL128). At a high level, 
+I had not written a blog post in a while. Things have been busy. More recently, I have been working on getting a deeper technical understanding of NCCL. So, I thought I might share a nugget that I was looking into couple of weeks ago. 
+
+I was reading a [recent paper from NVidia](https://arxiv.org/pdf/2607.16100) on speed of light latency on GPU collectives. The main premise of the paper is focussed on using different wire protocols to establish low-latency NCCL collective performance baselines. I went down a rabbithole of looking at NCCL kernel selection for collectives, specially for ones used with symmetric memory. 
+
+NCCL picks two things independently: an algorithm (Ring, Tree, CollNet, NVLS) and a *protocol* (Simple, LL, LL128). At a high level, 
 - algorithm decides who talks to whom
 - the protocol decides what the bytes on the wire i.e. wire protocol
 
-In the post, we will focus on the latter since choosing right low latency wire protocol is specifically critical for inference, post-training workloads of today.
-
+In the post, we will focus on the latter since choosing right low latency wire protocol are becoming specifically critical for inference and post-training workloads of today.
 
 ## Protocols
 
@@ -183,22 +186,21 @@ NCCL's tuning model picks per (algorithm, protocol, message size, topology) from
 
 ## Fenceless synchronization
 
-LL and LL128 are the same idea at two granularities, so it's worth describing the mechanism once rather than twice.
+LL and LL128 are the same idea. So let's describe the mechanism in more detail.
 
-The problem both are solving: a receiver needs to know that a producer's data stores have landed before it reads them. The classic answer is Simple's — order the stores with a fence, then publish a separate flag, and have the consumer spin on that flag. The fence is what makes it correct and also what makes it slow.
+Over a gpu-gpu connection, receiver needs to know that a producer's data stores have landed before it reads them. Simplext answer to this is to order the stores with a fence, then publish a flag, and have the consumer spin on that flag. However, this barrier can account of significant portion of latency when used with small messages. 
 
-The LL family's answer is to **make the flag and the data the same store**. If the hardware guarantees that a store of size *N* becomes visible atomically — all of it or none of it — then a flag placed inside that same *N* bytes cannot be observed before the data it accompanies. There is nothing left to order, so there is nothing to fence.
+Instead of using a barrier, LL family makes the flag and the data the same store. If the hardware guarantees that a store of size N (16 in LL and 128 in LL128) is atomic, then a flag placed within those bytes can be atomically observed with a guarantee of no-race conditions. 
 
-That reduces the whole protocol to one question: what's the largest store width the interconnect makes atomic?
+- **8 bytes** is architecturally guaranteed for naturally-aligned accesses
+- **128 bytes** holds on NVLink i.e. LL128
 
-- **8 bytes** is architecturally guaranteed for naturally-aligned accesses. That's LL, and it costs you 4 of every 8 bytes.
-- **128 bytes** holds on NVLink. That's LL128, and it costs you 8 of every 128.
+> **How are flags propagated?**
+> 
+> The store is remote i.e. it crosses over fabric into the peer's receive buffer. The poll is always local i.e. each rank spins on its own buffer.
+{: .prompt-info}
 
-Everything else about the two protocols follows from that number.
-
-### What the poll actually touches
-
-The store is remote — it crosses the fabric into the peer's receive buffer. The poll is always local: each rank spins on its own buffer, never on a remote address.
+Flag value that is exchanged is a step counter or an epoch and receiver compares against an expected value rather of that epoch. A boolean flag would require zeroing the buffer between steps, which would reintroduce the ordering problem the protocol tries to eliminate. There is a ???recent PR??? in PyTorch where we implement similar epoch based barrier in symmetric memory. Below diagram shwos this mechanism for a 4-rank NVL connection.
 
 <svg class="nccl-fig" viewBox="0 0 680 470" role="img" xmlns="http://www.w3.org/2000/svg"><title>LL128 flag polling across four NVLink-connected GPUs</title><desc>Four GPUs at the corners of an NVLink fabric, joined by matching right-angled connectors. Each holds a receive buffer of four data words plus a flag word. One GPU stores a 128-byte line directly into a peer's receive buffer over NVLink; the peer spins on its own local flag word and treats the preceding data as valid once the flag matches.</desc>
 <defs><marker id="nccl-arrow-4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="var(--n-coral)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
@@ -242,19 +244,10 @@ The store is remote — it crosses the fabric into the peer's receive buffer. Th
 <text class="ts" x="340" y="442" text-anchor="middle">the flag rides in the same line as the data it guards — the poll never leaves local memory</text>
 </svg>
 
-### Three details the picture compresses
+### Further Reading and Sources
 
-**The flag value is a step counter, not a boolean.** NCCL writes `flag = step`, derived from the slot index, so the receiver compares against an *expected* value rather than testing for non-zero. That's what makes buffer reuse safe without a reset pass between steps: a stale line left over from step *N−1* simply doesn't match the value the poller wants for step *N*. A boolean flag would require zeroing the buffer between steps, which would reintroduce exactly the ordering problem the protocol just eliminated.
+Here are some papars and sources I enjoyed reading when I was researching this topic.
 
-**The poll is a volatile load in a tight loop.** The LL128 receive path uses `ld.volatile.global.v4.u32`-class loads so the compiler can't hoist the read out of the loop and the value isn't served from a stale register. Only after the flag word matches does the warp consume the other 15 words of the line.
-
-**Every rank is doing both jobs at once.** In a ring or tree allreduce each rank is simultaneously storing into its successor's buffer and spinning on lines arriving from its predecessor. What the diagram shows as a single arrow is really four concurrent producer/consumer pairs sharing the fabric.
-
-### Reading the source
-
-The two implementations live side by side and the structural difference between them is almost entirely line geometry:
-
-- `nccl/src/device/prims_ll.h` — the 8-byte variant
-- `nccl/src/device/prims_ll128.h` — `recvReduceSendCopy`, and the `LL128_LINEELEMS` / `LL128_DATAELEMS` split
-
-Worth reading in that order. Once you've seen how the 4+4 split works in `prims_ll.h`, LL128 reads as the same state machine with a different constant, plus the extra bookkeeping needed because 15 doesn't divide evenly into anything convenient.
+- [Demystifying NCCL papar](https://arxiv.org/abs/2507.04786)
+- [Every microsecond matters paper](https://arxiv.org/abs/2607.16100)
+- [NCCL repo](https://github.com/nvidia/nccl)
