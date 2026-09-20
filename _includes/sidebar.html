@@ -46,22 +46,29 @@
         </li>
         <!-- .nav-item -->
       {% endfor %}
-      <!-- standalone apps: served from this domain at /<repo>/ by their own
-           repo's Pages build, so the path is used as-is, not via relative_url.
-           li.nav-item already pads 1.5rem each side, so the rule lines up with
-           the links; the colour is the theme's own, so it tracks light/dark. -->
+      <!-- Standalone apps. Each lives in its own repo, published as its own
+           GitHub Pages project site, so it is NOT part of this _site build.
+           These are absolute URLs on the canonical domain (the one in CNAME)
+           on purpose: as root-relative paths, htmlproofer in the Build and
+           Deploy workflow reports them as broken internal links, since it
+           resolves internal links against _site. As external links they are
+           skipped by that job's --disable-external.
+
+           The divider sits inside a nav-item, which already pads 1.5rem each
+           side, so it lines up with the links; the colour is the theme's own
+           variable, so it follows the light/dark toggle. -->
       <li class="nav-item" aria-hidden="true">
         <hr style="margin: 0.5rem 0; border-top: 1px solid var(--sidebar-border-color)">
       </li>
-      <li class="nav-item{% if page.url == '/shardlock/' %}{{ " active" }}{% endif %}">
-        <a href="/shardlock/" class="nav-link">
+      <li class="nav-item">
+        <a href="https://www.kapilsharma.dev/shardlock/" class="nav-link">
           <i class="fa-fw fas fa-layer-group"></i>
           <span>SHARDLOCK</span>
         </a>
       </li>
       <!-- .nav-item -->
-      <li class="nav-item{% if page.url == '/perfessor/' %}{{ " active" }}{% endif %}">
-        <a href="/perfessor/" class="nav-link">
+      <li class="nav-item">
+        <a href="https://www.kapilsharma.dev/perfessor/" class="nav-link">
           <i class="fa-fw fas fa-gauge-high"></i>
           <span>PERFESSOR</span>
         </a>
