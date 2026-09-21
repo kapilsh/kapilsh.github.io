@@ -3,11 +3,10 @@
 Source for **[www.kapilsharma.dev](https://www.kapilsharma.dev)** — my website and technical blog,
 mostly GPUs, PyTorch internals, and whatever I'm reading about kernels that week.
 
-Built with [Jekyll](https://jekyllrb.com/) and the
-[Chirpy](https://github.com/cotes2020/jekyll-theme-chirpy) theme (consumed as the
-`jekyll-theme-chirpy` gem, not a forked copy), deployed to GitHub Pages.
+Built with [Jekyll](https://jekyllrb.com/), deployed to GitHub Pages. The theme
+comes from a gem named in the `Gemfile` rather than being vendored into the repo.
 
-The theme is **pinned to an exact version** in the `Gemfile`. `Gemfile.lock` is
+The theme gem is **pinned to an exact version** there. `Gemfile.lock` is
 gitignored, so CI re-resolves dependencies on every build; with a floating
 constraint the gem drifted while the `_includes/` overrides stayed on an old
 copy, which is how a dead mode-toggle button shipped as an empty circle. Bump the
@@ -15,9 +14,9 @@ pin and re-diff the overrides in the same commit, never separately.
 
 ## Run it locally
 
-Needs **Ruby >= 3.1** (chirpy 7.1+ requires it; the distro Ruby on Ubuntu 22.04 is
-3.0 and will fail to resolve). `rbenv install 3.3.x` if `bundle install` complains
-about the Ruby version.
+Needs **Ruby >= 3.1** (the theme gem requires it; the distro Ruby on Ubuntu 22.04
+is 3.0 and will fail to resolve). `rbenv install 3.3.x` if `bundle install`
+complains about the Ruby version.
 
 ```bash
 bundle install
@@ -55,7 +54,7 @@ bundle exec htmlproofer _site --disable-external \
 
 ## Writing a post
 
-Drop a file in `_posts/` named `YYYY-MM-DD-slug.md` with Chirpy front matter:
+Drop a file in `_posts/` named `YYYY-MM-DD-slug.md` with the usual front matter:
 
 ```yaml
 ---
@@ -77,14 +76,15 @@ saying what was changed and why — the rule is to keep the diff against the gem
 possible and **re-diff after any theme upgrade**:
 
 ```bash
-diff "$(bundle exec ruby -e 'puts Gem.loaded_specs["jekyll-theme-chirpy"].full_gem_path')/_includes/sidebar.html" _includes/sidebar.html
+theme=$(sed -n 's/^gem "\([^"]*\)".*/\1/p' Gemfile | head -1)
+diff "$(bundle info "$theme" --path)/_includes/sidebar.html" _includes/sidebar.html
 ```
 
 - **`sidebar.html`** — defines the `#ks-mark` brand SVG (used here and by `topbar.html`), swaps it
   in for the home icon, and adds the standalone-app links below the tab list.
 - **`topbar.html`** — puts the brand mark before the breadcrumb and the mobile title.
-- **`footer.html`** — drops the "Powered by Jekyll with Chirpy theme" paragraph,
-  leaving only the copyright line.
+- **`footer.html`** — drops the trailing "powered by" paragraph, leaving only the
+  copyright line.
 
 ## Standalone apps
 
