@@ -1,4 +1,11 @@
 <!-- The Footer -->
+<!--
+  Overrides jekyll-theme-chirpy 7.6.0's _includes/footer.html. Only change vs.
+  the gem's copy: the "Powered by Jekyll with Chirpy theme" paragraph is
+  dropped, leaving just the copyright line.
+  Tracks the theme version pinned in the Gemfile; re-diff on every bump.
+-->
+
 
 <footer
   aria-label="Site Info"
@@ -12,17 +19,17 @@
     <time>{{ 'now' | date: '%Y' }}</time>
 
     {% if site.social.links %}
-    <a href="{{ site.social.links[0] }}">{{ site.social.name }}</a>.
+      <a href="{{ site.social.links[0] }}">{{ site.social.name }}</a>.
     {% else %}
-    <em class="fst-normal">{{ site.social.name }}</em>.
+      <em class="fst-normal">{{ site.social.name }}</em>.
     {% endif %}
 
     {% if site.data.locales[include.lang].copyright.brief %}
-    <span
-      data-bs-toggle="tooltip"
-      data-bs-placement="top"
-      title="{{ site.data.locales[include.lang].copyright.verbose }}"
-    >
+      <span
+        data-bs-toggle="tooltip"
+        data-bs-placement="top"
+        title="{{ site.data.locales[include.lang].copyright.verbose }}"
+      >
         {{- site.data.locales[include.lang].copyright.brief -}}
       </span>
     {% endif %}

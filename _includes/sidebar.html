@@ -1,10 +1,19 @@
 <!-- The Side Bar -->
 <!--
-  Overrides jekyll-theme-chirpy 7.0.1's _includes/sidebar.html (same idea as
-  _includes/footer.html). Only change vs. the gem's copy: the two app links
-  after the tab loop. The theme builds this nav from _tabs/*.md, and these apps
-  are separate repos published as their own GitHub Pages project sites, so they
-  cannot be tabs. Re-diff against the gem after a theme upgrade.
+  Overrides jekyll-theme-chirpy 7.6.0's _includes/sidebar.html. Changes vs. the
+  gem's copy, and nothing else:
+    1. the #ks-mark brand sprite below, used here and by _includes/topbar.html;
+    2. that mark in place of the home fa-home icon;
+    3. the standalone app links after the tab loop.
+  The theme builds this nav from _tabs/*.md, and those apps are separate repos
+  published as their own GitHub Pages project sites, so they cannot be tabs.
+
+  This file tracks the EXACT theme version pinned in the Gemfile. The theme's
+  CSS and JS are built from the gem, so an override copied from an older version
+  silently rots -- 7.0.1's single-button #mode-toggle survived here until 7.6.0's
+  CSS, which hides any `#mode-toggle > i` without a data-theme-mode attribute,
+  left the button rendering as an empty circle. Re-diff on every theme bump:
+    diff "$(bundle exec ruby -e 'puts Gem.loaded_specs["jekyll-theme-chirpy"].full_gem_path')/_includes/sidebar.html" _includes/sidebar.html
 -->
 
 <!-- The KS brand mark, defined once here and referenced by <use> from both
@@ -25,9 +34,7 @@
       {%- endif -%}
     </a>
 
-    <h1 class="site-title">
-      <a href="{{ '/' | relative_url }}">{{ site.title }}</a>
-    </h1>
+    <a class="site-title d-block" href="{{ '/' | relative_url }}">{{ site.title }}</a>
     <p class="site-subtitle fst-italic mb-0">{{ site.tagline }}</p>
   </header>
   <!-- .profile-wrapper -->
@@ -101,11 +108,53 @@
     </ul>
   </nav>
 
-  <div class="sidebar-bottom d-flex flex-wrap  align-items-center w-100">
-    {% unless site.theme_mode %}
-      <button type="button" class="btn btn-link nav-link" aria-label="Switch Mode" id="mode-toggle">
-        <i class="fas fa-adjust"></i>
-      </button>
+  <div class="sidebar-bottom d-flex flex-wrap align-items-center w-100">
+    {% unless site.theme_mode == 'light' or site.theme_mode == 'dark' %}
+      {%- capture icon_system -%}
+        <i class="fa-solid fa-display" data-theme-mode="system"></i>
+      {%- endcapture -%}
+
+      {%- capture icon_light -%}
+        <i class="fa-regular fa-sun" data-theme-mode="light"></i>
+      {%- endcapture -%}
+
+      {%- capture icon_dark -%}
+        <i class="fa-regular fa-moon" data-theme-mode="dark"></i>
+      {%- endcapture -%}
+
+      <div class="btn-group dropup">
+        <button
+          type="button"
+          class="btn btn-link nav-link"
+          aria-label="Switch Mode"
+          id="mode-toggle"
+          data-bs-toggle="dropdown"
+        >
+          {{- icon_light -}}
+          {{- icon_dark -}}
+          {{- icon_system -}}
+        </button>
+        <ul class="dropdown-menu rounded-3 mb-1 p-1">
+          <li>
+            <button class="dropdown-item d-flex align-items-center" type="button" data-theme-mode="light">
+              {{- icon_light -}}
+              {{- site.data.locales[lang].theme.light -}}
+            </button>
+          </li>
+          <li>
+            <button class="dropdown-item d-flex align-items-center" type="button" data-theme-mode="dark">
+              {{- icon_dark -}}
+              {{- site.data.locales[lang].theme.dark -}}
+            </button>
+          </li>
+          <li>
+            <button class="dropdown-item d-flex align-items-center" type="button" data-theme-mode="system">
+              {{- icon_system -}}
+              {{- site.data.locales[lang].theme.system -}}
+            </button>
+          </li>
+        </ul>
+      </div>
 
       {% if site.data.contact.size > 0 %}
         <span class="icon-border"></span>
@@ -113,15 +162,23 @@
     {% endunless %}
 
     {% for entry in site.data.contact %}
+      {%- assign url = null -%}
+
       {% case entry.type %}
         {% when 'github', 'twitter' %}
+          {%- unless site[entry.type].username -%}
+            {%- continue -%}
+          {%- endunless -%}
           {%- capture url -%}
             https://{{ entry.type }}.com/{{ site[entry.type].username }}
           {%- endcapture -%}
         {% when 'email' %}
-          {% assign email = site.social.email | split: '@' %}
+          {%- unless site.social.email -%}
+            {%- continue -%}
+          {%- endunless -%}
+          {%- assign email = site.social.email | split: '@' -%}
           {%- capture url -%}
-            javascript:location.href = 'mailto:' + ['{{ email[0] }}','{{ email[1] }}'].join('@')
+            javascript:void(location.href = 'mailto:' + ['{{ email[0] }}','{{ email[1] }}'].join('@'))
           {%- endcapture -%}
         {% when 'rss' %}
           {% assign url = '/feed.xml' | relative_url %}

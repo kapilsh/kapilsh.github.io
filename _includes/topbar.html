@@ -1,14 +1,15 @@
 <!-- The Top Bar -->
 <!--
-  Overrides jekyll-theme-chirpy 7.0.1's _includes/topbar.html. Only change vs.
+  Overrides jekyll-theme-chirpy 7.6.0's _includes/topbar.html. Only change vs.
   the gem's copy: the brand mark before the first breadcrumb and before the
   mobile title. #breadcrumb is hidden below lg and #topbar-title takes over,
   so the mark has to appear in both to show on every width. The symbol itself
   lives in _includes/sidebar.html, which renders earlier in the document.
-  Re-diff against the gem after a theme upgrade.
+  Tracks the theme version pinned in the Gemfile; re-diff on every bump.
 -->
 
-<header id="topbar-wrapper" aria-label="Top Bar">
+
+<header id="topbar-wrapper" class="flex-shrink-0" aria-label="Top Bar">
   <div
     id="topbar"
     class="d-flex align-items-center justify-content-between px-lg-3 h-100"
@@ -49,7 +50,7 @@
     </nav>
     <!-- endof #breadcrumb -->
 
-    <button type="button" id="sidebar-trigger" class="btn btn-link">
+    <button type="button" id="sidebar-trigger" class="btn btn-link" aria-label="Sidebar">
       <i class="fas fa-bars fa-fw"></i>
     </button>
 
@@ -65,7 +66,7 @@
       {% endif %}
     </div>
 
-    <button type="button" id="search-trigger" class="btn btn-link">
+    <button type="button" id="search-trigger" class="btn btn-link" aria-label="Search">
       <i class="fas fa-search fa-fw"></i>
     </button>
 
