@@ -14,15 +14,31 @@ pin and re-diff the overrides in the same commit, never separately.
 
 ## Run it locally
 
-Needs **Ruby >= 3.1** (the theme gem requires it; the distro Ruby on Ubuntu 22.04
-is 3.0 and will fail to resolve). `rbenv install 3.3.x` if `bundle install`
-complains about the Ruby version.
+```bash
+bin/jekyll serve --livereload   # http://127.0.0.1:4000
+bin/jekyll serve --drafts       # include _drafts/
+bin/jekyll build
+```
+
+`bin/jekyll` exists because plain `jekyll serve` does not work here. The theme is
+pinned to an exact version and needs **Ruby >= 3.1**, while the system Ruby is
+3.0.2 (end of life since April 2024), so the pinned gem cannot even install
+against it. The wrapper runs Jekyll under the Ruby named in `.ruby-version`,
+built once with:
 
 ```bash
-bundle install
-bundle exec jekyll s          # http://127.0.0.1:4000
-bundle exec jekyll s --drafts # include _drafts/
+git clone https://github.com/rbenv/ruby-build.git ~/.rbenv/plugins/ruby-build
+~/.rbenv/plugins/ruby-build/bin/ruby-build 3.3.12 ~/.rbenv/versions/3.3.12
 ```
+
+It installs gems into `vendor/bundle` and clears the globally exported
+`GEM_HOME`, so nothing it does reaches `~/gems` or the system Ruby. That is
+deliberate: wiring rbenv into the shell instead would put gems built against
+Ruby 3.0 on a 3.3 load path. Local now builds with the same Jekyll and theme
+versions CI does, which is the point — this site previously previewed with
+theme 7.0.1 locally while deploying 7.6.x, and the two had drifted far enough
+apart that the mode-toggle button rendered as an empty circle in production and
+looked fine locally.
 
 Vendored theme JS/CSS lives in the `assets/lib` submodule, so on a fresh clone:
 

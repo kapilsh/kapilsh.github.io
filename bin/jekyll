@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# Run Jekyll with the Ruby this site actually builds with.
+#
+#   bin/jekyll serve --livereload
+#   bin/jekyll build
+#
+# Why this exists instead of plain `jekyll serve`:
+#
+# The theme is pinned to an exact version in the Gemfile, and chirpy 7.1+
+# requires Ruby >= 3.1. The system Ruby here is 3.0.2, which went end of life in
+# April 2024, so it cannot install the pinned theme at all -- `jekyll serve`
+# fails with "Could not find gem 'jekyll-theme-chirpy (= 7.6.0)'".
+#
+# The obvious fix, wiring rbenv into ~/.zshrc, is a bad trade on this machine:
+# the shell exports GEM_HOME=$HOME/gems globally, so gems built against 3.0
+# would land on a 3.3 load path, and there is a half-configured RVM on PATH as
+# well. Rather than untangle all of that for one site, this script pins the
+# toolchain for this repo only and leaves the shell alone.
+#
+# Gems install into vendor/bundle (gitignored), so nothing here touches
+# ~/gems or the system Ruby.
+#
+# If the Ruby below is missing, build it once:
+#
+#   git clone https://github.com/rbenv/ruby-build.git ~/.rbenv/plugins/ruby-build
+#   ~/.rbenv/plugins/ruby-build/bin/ruby-build 3.3.12 ~/.rbenv/versions/3.3.12
+
+set -euo pipefail
+
+RUBY_VERSION="$(cat "$(dirname "$0")/../.ruby-version")"
+RUBY_ROOT="$HOME/.rbenv/versions/$RUBY_VERSION"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [[ ! -x "$RUBY_ROOT/bin/ruby" ]]; then
+  echo "Ruby $RUBY_VERSION is not built at $RUBY_ROOT." >&2
+  echo "See the comment at the top of $0 for the one-time build command." >&2
+  exit 1
+fi
+
+# The shell sets GEM_HOME/GEM_PATH to a tree built against Ruby 3.0. Carrying
+# that into a 3.3 process is what produces "incompatible library version"
+# errors, so drop them and let bundler own the load path instead.
+unset GEM_HOME GEM_PATH RUBYOPT RUBYLIB
+
+export PATH="$RUBY_ROOT/bin:$PATH"
+export BUNDLE_PATH="$REPO/vendor/bundle"
+export BUNDLE_GEMFILE="$REPO/Gemfile"
+
+cd "$REPO"
+
+if ! gem list -i bundler >/dev/null 2>&1; then
+  echo "==> installing bundler into Ruby $RUBY_VERSION"
+  gem install bundler --no-document
+fi
+
+# Cheap check: if the lock cannot be satisfied, install before running.
+if ! bundle check >/dev/null 2>&1; then
+  echo "==> bundle install (into vendor/bundle)"
+  bundle install
+fi
+
+exec bundle exec jekyll "$@"
