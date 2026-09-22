@@ -152,12 +152,12 @@ function updateQuantizationFlow(original, scaled, quantResults, scale) {
         flowItem.innerHTML = `
             <div class="flow-value">${original[i].toFixed(2)}</div>
             <div class="flow-arrow">↓</div>
-            <div style="font-size: 0.9rem; color: #666;">÷ ${scale.toFixed(3)}</div>
+            <div style="font-size: 0.9rem; color: var(--vz-faint);">÷ ${scale.toFixed(3)}</div>
             <div class="flow-arrow">↓</div>
-            <div style="font-size: 0.9rem; color: #666;">${scaled[i].toFixed(2)}</div>
+            <div style="font-size: 0.9rem; color: var(--vz-faint);">${scaled[i].toFixed(2)}</div>
             <div class="flow-arrow">↓</div>
             <div class="flow-result">${quantResults[i].value.toFixed(1)}</div>
-            <div style="font-size: 0.8rem; color: #999; margin-top: 5px;">${quantResults[i].code.toString(2).padStart(4, '0')}</div>
+            <div style="font-size: 0.8rem; color: var(--vz-faint); margin-top: 5px;">${quantResults[i].code.toString(2).padStart(4, '0')}</div>
         `;
         flowContainer.appendChild(flowItem);
     }
@@ -195,10 +195,10 @@ function updateErrorAnalysis(originalValues, quantResults, scale) {
         const errorItem = document.createElement('div');
         errorItem.className = 'error-item';
         errorItem.innerHTML = `
-            <div style="font-weight: bold; color: ${error >= 0 ? '#e74c3c' : '#27ae60'};">
+            <div style="font-weight: bold; color: ${error >= 0 ? 'var(--vz-warn)' : 'var(--vz-green)'};">
                 ${error >= 0 ? '+' : ''}${error.toFixed(3)}
             </div>
-            <div style="font-size: 0.8rem; color: #666;">
+            <div style="font-size: 0.8rem; color: var(--vz-faint);">
                 ${originalValues[i].toFixed(2)} → ${reconstructed.toFixed(2)}
             </div>
         `;

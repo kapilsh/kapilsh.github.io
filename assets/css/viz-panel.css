@@ -1,0 +1,257 @@
+/*
+ * Shared look for the embedded visualizers in _tabs/.
+ *
+ * These widgets are the same kind of thing as the standalone apps (shardlock,
+ * perfessor, cuda-quiz, nano-shards, oomscope), so they use the same palette:
+ * near-black ground, NVIDIA green, one accent per data role. They are deliberately
+ * dark in both site themes -- a visualizer is a self-contained instrument panel
+ * sitting in the page, the way a code block is, and having it flip to a light
+ * skin would leave it reading as page furniture rather than as a tool.
+ *
+ * Everything is scoped under .viz-panel-root so nothing here can leak into the
+ * post content around it. Add the class to the widget's outermost element and
+ * use the tokens below rather than fresh hex values.
+ */
+
+.viz-panel-root {
+  --vz-bg: #0b0f0a;
+  --vz-elevated: #121712;
+  --vz-card: #161d15;
+  --vz-card-hover: #1b241a;
+  --vz-border: #25301f;
+  --vz-border-strong: #33421f;
+  --vz-text: #e7f0e0;
+  --vz-dim: #9fb295;
+  --vz-faint: #6d7d63;
+  --vz-green: #76b900;
+  --vz-green-dim: #5c8f00;
+  --vz-error: #f87171;
+  --vz-warn: #fab219;
+  --vz-blue: #3987e5;
+  --vz-violet: #9085e9;
+  --vz-orange: #d95926;
+  --vz-teal: #199e70;
+
+  background:
+    radial-gradient(900px 420px at 85% -20%, rgba(118, 185, 0, .07), transparent 60%),
+    var(--vz-bg);
+  color: var(--vz-text);
+  border: 1px solid var(--vz-border);
+  border-radius: 14px;
+  padding: 22px;
+  margin: 24px 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.viz-panel-root * { box-sizing: border-box; }
+.viz-panel-root .mono,
+.viz-panel-root code {
+  font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+.viz-panel-root .num { font-variant-numeric: tabular-nums; }
+
+/* ---- header ------------------------------------------------------------ */
+
+/* The lede. There is no title here on purpose: the page already prints the tab
+   title as an <h1> immediately above the panel. */
+.viz-panel-root .vz-head { margin-bottom: 18px; }
+.viz-panel-root .vz-head p {
+  margin: 0;
+  color: var(--vz-dim);
+  font-size: 14px;
+  max-width: 78ch;
+}
+
+/* ---- cards ------------------------------------------------------------- */
+
+.viz-panel-root .vz-card {
+  background: var(--vz-card);
+  border: 1px solid var(--vz-border);
+  border-radius: 12px;
+  padding: 15px 17px;
+  margin-bottom: 14px;
+}
+.viz-panel-root .vz-card > h3,
+.viz-panel-root .vz-card > h4 {
+  margin: 0 0 4px;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: .09em;
+  color: var(--vz-faint);
+  font-weight: 650;
+  border: none;
+  padding: 0;
+}
+.viz-panel-root .vz-card > .vz-sub {
+  margin: 0 0 13px;
+  color: var(--vz-dim);
+  font-size: 12.5px;
+}
+
+.viz-panel-root .vz-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 14px;
+}
+
+/* ---- controls ---------------------------------------------------------- */
+
+.viz-panel-root .vz-btn {
+  background: var(--vz-card);
+  color: var(--vz-text);
+  border: 1px solid var(--vz-border-strong);
+  border-radius: 7px;
+  padding: 7px 13px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.viz-panel-root .vz-btn:hover { background: var(--vz-card-hover); border-color: var(--vz-green-dim); }
+.viz-panel-root .vz-btn.primary {
+  background: var(--vz-green);
+  border-color: var(--vz-green);
+  color: #0b0f0a;
+  font-weight: 650;
+}
+.viz-panel-root .vz-btn.primary:hover { background: #86cf00; }
+
+.viz-panel-root input[type="number"],
+.viz-panel-root input[type="text"],
+.viz-panel-root select {
+  background: var(--vz-elevated);
+  color: var(--vz-text);
+  border: 1px solid var(--vz-border-strong);
+  border-radius: 7px;
+  padding: 6px 9px;
+  font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  width: 100%;
+}
+.viz-panel-root input[type="number"]:focus,
+.viz-panel-root input[type="text"]:focus,
+.viz-panel-root select:focus {
+  outline: none;
+  border-color: var(--vz-green);
+}
+.viz-panel-root input[type="range"] { width: 100%; accent-color: var(--vz-green); }
+.viz-panel-root label {
+  display: block;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--vz-faint);
+  margin-bottom: 5px;
+  font-weight: 650;
+}
+
+/* ---- stat tiles -------------------------------------------------------- */
+
+.viz-panel-root .vz-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 11px;
+}
+.viz-panel-root .vz-tile {
+  background: var(--vz-elevated);
+  border: 1px solid var(--vz-border);
+  border-radius: 10px;
+  padding: 11px 13px;
+}
+.viz-panel-root .vz-tile .k {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--vz-faint);
+}
+.viz-panel-root .vz-tile .v {
+  font-size: 19px;
+  font-weight: 700;
+  margin-top: 4px;
+  letter-spacing: -.3px;
+  font-variant-numeric: tabular-nums;
+}
+.viz-panel-root .vz-tile .n { font-size: 11.5px; color: var(--vz-dim); margin-top: 2px; }
+.viz-panel-root .vz-tile.good .v { color: var(--vz-green); }
+.viz-panel-root .vz-tile.warn .v { color: var(--vz-warn); }
+.viz-panel-root .vz-tile.bad .v { color: var(--vz-error); }
+
+/* ---- bit / value chips ------------------------------------------------- */
+
+.viz-panel-root .vz-chip {
+  background: var(--vz-elevated);
+  border: 1px solid var(--vz-border);
+  border-radius: 6px;
+  padding: 6px 4px;
+  text-align: center;
+  font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--vz-dim);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.viz-panel-root .vz-chip.on { color: var(--vz-green); border-color: var(--vz-green-dim); }
+
+.viz-panel-root .vz-note {
+  font-size: 12.5px;
+  color: var(--vz-dim);
+  border-left: 2px solid var(--vz-border-strong);
+  padding-left: 11px;
+  margin: 12px 0 0;
+}
+
+/* The theme styles bare tables and headings inside post content; these widgets
+   draw their own, so opt out of that rather than fight it selector by selector. */
+.viz-panel-root table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 0; }
+.viz-panel-root th {
+  text-align: left;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--vz-faint);
+  font-weight: 650;
+  padding: 0 8px 7px;
+  border-bottom: 1px solid var(--vz-border);
+  background: none;
+}
+.viz-panel-root td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--vz-border);
+  background: none;
+  color: var(--vz-text);
+}
+.viz-panel-root tr:last-child td { border-bottom: none; }
+
+@media (max-width: 640px) {
+  .viz-panel-root { padding: 15px; border-radius: 11px; }
+}
+
+/* ---- plotly ------------------------------------------------------------ */
+/*
+ * Plotly injects its own chrome with light-theme defaults. These keep the
+ * modebar from sitting on the chart as a bright bar, and let it fade in on
+ * hover the way it does on a light page.
+ */
+.viz-panel-root .modebar {
+  background: transparent !important;
+}
+.viz-panel-root .modebar-btn path {
+  fill: var(--vz-faint) !important;
+}
+.viz-panel-root .modebar-btn:hover path {
+  fill: var(--vz-green) !important;
+}
+.viz-panel-root .modebar-group {
+  background: transparent !important;
+}
+/* Hover labels default to a white box with dark text. */
+.viz-panel-root .hoverlayer .hovertext rect {
+  fill: var(--vz-elevated) !important;
+  stroke: var(--vz-border-strong) !important;
+}
+.viz-panel-root .hoverlayer .hovertext text {
+  fill: var(--vz-text) !important;
+}

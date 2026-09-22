@@ -1,4 +1,34 @@
 // RoPE Implementation
+// Chart theme, read from the panel's own CSS custom properties so the plots
+// cannot drift from assets/css/viz-panel.css. Falls back to the same literals
+// the stylesheet uses, in case the element is not in the document yet.
+let _ropeTheme = null;
+function T() {
+    if (_ropeTheme) return _ropeTheme;
+    const root = document.getElementById('rope-visualizer-container');
+    const cs = root ? getComputedStyle(root) : null;
+    const v = (name, fallback) => {
+        const got = cs ? cs.getPropertyValue(name).trim() : '';
+        return got || fallback;
+    };
+    _ropeTheme = {
+        // Transparent, so the card behind the plot supplies the background and
+        // the rounded corners are not squared off by Plotly's own canvas.
+        bg: 'rgba(0,0,0,0)',
+        grid: v('--vz-border', '#25301f'),
+        text: v('--vz-dim', '#9fb295'),
+        markerFill: v('--vz-bg', '#0b0f0a'),
+        green: v('--vz-green', '#76b900'),
+        blue: v('--vz-blue', '#3987e5'),
+        violet: v('--vz-violet', '#9085e9'),
+        warn: v('--vz-warn', '#fab219'),
+        orange: v('--vz-orange', '#d95926'),
+        faint: v('--vz-faint', '#6d7d63'),
+        font: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+    };
+    return _ropeTheme;
+}
+
 class RotaryEmbedding {
     constructor(headDim, base = 10000, scalingFactor = 1.0, initialContextLength = 2048) {
         this.headDim = headDim;
@@ -175,8 +205,8 @@ function plotFrequencyAnalysis() {
             type: 'scatter',
             mode: 'lines+markers',
             name: 'Standard RoPE',
-            line: { color: '#2E86AB', width: 3 },
-            marker: { size: 8, color: 'white', line: { color: '#2E86AB', width: 2 } }
+            line: { color: T().blue, width: 3 },
+            marker: { size: 8, color: T().markerFill, line: { color: T().blue, width: 2 } }
         };
 
         const trace2 = {
@@ -185,29 +215,25 @@ function plotFrequencyAnalysis() {
             type: 'scatter',
             mode: 'lines+markers',
             name: `YaRN (${currentConfig.scalingFactor}×)`,
-            line: { color: '#A23B72', width: 3 },
-            marker: { size: 8, color: 'white', line: { color: '#A23B72', width: 2 } }
+            line: { color: T().violet, width: 3 },
+            marker: { size: 8, color: T().markerFill, line: { color: T().violet, width: 2 } }
         };
 
         const layout = {
-            title: {
-                text: 'Inverse Frequencies',
-                font: { size: 16, family: 'Segoe UI, sans-serif' }
-            },
-            xaxis: {
+                        xaxis: {
                 title: 'Dimension Pair Index',
-                gridcolor: '#e9ecef',
+                gridcolor: T().grid,
                 gridwidth: 1
             },
             yaxis: {
                 title: 'Inverse Frequency',
                 type: 'log',
-                gridcolor: '#e9ecef',
+                gridcolor: T().grid,
                 gridwidth: 1
             },
-            plot_bgcolor: 'white',
-            paper_bgcolor: 'white',
-            font: { family: 'Segoe UI, sans-serif' },
+            plot_bgcolor: T().bg,
+            paper_bgcolor: T().bg,
+            font: { family: T().font, color: T().text },
             legend: {
                 orientation: 'h',
                 y: -0.2,
@@ -216,10 +242,10 @@ function plotFrequencyAnalysis() {
             },
             autosize: true,
             height: 400,
-            margin: { l: 60, r: 30, t: 60, b: 80 }
+            margin: { l: 60, r: 30, t: 16, b: 80 }
         };
 
-        Plotly.react('frequencyPlot', [trace1, trace2], layout, {responsive: true}).then(() => {
+        Plotly.react('frequencyPlot', [trace1, trace2], layout, {responsive: true, displaylogo: false}).then(() => {
             resolve();
         });
     });
@@ -240,8 +266,8 @@ function plotWavelengthComparison() {
             type: 'scatter',
             mode: 'lines+markers',
             name: 'Standard RoPE',
-            line: { color: '#2E86AB', width: 3 },
-            marker: { size: 8, color: 'white', line: { color: '#2E86AB', width: 2 } }
+            line: { color: T().blue, width: 3 },
+            marker: { size: 8, color: T().markerFill, line: { color: T().blue, width: 2 } }
         };
 
         const trace2 = {
@@ -250,29 +276,25 @@ function plotWavelengthComparison() {
             type: 'scatter',
             mode: 'lines+markers',
             name: `YaRN (${currentConfig.scalingFactor}×)`,
-            line: { color: '#A23B72', width: 3 },
-            marker: { size: 8, color: 'white', line: { color: '#A23B72', width: 2 } }
+            line: { color: T().violet, width: 3 },
+            marker: { size: 8, color: T().markerFill, line: { color: T().violet, width: 2 } }
         };
 
         const layout = {
-            title: {
-                text: 'Positional Wavelengths',
-                font: { size: 16, family: 'Segoe UI, sans-serif' }
-            },
-            xaxis: {
+                        xaxis: {
                 title: 'Dimension Pair Index',
-                gridcolor: '#e9ecef',
+                gridcolor: T().grid,
                 gridwidth: 1
             },
             yaxis: {
                 title: 'Wavelength (tokens)',
                 type: 'log',
-                gridcolor: '#e9ecef',
+                gridcolor: T().grid,
                 gridwidth: 1
             },
-            plot_bgcolor: 'white',
-            paper_bgcolor: 'white',
-            font: { family: 'Segoe UI, sans-serif' },
+            plot_bgcolor: T().bg,
+            paper_bgcolor: T().bg,
+            font: { family: T().font, color: T().text },
             legend: {
                 orientation: 'h',
                 y: -0.2,
@@ -281,10 +303,10 @@ function plotWavelengthComparison() {
             },
             autosize: true,
             height: 400,
-            margin: { l: 60, r: 30, t: 60, b: 80 }
+            margin: { l: 60, r: 30, t: 16, b: 80 }
         };
 
-        Plotly.react('wavelengthPlot', [trace1, trace2], layout, {responsive: true}).then(() => {
+        Plotly.react('wavelengthPlot', [trace1, trace2], layout, {responsive: true, displaylogo: false}).then(() => {
             resolve();
         });
     });
@@ -307,8 +329,8 @@ function plotFrequencyScalingRatio() {
                     type: 'scatter',
                     mode: 'lines+markers',
                     name: 'Actual Ratio',
-                    line: { color: '#F18F01', width: 3 },
-                    marker: { size: 6, color: 'white', line: { color: '#F18F01', width: 2 } }
+                    line: { color: T().warn, width: 3 },
+                    marker: { size: 6, color: T().markerFill, line: { color: T().warn, width: 2 } }
                 },
                 {
                     x: dimIndices,
@@ -316,28 +338,24 @@ function plotFrequencyScalingRatio() {
                     type: 'scatter',
                     mode: 'lines',
                     name: `Expected (1/${currentConfig.scalingFactor.toFixed(1)})`,
-                    line: { color: '#6c757d', width: 2, dash: 'dash' }
+                    line: { color: T().faint, width: 2, dash: 'dash' }
                 }
             ];
 
             const layout = {
-                title: {
-                    text: 'YaRN/Standard Frequency Ratio',
-                    font: { size: 16, family: 'Segoe UI, sans-serif' }
-                },
-                xaxis: {
+                                xaxis: {
                     title: 'Dimension Pair Index',
-                    gridcolor: '#e9ecef',
+                    gridcolor: T().grid,
                     gridwidth: 1
                 },
                 yaxis: {
                     title: 'Frequency Ratio',
-                    gridcolor: '#e9ecef',
+                    gridcolor: T().grid,
                     gridwidth: 1
                 },
-                plot_bgcolor: 'white',
-                paper_bgcolor: 'white',
-                font: { family: 'Segoe UI, sans-serif' },
+                plot_bgcolor: T().bg,
+                paper_bgcolor: T().bg,
+                font: { family: T().font, color: T().text },
                 legend: {
                     orientation: 'h',
                     y: -0.2,
@@ -346,10 +364,10 @@ function plotFrequencyScalingRatio() {
                 },
                 autosize: true,
                 height: 400,
-                margin: { l: 60, r: 30, t: 60, b: 80 }
+                margin: { l: 60, r: 30, t: 16, b: 80 }
             };
 
-            Plotly.react('ratioPlot', data, layout, {responsive: true}).then(() => {
+            Plotly.react('ratioPlot', data, layout, {responsive: true, displaylogo: false}).then(() => {
                 resolve();
             });
         } catch (error) {
@@ -377,11 +395,11 @@ function plotYarnRampEffect() {
                     type: 'scatter',
                     mode: 'lines+markers',
                     name: 'Wavelength Scaling',
-                    line: { color: '#9C27B0', width: 4 },
+                    line: { color: T().green, width: 4 },
                     marker: {
                         size: 8,
-                        color: '#9C27B0',
-                        line: { color: 'white', width: 2 }
+                        color: T().green,
+                        line: { color: T().markerFill, width: 2 }
                     }
                 },
                 {
@@ -390,7 +408,7 @@ function plotYarnRampEffect() {
                     type: 'scatter',
                     mode: 'lines',
                     name: `Expected (${currentConfig.scalingFactor.toFixed(1)}×)`,
-                    line: { color: '#6c757d', width: 2, dash: 'dash' }
+                    line: { color: T().faint, width: 2, dash: 'dash' }
                 },
                 {
                     x: dimIndices,
@@ -398,28 +416,24 @@ function plotYarnRampEffect() {
                     type: 'scatter',
                     mode: 'lines',
                     name: 'No Scaling (1×)',
-                    line: { color: '#6c757d', width: 2, dash: 'dot' }
+                    line: { color: T().faint, width: 2, dash: 'dot' }
                 }
             ];
 
             const layout = {
-                title: {
-                    text: 'YaRN Ramp Function Effect',
-                    font: { size: 16, family: 'Segoe UI, sans-serif' }
-                },
-                xaxis: {
+                                xaxis: {
                     title: 'Dimension Pair Index',
-                    gridcolor: '#e9ecef',
+                    gridcolor: T().grid,
                     gridwidth: 1
                 },
                 yaxis: {
                     title: 'Wavelength Scaling Factor',
-                    gridcolor: '#e9ecef',
+                    gridcolor: T().grid,
                     gridwidth: 1
                 },
-                plot_bgcolor: 'white',
-                paper_bgcolor: 'white',
-                font: { family: 'Segoe UI, sans-serif' },
+                plot_bgcolor: T().bg,
+                paper_bgcolor: T().bg,
+                font: { family: T().font, color: T().text },
                 legend: {
                     orientation: 'h',
                     y: -0.2,
@@ -428,10 +442,10 @@ function plotYarnRampEffect() {
                 },
                 autosize: true,
                 height: 400,
-                margin: { l: 60, r: 30, t: 60, b: 80 }
+                margin: { l: 60, r: 30, t: 16, b: 80 }
             };
 
-            Plotly.react('rampPlot', data, layout, {responsive: true}).then(() => {
+            Plotly.react('rampPlot', data, layout, {responsive: true, displaylogo: false}).then(() => {
                 resolve();
             });
         } catch (error) {
@@ -461,7 +475,13 @@ function plotEmbeddingsHeatmap() {
             const data = [{
                 z: heatmapData,
                 type: 'heatmap',
-                colorscale: 'RdYlBu',
+                colorscale: [
+                    [0, T().blue],
+                    [0.25, '#1f4a7a'],
+                    [0.5, T().markerFill],
+                    [0.75, '#7a3a1c'],
+                    [1, T().orange]
+                ],
                 reversescale: true,
                 showscale: true,
                 colorbar: {
@@ -471,29 +491,25 @@ function plotEmbeddingsHeatmap() {
             }];
 
             const layout = {
-                title: {
-                    text: `RoPE Cosine Embeddings (${currentConfig.scalingFactor.toFixed(1)}× YaRN)`,
-                    font: { size: 16, family: 'Segoe UI, sans-serif' }
-                },
                 xaxis: {
                     title: 'Position',
-                    gridcolor: '#e9ecef',
+                    gridcolor: T().grid,
                     gridwidth: 1
                 },
                 yaxis: {
                     title: 'Dimension Pair',
-                    gridcolor: '#e9ecef',
+                    gridcolor: T().grid,
                     gridwidth: 1
                 },
-                plot_bgcolor: 'white',
-                paper_bgcolor: 'white',
-                font: { family: 'Segoe UI, sans-serif' },
+                plot_bgcolor: T().bg,
+                paper_bgcolor: T().bg,
+                font: { family: T().font, color: T().text },
                 autosize: true,
                 height: 500,
-                margin: { l: 60, r: 30, t: 60, b: 50 }
+                margin: { l: 60, r: 30, t: 16, b: 50 }
             };
 
-            Plotly.react('heatmapPlot', data, layout, {responsive: true}).then(() => {
+            Plotly.react('heatmapPlot', data, layout, {responsive: true, displaylogo: false}).then(() => {
                 resolve();
             });
         } catch (error) {

@@ -5,311 +5,175 @@ icon: fas fa-compass
 order: 4
 ---
 
+<link rel="stylesheet" href="{{ '/assets/css/viz-panel.css' | relative_url }}">
+
 <style>
-#rope-visualizer-container {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 20px;
-    border-radius: 15px;
-    margin: 20px 0;
-}
-
-#rope-visualizer-container * {
-    box-sizing: border-box;
-}
-
-#rope-visualizer-container .container {
-    max-width: 1400px;
-    margin: 0 auto;
-    background: white;
-    border-radius: 20px;
-    padding: 30px;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-}
-
-@media (max-width: 768px) {
-    #rope-visualizer-container .container {
-        padding: 20px;
-        border-radius: 15px;
-        margin: 0 5px;
-    }
-}
-
-@media (max-width: 500px) {
-    #rope-visualizer-container .container {
-        padding: 15px;
-        border-radius: 10px;
-    }
-}
-
-#rope-visualizer-container .header {
-    text-align: center;
-    margin-bottom: 30px;
-}
-
-#rope-visualizer-container .header h1 {
-    font-size: 2.5em;
-    font-weight: 700;
-    margin-bottom: 10px;
-    color: #2c3e50;
-}
-
-#rope-visualizer-container .header p {
-    font-size: 1.2em;
-    color: #6c757d;
-    margin-bottom: 5px;
-}
-
-#rope-visualizer-container .subtitle {
-    font-size: 1em;
-    color: #adb5bd;
-    font-style: italic;
-}
-
-#rope-visualizer-container .controls {
-    background: #f8f9fa;
-    border-radius: 15px;
-    padding: 25px;
-    margin-bottom: 25px;
-    border: 2px solid #e9ecef;
-}
-
-#rope-visualizer-container .controls h3 {
-    margin-bottom: 20px;
-    color: #2c3e50;
-    font-weight: 600;
-}
+/* Widget-specific layout only. Palette, cards, controls, tiles and notes come
+   from assets/css/viz-panel.css, shared with the MXFP4 visualizer and matching
+   the standalone apps. */
 
 #rope-visualizer-container .control-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 20px;
-    align-items: end;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px;
 }
 
-#rope-visualizer-container .control-group {
+/* A slider and its read-out belong on one line; the number next to it is the
+   point of moving the slider. */
+#rope-visualizer-container .control-group .row {
     display: flex;
-    flex-direction: column;
+    align-items: center;
+    gap: 10px;
 }
 
-#rope-visualizer-container .control-group label {
-    font-weight: 500;
-    margin-bottom: 8px;
-    color: #34495e;
-}
-
-#rope-visualizer-container .control-group input,
-#rope-visualizer-container .control-group select {
-    padding: 10px;
-    border: 2px solid #e0e6ed;
-    border-radius: 8px;
-    font-size: 14px;
-    transition: border-color 0.3s ease;
-}
-
-#rope-visualizer-container .control-group input:focus,
-#rope-visualizer-container .control-group select:focus {
-    outline: none;
-    border-color: #667eea;
+#rope-visualizer-container .control-group .val {
+    color: var(--vz-green);
+    font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    min-width: 4.5em;
+    text-align: right;
 }
 
 #rope-visualizer-container .visualization-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 25px;
-    margin-bottom: 25px;
-}
-
-#rope-visualizer-container .viz-panel {
-    background: #f8f9fa;
-    border-radius: 15px;
-    padding: 20px;
-    border: 2px solid #e9ecef;
-}
-
-#rope-visualizer-container .viz-panel h4 {
-    margin-bottom: 15px;
-    color: #2c3e50;
-    font-weight: 600;
-    text-align: center;
-}
-
-#rope-visualizer-container .heatmap-container {
-    grid-column: 1 / -1;
-}
-
-#rope-visualizer-container .metrics-display {
-    background: #f8f9fa;
-    border-radius: 15px;
-    padding: 20px;
-    margin-bottom: 25px;
-    border: 2px solid #e9ecef;
-}
-
-#rope-visualizer-container .metrics-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 15px;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 14px;
+    align-items: start;
 }
 
-#rope-visualizer-container .metric-card {
-    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-    color: white;
-    padding: 15px;
-    border-radius: 10px;
-    text-align: center;
-}
-
-#rope-visualizer-container .metric-value {
-    font-size: 1.5em;
-    font-weight: bold;
-    margin-bottom: 5px;
-}
-
-#rope-visualizer-container .metric-label {
-    font-size: 0.9em;
-    opacity: 0.9;
-}
-
-#rope-visualizer-container .info-panel {
-    background: #f8f9fa;
-    border-radius: 15px;
-    padding: 20px;
-    border: 2px solid #e9ecef;
-}
-
-#rope-visualizer-container .info-panel h4 {
-    color: #2c3e50;
-    margin-bottom: 15px;
-    font-weight: 600;
+/* Plotly draws its own background; these keep its canvas from poking out of
+   the rounded card corners. */
+#rope-visualizer-container .js-plotly-plot,
+#rope-visualizer-container .plot-container {
+    border-radius: 8px;
+    overflow: hidden;
 }
 
 #rope-visualizer-container .info-panel p {
-    line-height: 1.6;
-    color: #5a6c7d;
-    margin-bottom: 10px;
+    margin: 0 0 9px;
+    color: var(--vz-dim);
+    font-size: 13px;
 }
 
-
-@media (max-width: 768px) {
-    #rope-visualizer-container .control-grid {
-        grid-template-columns: 1fr;
-    }
-
-    #rope-visualizer-container .header h1 {
-        font-size: 2em;
-    }
-
-    #rope-visualizer-container .metrics-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
-@media (max-width: 480px) {
-    #rope-visualizer-container .metrics-grid {
-        grid-template-columns: 1fr;
-    }
-}
+#rope-visualizer-container .info-panel p:last-child { margin-bottom: 0; }
+#rope-visualizer-container .info-panel strong { color: var(--vz-text); }
 </style>
 
-<div id="rope-visualizer-container">
-    <div class="container">
-        <div class="header">
-            <h1>🎯 RoPE Embeddings with YaRN</h1>
-            <p>Interactive Visualization of Rotary Position Embeddings</p>
-            <div class="subtitle">Yet another RoPE extensioN (YaRN) Scaling Analysis</div>
-        </div>
+<div id="rope-visualizer-container" class="viz-panel-root">
+    <div class="vz-head">
+        <p>
+            Rotary embeddings turn a token's position into a rotation, one angle per dimension pair.
+            YaRN stretches those angles so a model trained on a short context can read a long one.
+            Move the scaling factor to see which frequencies it leaves alone and which it bends.
+        </p>
+    </div>
 
-        <div class="controls">
-            <h3>🎛️ Configuration Parameters</h3>
-            <div class="control-grid">
-                <div class="control-group">
-                    <label for="scalingFactor">YaRN Scaling Factor:</label>
+    <div class="vz-card">
+        <h3>Configuration</h3>
+        <p class="vz-sub">Everything below recomputes as you change these.</p>
+        <div class="control-grid">
+            <div class="control-group">
+                <label for="scalingFactor">YaRN scaling factor</label>
+                <div class="row">
                     <input type="range" id="scalingFactor" min="1" max="8" step="0.5" value="4">
-                    <span id="scalingFactorValue">4.0×</span>
+                    <span class="val" id="scalingFactorValue">4.0×</span>
                 </div>
+            </div>
 
-                <div class="control-group">
-                    <label for="headDim">Head Dimension:</label>
-                    <select id="headDim">
-                        <option value="32">32</option>
-                        <option value="64" selected>64</option>
-                        <option value="128">128</option>
-                    </select>
-                </div>
+            <div class="control-group">
+                <label for="headDim">Head dimension</label>
+                <select id="headDim">
+                    <option value="32">32</option>
+                    <option value="64" selected>64</option>
+                    <option value="128">128</option>
+                </select>
+            </div>
 
-                <div class="control-group">
-                    <label for="seqLength">Sequence Length:</label>
+            <div class="control-group">
+                <label for="seqLength">Sequence length</label>
+                <div class="row">
                     <input type="range" id="seqLength" min="256" max="8192" step="256" value="2048">
-                    <span id="seqLengthValue">2048</span>
+                    <span class="val" id="seqLengthValue">2048</span>
                 </div>
+            </div>
 
-                <div class="control-group">
-                    <label for="baseFreq">Base Frequency:</label>
-                    <input type="number" id="baseFreq" value="10000" step="1000">
-                </div>
+            <div class="control-group">
+                <label for="baseFreq">Base frequency</label>
+                <input type="number" id="baseFreq" value="10000" step="1000">
+            </div>
 
-                <div class="control-group">
-                    <label for="initialContext">Initial Context Length:</label>
-                    <input type="number" id="initialContext" value="2048" step="256">
-                </div>
+            <div class="control-group">
+                <label for="initialContext">Initial context length</label>
+                <input type="number" id="initialContext" value="2048" step="256">
             </div>
         </div>
+    </div>
 
-        <div class="metrics-display">
-            <div class="metrics-grid">
-                <div class="metric-card">
-                    <div class="metric-value" id="effectiveContext">8192</div>
-                    <div class="metric-label">Effective Context</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-value" id="freqPairs">32</div>
-                    <div class="metric-label">Frequency Pairs</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-value" id="maxWavelength">65536</div>
-                    <div class="metric-label">Max Wavelength</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-value" id="minWavelength">2</div>
-                    <div class="metric-label">Min Wavelength</div>
-                </div>
+    <div class="vz-card">
+        <h3>What that buys you</h3>
+        <p class="vz-sub">The wavelength range is the span of positions the embedding can still tell apart.</p>
+        <div class="vz-tiles">
+            <div class="vz-tile good">
+                <div class="k">Effective context</div>
+                <div class="v" id="effectiveContext">8192</div>
+                <div class="n">tokens</div>
+            </div>
+            <div class="vz-tile">
+                <div class="k">Frequency pairs</div>
+                <div class="v" id="freqPairs">32</div>
+                <div class="n">head dim ÷ 2</div>
+            </div>
+            <div class="vz-tile">
+                <div class="k">Max wavelength</div>
+                <div class="v" id="maxWavelength">65536</div>
+                <div class="n">slowest dimension</div>
+            </div>
+            <div class="vz-tile">
+                <div class="k">Min wavelength</div>
+                <div class="v" id="minWavelength">2</div>
+                <div class="n">fastest dimension</div>
             </div>
         </div>
+    </div>
 
-        <div class="visualization-grid">
-            <div class="viz-panel">
-                <h4>📊 Frequency Analysis</h4>
-                <div id="frequencyPlot"></div>
-            </div>
-
-            <div class="viz-panel">
-                <h4>📈 Wavelength Comparison</h4>
-                <div id="wavelengthPlot"></div>
-            </div>
-
-            <div class="viz-panel">
-                <h4>📉 Frequency Scaling Ratio</h4>
-                <div id="ratioPlot"></div>
-            </div>
-
-            <div class="viz-panel">
-                <h4>🎯 YaRN Ramp Function Effect</h4>
-                <div id="rampPlot"></div>
-            </div>
+    <div class="visualization-grid">
+        <div class="vz-card">
+            <h4>Frequency analysis</h4>
+            <p class="vz-sub">Inverse frequency per dimension pair, before and after scaling.</p>
+            <div id="frequencyPlot"></div>
         </div>
 
-        <div class="viz-panel heatmap-container">
-            <h4>🔥 RoPE Embeddings Heatmap</h4>
-            <div id="heatmapPlot"></div>
+        <div class="vz-card">
+            <h4>Wavelength comparison</h4>
+            <p class="vz-sub">How far a position can travel before the angle repeats.</p>
+            <div id="wavelengthPlot"></div>
         </div>
 
-        <div class="info-panel">
-            <h4>ℹ️ About YaRN and RoPE</h4>
-            <p><strong>Rotary Position Embedding (RoPE)</strong> encodes positional information by rotating query and key vectors using rotation matrices based on position and dimension.</p>
-            <p><strong>YaRN (Yet another RoPE extensioN)</strong> extends the effective context length by intelligently scaling frequency components, allowing models to handle longer sequences than their training context.</p>
-            <p><strong>Key Benefits:</strong> YaRN maintains performance on shorter sequences while enabling processing of much longer sequences, making it ideal for long-form text generation and analysis.</p>
+        <div class="vz-card">
+            <h4>Frequency scaling ratio</h4>
+            <p class="vz-sub">Scaled over original, per dimension. Flat means untouched.</p>
+            <div id="ratioPlot"></div>
         </div>
+
+        <div class="vz-card">
+            <h4>YaRN ramp</h4>
+            <p class="vz-sub">The interpolation that decides which dimensions get stretched.</p>
+            <div id="rampPlot"></div>
+        </div>
+    </div>
+
+    <div class="vz-card heatmap-container">
+        <h4>Embeddings heatmap</h4>
+        <p class="vz-sub">Position against dimension, coloured by the rotation applied.</p>
+        <div id="heatmapPlot"></div>
+    </div>
+
+    <div class="vz-card info-panel">
+        <h4>About RoPE and YaRN</h4>
+        <p><strong>Rotary Position Embedding</strong> encodes position by rotating query and key vectors, with a rotation angle that depends on both the position and the dimension pair.</p>
+        <p><strong>YaRN</strong> extends the usable context by scaling frequency components unevenly: high-frequency dimensions, which carry local ordering, are left alone, while low-frequency ones are interpolated so distant positions stay distinguishable.</p>
+        <p><strong>Why it matters:</strong> the model keeps its behaviour on short sequences while becoming usable on ones far longer than it was trained on.</p>
     </div>
 </div>
 
