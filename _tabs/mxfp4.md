@@ -12,19 +12,33 @@ order: 3
    all come from assets/css/viz-panel.css, shared with the RoPE visualizer and
    matching the standalone apps. */
 
+/* One card per row, full width. The steps here are a sequence -- values in,
+   bits out, what it cost, how it got there -- so reading top to bottom follows
+   the argument, where two columns asked you to zig-zag. It also gives the
+   sixteen-wide rows the room to lay out honestly. */
+#mxfp4-visualizer-container .vz-grid-2 { grid-template-columns: 1fr; }
+
 /* Column counts are set by what has to fit: a signed decimal, a 16-character
    bit string, and a 4-character one are three different widths. */
 #mxfp4-visualizer-container .input-grid,
 #mxfp4-visualizer-container .bits-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(8, 1fr);
     gap: 6px;
 }
 
+/* All sixteen codes on one line: the block is the unit, and breaking it across
+   rows invites reading it as two blocks of eight. */
 #mxfp4-visualizer-container .code-grid {
     display: grid;
-    grid-template-columns: repeat(8, 1fr);
-    gap: 6px;
+    grid-template-columns: repeat(16, 1fr);
+    gap: 5px;
+}
+
+@media (max-width: 900px) {
+    #mxfp4-visualizer-container .input-grid,
+    #mxfp4-visualizer-container .bits-grid { grid-template-columns: repeat(4, 1fr); }
+    #mxfp4-visualizer-container .code-grid { grid-template-columns: repeat(8, 1fr); }
 }
 
 @media (max-width: 560px) {
@@ -32,10 +46,6 @@ order: 3
     #mxfp4-visualizer-container .bits-grid { grid-template-columns: repeat(2, 1fr); }
     #mxfp4-visualizer-container .code-grid { grid-template-columns: repeat(4, 1fr); }
 }
-
-/* Cards size to their content rather than to the tallest in the row; the
-   codebook is much shorter than the flow beside it. */
-#mxfp4-visualizer-container .vz-grid-2 { align-items: start; }
 
 #mxfp4-visualizer-container .buttons {
     display: flex;
@@ -47,11 +57,15 @@ order: 3
 /* The E2M1 codebook: sixteen values, the active ones lit. */
 #mxfp4-visualizer-container .lut-grid {
     display: grid;
-    grid-template-columns: repeat(8, 1fr);
-    gap: 6px;
+    grid-template-columns: repeat(16, 1fr);
+    gap: 5px;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 900px) {
+    #mxfp4-visualizer-container .lut-grid { grid-template-columns: repeat(8, 1fr); }
+}
+
+@media (max-width: 560px) {
     #mxfp4-visualizer-container .lut-grid { grid-template-columns: repeat(4, 1fr); }
 }
 
