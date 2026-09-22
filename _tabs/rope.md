@@ -12,11 +12,18 @@ order: 4
    from assets/css/viz-panel.css, shared with the MXFP4 visualizer and matching
    the standalone apps. */
 
+/* Five controls across was legible but airless, and a slider sitting a few
+   pixels from the next control's label reads as one clump rather than five
+   separate things. Wider tracks drop it to four per row on a full-width panel,
+   and the row gap keeps the wrapped row from crowding the one above it. */
 #rope-visualizer-container .control-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+    gap: 22px 26px;
+    margin-top: 4px;
 }
+
+#rope-visualizer-container .control-group label { margin-bottom: 8px; }
 
 /* A slider and its read-out belong on one line; the number next to it is the
    point of moving the slider. */
