@@ -113,6 +113,7 @@ GitHub Pages project site, so they are **not** part of this build:
 | Perfessor | [`kapilsh/perfessor`](https://github.com/kapilsh/perfessor) | <https://www.kapilsharma.dev/perfessor/> |
 | CUDA Quiz | [`kapilsh/cuda-quiz`](https://github.com/kapilsh/cuda-quiz) | <https://www.kapilsharma.dev/cuda-quiz/> |
 | Nano Shards | [`kapilsh/nano-shards`](https://github.com/kapilsh/nano-shards) | <https://www.kapilsharma.dev/nano-shards/> |
+| Claude Artifacts | [`kapilsh/claude-artifacts`](https://github.com/kapilsh/claude-artifacts) | <https://www.kapilsharma.dev/claude-artifacts/> |
 
 To add one, append a `nav-item` in `_includes/sidebar.html`. Use the **absolute** URL on the
 canonical domain, not a root-relative path: htmlproofer resolves internal links against `_site`
