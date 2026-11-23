@@ -471,7 +471,7 @@ class CoalescedMatrixViz {
                     </div>
                     <div class="legend-item">
                         <div class="legend-box" style="background: #FFA726;"></div>
-                        <span>Accessed Memory (Coalesced)</span>
+                        <span>Accessed Memory (A: broadcast, B: coalesced)</span>
                     </div>
                     <div class="legend-item">
                         <div class="legend-box" style="background: #2196F3;"></div>
@@ -504,37 +504,43 @@ class CoalescedMatrixViz {
 
         document.getElementById('coalescedMatrixAnimate').disabled = true;
 
-        // Iterate through columns of B (outer loop)
-        for (let colB = 0; colB < this.matrixSize; colB++) {
-            // Iterate through rows of A (inner loop)
-            for (let rowA = 0; rowA < this.matrixSize; rowA++) {
-                // Highlight one row from A
+        // A "warp" here is blockSize consecutive threads. In the coalesced kernel
+        // they share output_row and cover blockSize consecutive output_cols.
+        // At each k step, the warp reads ONE element of A (broadcast) and
+        // blockSize CONSECUTIVE elements of row k of B (coalesced).
+        for (let row = 0; row < this.matrixSize; row++) {
+            for (let colStart = 0; colStart < this.matrixSize; colStart += this.blockSize) {
+                const outputCells = [];
+                for (let j = 0; j < this.blockSize; j++) {
+                    const cell = this.matrixC.querySelector(`[data-row="${row}"][data-col="${colStart + j}"]`);
+                    if (cell) {
+                        cell.classList.add('active');
+                        outputCells.push(cell);
+                    }
+                }
+
                 for (let k = 0; k < this.matrixSize; k++) {
-                    const cellA = this.matrixA.querySelector(`[data-row="${rowA}"][data-col="${k}"]`);
+                    // Same A element for every thread in the warp (broadcast)
+                    const cellA = this.matrixA.querySelector(`[data-row="${row}"][data-col="${k}"]`);
                     if (cellA) cellA.classList.add('highlight');
+
+                    // Consecutive B elements across the warp (coalesced)
+                    for (let j = 0; j < this.blockSize; j++) {
+                        const cellB = this.matrixB.querySelector(`[data-row="${k}"][data-col="${colStart + j}"]`);
+                        if (cellB) cellB.classList.add('highlight');
+                    }
+
+                    await sleep(60);
+
+                    this.matrixA.querySelectorAll('.highlight').forEach(el => el.classList.remove('highlight'));
+                    this.matrixB.querySelectorAll('.highlight').forEach(el => el.classList.remove('highlight'));
                 }
-
-                // Highlight one column from B
-                for (let k = 0; k < this.matrixSize; k++) {
-                    const cellB = this.matrixB.querySelector(`[data-row="${k}"][data-col="${colB}"]`);
-                    if (cellB) cellB.classList.add('highlight');
-                }
-
-                // Mark output element (rowA, colB) as active
-                const outputCell = this.matrixC.querySelector(`[data-row="${rowA}"][data-col="${colB}"]`);
-                if (outputCell) outputCell.classList.add('active');
-
-                await sleep(300);
-
-                // Clear highlights
-                this.matrixA.querySelectorAll('.highlight').forEach(el => el.classList.remove('highlight'));
-                this.matrixB.querySelectorAll('.highlight').forEach(el => el.classList.remove('highlight'));
 
                 // Mark as computed
-                if (outputCell) {
-                    outputCell.classList.remove('active');
-                    outputCell.style.background = '#2196F3';
-                }
+                outputCells.forEach(cell => {
+                    cell.classList.remove('active');
+                    cell.style.background = '#2196F3';
+                });
             }
         }
 
@@ -2292,7 +2298,7 @@ class IndexTransformViz {
                     <div style="font-size: 13px; font-weight: bold; color: #42A5F5; line-height: 1;">${y}</div>
                 </div>
             </div>
-            <div style="font-size: 8px; color: #888;">A[${row}][k]</div>
+            <div style="font-size: 8px; color: #888;">A[${row}][k]·B[k][${y}]</div>
         `;
 
         return cell;
@@ -2336,26 +2342,30 @@ class IndexTransformViz {
             // Update memory access info
             const prevNaiveX = (i - 1) % this.blockSize;
 
+            const naiveY = Math.floor(i / this.blockSize);
+            const warpStart = Math.floor(i / this.blockSize) * this.blockSize;
+
             document.getElementById('naiveMemAccess').innerHTML = `
-                <div style="font-weight: bold; margin-bottom: 8px; color: #4CAF50;">Thread ${i} Memory Access</div>
-                <div style="margin-bottom: 4px;">Matrix Position: <strong>A[${naiveRow}][k]</strong></div>
-                ${i > 0 ? `
+                <div style="font-weight: bold; margin-bottom: 8px; color: #4CAF50;">Thread ${i} Memory Access (step k)</div>
+                <div style="margin-bottom: 4px;">Loads: <strong>A[${naiveRow}][k]</strong> and <strong>B[k][${naiveY}]</strong></div>
+                ${i % this.blockSize !== 0 ? `
                     <div style="margin-top: 8px; padding: 8px; background: #1a1a1a; border-radius: 4px;">
-                        ${naiveRow !== prevNaiveX ?
-                        `<strong style="color: #e74c3c;">Different row</strong> from Thread ${i - 1}<br>
-                             <span style="color: #999;">Stride: K elements (scattered)</span>` :
-                        `<strong style="color: #27ae60;">Same row</strong> as Thread ${i - 1}`}
+                        <strong style="color: #e74c3c;">A: different row</strong> from Thread ${i - 1}
+                        <span style="color: #999;">(stride K, uncoalesced)</span><br>
+                        <strong style="color: #FFA726;">B: same element</strong> as Thread ${i - 1}
+                        <span style="color: #999;">(broadcast)</span>
                     </div>
                 ` : '<div style="color: #999; margin-top: 8px;">First thread in warp</div>'}
             `;
 
             document.getElementById('coalescedMemAccess').innerHTML = `
-                <div style="font-weight: bold; margin-bottom: 8px; color: #4CAF50;">Threads ${Math.floor(i / this.blockSize) * this.blockSize}-${Math.floor(i / this.blockSize) * this.blockSize + this.blockSize - 1} Memory Access</div>
-                <div style="margin-bottom: 4px;">Matrix Row: <strong>A[${coalescedX}][0..3]</strong></div>
+                <div style="font-weight: bold; margin-bottom: 8px; color: #4CAF50;">Threads ${warpStart}-${warpStart + this.blockSize - 1} Memory Access (step k)</div>
+                <div style="margin-bottom: 4px;">A: <strong>A[${coalescedX}][k]</strong>, same element for all ${this.blockSize} threads <span style="color: #999;">(broadcast)</span></div>
+                <div style="margin-bottom: 4px;">B: <strong>B[k][0..${this.blockSize - 1}]</strong>, consecutive elements</div>
                 <div style="margin-top: 8px; padding: 8px; background: #1a1a1a; border-radius: 4px;">
-                    <strong style="color: #27ae60;">All 4 threads load row together</strong><br>
-                    <span style="color: #4CAF50;">1 coalesced memory transaction (128 bits)</span><br>
-                    <span style="font-size: 11px; color: #999; margin-top: 4px;">Thread gets A[${coalescedX}][${coalescedY}]</span>
+                    <strong style="color: #27ae60;">B loads coalesce</strong><br>
+                    <span style="color: #4CAF50;">1 memory transaction for the B row segment (128 bits)</span><br>
+                    <span style="font-size: 11px; color: #999; margin-top: 4px;">Thread ${i} uses A[${coalescedX}][k] · B[k][${coalescedY}]</span>
                 </div>
             `;
 
@@ -2378,14 +2388,14 @@ class IndexTransformViz {
         document.getElementById('naiveMemAccess').innerHTML = `
             <div style="text-align: center; padding: 15px;">
                 <div style="font-size: 14px; color: #e74c3c; font-weight: bold;">Non-coalesced Access</div>
-                <div style="margin-top: 8px; color: #999;">→ ${this.blockSize} separate memory transactions for ${this.blockSize} threads</div>
+                <div style="margin-top: 8px; color: #999;">→ A: ${this.blockSize} separate transactions per warp (stride K); B: broadcast of 1 element</div>
             </div>
         `;
 
         document.getElementById('coalescedMemAccess').innerHTML = `
             <div style="text-align: center; padding: 15px;">
                 <div style="font-size: 14px; color: #27ae60; font-weight: bold;">Coalesced Access</div>
-                <div style="margin-top: 8px; color: #999;">→ 1 memory transaction per row of ${this.blockSize} threads (128-bit load)</div>
+                <div style="margin-top: 8px; color: #999;">→ A: broadcast of 1 element; B (and the C store): 1 coalesced transaction per warp (128-bit load)</div>
             </div>
         `;
 
