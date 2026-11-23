@@ -325,7 +325,7 @@ Turns out the only change we need is to swap % and / across row and col calculat
 
 #### Memory Access Visualization
 
-Let's visualize how the coalesced kernel accesses memory during matrix multiplication. Notice how threads in the same warp now access the **same row** of matrix A, enabling memory coalescing. We will take a simple example with `block_size=4`:
+Let's visualize how the coalesced kernel accesses memory during matrix multiplication. Notice how threads in the same warp now share the same output row: at each `k` step they all read the **same element** of A (a broadcast), while reading **consecutive elements** in row `k` of B, which is where memory coalescing happens (the write to C is coalesced too). We will take a simple example with `block_size=4`:
 
 <div id="index-transform-viz"></div>
 
@@ -364,7 +364,7 @@ __global__ void sgemm_global_mem_coalesce_kernel(int num_rows_a, int num_cols_b,
 {: .prompt-info}
 > The key change from the naive kernel:
 > 
-> Threads with consecutive `threadIdx.x` now access consecutive elements in the same row of A, enabling coalescing. I have removed the calling wrapper since it is the same as the last kernel and for brevity.
+> Threads with consecutive `threadIdx.x` now share `output_row` and get consecutive `output_col`. So for each `k_idx`, a warp reads a single element of A (broadcast) and consecutive elements of B, enabling coalescing on B (and on the store to C). I have removed the calling wrapper since it is the same as the last kernel and for brevity.
 
 ### Performance Analysis
 
